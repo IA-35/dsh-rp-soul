@@ -1,0 +1,13 @@
+# 挂载示例：把以下内容附加到 $DSH_HOME\profiles\web\cordis.patch.yml
+#
+# name 以 ../ 开头 → loader 按 cordis.patch.yml 所在目录（profiles/web）向上解析，
+# 指向 $DSH_HOME\profiles\plugins\soul-persona\lib\index.js
+#
+# 插件必须放在 profiles\plugins\（而非 profiles\web\plugins\）：
+# 它的 ESM import 需要向上命中 profiles\node_modules 里的 @deepseek-ai/* 依赖。
+- insert:
+    - id: soul-persona
+      name: '../plugins/soul-persona/lib/index.js'
+      config:
+        fileName: SOUL.md
+        maxBytes: 65536
