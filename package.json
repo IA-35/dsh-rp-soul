@@ -1,11 +1,12 @@
 {
   "name": "dsh-rp-soulload",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Load $DSH_HOME/SOUL.md as the DSH system-prompt persona (Runtime-Persona Soul loader).",
   "type": "module",
   "main": "lib/index.js",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml"
   ],
   "keywords": [
     "dsh",
@@ -21,5 +22,14 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/IA-35/dsh-rp-Soulload.git"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

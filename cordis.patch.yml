@@ -1,0 +1,13 @@
+# dsh-rp-soulload bundle patch.
+#
+# Installed via `dsh plugin add dsh-rp-soulload`: the dsh plugin manager
+# registers this package as a profile layer (dsh.bundle) and applies this
+# patch, mounting the soul-persona plugin by package name. The cordis loader
+# resolves `dsh-rp-soulload` from the profile's node_modules, so no manual
+# file copying or path edits are needed.
+- insert:
+    - id: soul-persona
+      name: 'dsh-rp-soulload'
+      config:
+        fileName: SOUL.md
+        maxBytes: 65536

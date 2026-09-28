@@ -20,7 +20,27 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 名为 `soul-persona` 的提示片段。使用自定义段名，因此**不与** DSH 自带的
 `deployment:persona-prefix` 冲突，可以在全局（profile 层）挂载。
 
-## 安装（两步）
+## 安装（一条 dsh 命令）
+
+包声明了 `dsh.bundle` 元信息，`dsh plugin add` 会把插件装进当前 profile 的
+`node_modules` 并自动挂载（无需手改任何配置文件）：
+
+```
+dsh plugin add dsh-rp-soulload
+```
+
+等价地，也可以从 GitHub 或本地打包文件安装：
+
+```
+dsh plugin add github:IA-35/dsh-rp-Soulload
+dsh plugin add ./dsh-rp-soulload-0.1.1.tgz
+```
+
+> 若你此前用手动方式装过（见下），请先删掉 `cordis.patch.yml` 里的
+> `soul-persona` 行并移除 `$DSH_HOME\profiles\plugins\soul-persona\`，
+> 避免同一 `id` 的配置被用户层旧行覆盖，导致 bundle 层的挂载不生效。
+
+## 旧的手动安装方式（备选）
 
 ### 1. 放置插件
 
@@ -80,8 +100,9 @@ $DSH_HOME\profiles\plugins\soul-persona\
 
 - **验证**：新开一个对话，观察系统提示开头出现 `SOUL.md` 的人设文本；修改
   `SOUL.md` 再发消息，随下一条请求更新。
-- **卸载**：从 `cordis.patch.yml` 删除 `soul-persona` 行（保存即生效/重启）；
-  删除 `profiles\plugins\soul-persona\` 目录。
+- **卸载**：`dsh plugin remove dsh-rp-soulload`（自动移除 bundle 挂载）；
+  若曾手动安装，再从 `cordis.patch.yml` 删除 `soul-persona` 行并删除
+  `profiles\plugins\soul-persona\` 目录。
 
 ## License
 
