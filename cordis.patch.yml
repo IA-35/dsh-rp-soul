@@ -1,16 +1,16 @@
-# dsh-rp-soulload bundle patch.
+# dsh-rp-soul bundle patch.
 #
-# Installed via `dsh plugin add dsh-rp-soulload`: the dsh plugin manager
+# Installed via `dsh plugin add dsh-rp-soul`: the dsh plugin manager
 # registers this package as a profile layer (dsh.bundle) and applies this
 # patch, mounting the soul-persona plugin by package name. The cordis loader
-# resolves `dsh-rp-soulload` from the profile's node_modules, so no manual
+# resolves `dsh-rp-soul` from the profile's node_modules, so no manual
 # file copying or path edits are needed.
 #
 # config.files 只是**首次运行时的种子**：一旦设置页保存过配置，
 # 就会写进 $DSH_HOME/rp-soul/config.json，此后以那里为准。
 - insert:
     - id: soul-persona
-      name: 'dsh-rp-soulload'
+      name: 'dsh-rp-soul'
       config:
         files:
           - SOUL.md

@@ -69,7 +69,7 @@ vm.runInContext(readFileSync(clientUrl, 'utf8'), ctxVm, { filename: 'lib/client.
 
 // ---- 1. 注册 ----
 ok(registered !== null, '1. bundle 调用了 __ModuleLoader__.load');
-eq(registered.id, 'dsh-rp-soulload', '1. bundle id 必须等于包名');
+eq(registered.id, 'dsh-rp-soul', '1. bundle id 必须等于包名');
 eq(typeof registered.factory, 'function', '1. factory 是函数');
 
 // ---- 2. factory 的 require 边界 ----

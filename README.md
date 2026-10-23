@@ -1,4 +1,4 @@
-# dsh-rp-soulload
+# dsh-rp-soul
 
 用 `$DSH_HOME` 下的**若干个文本文件**拼出 **DSH 系统提示人设**（persona）的插件
 （Runtime-Persona Soul loader），带**设置页可视化编辑器**。
@@ -90,14 +90,14 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 `node_modules` 并自动挂载（无需手改任何配置文件）：
 
 ```
-dsh plugin add dsh-rp-soulload
+dsh plugin add dsh-rp-soul
 ```
 
 等价地，也可以从 GitHub 或本地打包文件安装：
 
 ```
 dsh plugin add github:IA-35/dsh-rp-soul
-dsh plugin add ./dsh-rp-soulload-0.2.1.tgz
+dsh plugin add ./dsh-rp-soul-0.3.0.tgz
 ```
 
 > 若你此前用手动方式装过（见下），请先删掉 `cordis.patch.yml` 里的
@@ -171,7 +171,7 @@ $DSH_HOME\profiles\plugins\soul-persona\
 
 - **验证**：新开一个对话，观察系统提示开头出现 `SOUL.md` 的人设文本；修改
   `SOUL.md` 再发消息，随下一条请求更新。
-- **卸载**：`dsh plugin remove dsh-rp-soulload`（自动移除 bundle 挂载）；
+- **卸载**：`dsh plugin remove dsh-rp-soul`（自动移除 bundle 挂载）；
   若曾手动安装，再从 `cordis.patch.yml` 删除 `soul-persona` 行并删除
   `profiles\plugins\soul-persona\` 目录。
 
