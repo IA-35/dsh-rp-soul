@@ -1,13 +1,23 @@
 {
   "name": "dsh-rp-soulload",
-  "version": "0.1.1",
-  "description": "Load $DSH_HOME/SOUL.md as the DSH system-prompt persona (Runtime-Persona Soul loader).",
+  "version": "0.2.1",
+  "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor (Runtime-Persona Soul loader).",
   "type": "module",
   "main": "lib/index.js",
   "files": [
     "lib",
     "cordis.patch.yml"
   ],
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -21,15 +31,23 @@
   "author": "IA-35",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/IA-35/dsh-rp-Soulload.git"
+    "url": "git+https://github.com/IA-35/dsh-rp-soul.git"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "~3.18.4"
   },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1",
+    "react": ">=18.0.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }

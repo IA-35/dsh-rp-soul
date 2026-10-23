@@ -5,9 +5,13 @@
 #
 # 插件必须放在 profiles\plugins\（而非 profiles\web\plugins\）：
 # 它的 ESM import 需要向上命中 profiles\node_modules 里的 @deepseek-ai/* 依赖。
+#
+# 多文件：files 按**数组顺序**拼接，顺序有意义（先说身份，再说口吻/禁忌）。
+# 路径相对 $DSH_HOME，只接受 .md / .txt。
 - insert:
     - id: soul-persona
       name: '../plugins/soul-persona/lib/index.js'
       config:
-        fileName: SOUL.md
+        files:
+          - SOUL.md
         maxBytes: 65536
