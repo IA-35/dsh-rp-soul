@@ -338,7 +338,10 @@ def thoughts_from_trust(state, cid, delta, fact_id, turn):
     """Trust moving is felt immediately, at three times its size."""
     if not delta:
         return None
-    label = "你让他更信任了" if delta > 0 else "你对他的分量掉了"
+    # Phrased from inside the character it belongs to: these labels are the
+    # NPC's own mood entries and are fed to the model as such, so no pronouns
+    # pointing at the NPC itself (the gender is persona data, not a constant).
+    label = "心里对你多了几分信任" if delta > 0 else "心里对你的分量掉了"
     return add_thought(
         state, cid, label, int(delta) * ST.RELATIONSHIP_THOUGHT_SCALE, "memory",
         source_fact_id=fact_id, minutes=ST.THOUGHT_DURATION["tone"], turn=turn,

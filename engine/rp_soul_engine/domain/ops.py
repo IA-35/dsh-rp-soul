@@ -628,29 +628,34 @@ def op_relationship(ctx, op, path):
         ctx.errors.extend(problems)
         return
     after = SS.edge(ctx.state, a, b) or {}
+    player = ctx.state["player_id"]
     if op["trust_delta"]:
+        # The edge a>b is *a's* attitude toward b, so the feeling lands on a.
+        # The player card carries ``"mood": None`` on purpose (the player is a
+        # slot, nothing about how they feel is stored), so a move that starts
+        # at the player is recorded in the ledger and felt by nobody.
         fid = _note(
-            ctx, "%s.trust.t%d" % (b, ctx.turn),
-            "%s 对 %s 的信任 %+d：%s" % (ctx.name(b), ctx.name(a), op["trust_delta"], op["reason"]),
-            [ctx.state["player_id"], a, b],
+            ctx, "%s.trust.t%d" % (a, ctx.turn),
+            "%s 对 %s 的信任 %+d：%s" % (ctx.name(a), ctx.name(b), op["trust_delta"], op["reason"]),
+            [player, a, b],
         )
-        # Only an NPC has a mood bar. When the move points at the player
-        # (``from: an_npc, to: player``) the relation is still recorded, but no
-        # thought is planted: the player is a slot, it stores no feelings.
-        if b != ctx.state["player_id"]:
-            thought = MO.thoughts_from_trust(ctx.state, b, op["trust_delta"], fid, ctx.turn)
+        if a != player:
+            thought = MO.thoughts_from_trust(ctx.state, a, op["trust_delta"], fid, ctx.turn)
             if thought is not None:
-                ctx.thoughts.append({"npc_id": b, "thought": thought})
+                ctx.thoughts.append({"npc_id": a, "thought": thought})
     if op["stage_advance"] and after.get("stage") != before.get("stage"):
         fid = _note(
-            ctx, "%s.stage.t%d" % (b, ctx.turn),
-            "%s 与 %s 的关系进入 %s：%s" % (ctx.name(b), ctx.name(a), ST.STAGE_LABELS[after["stage"]], op["reason"]),
-            [ctx.state["player_id"], a, b],
+            ctx, "%s.stage.t%d" % (a, ctx.turn),
+            "%s 与 %s 的关系进入 %s：%s" % (ctx.name(a), ctx.name(b), ST.STAGE_LABELS[after["stage"]], op["reason"]),
+            [player, a, b],
         )
-        if b != ctx.state["player_id"]:
-            thought = MO.thoughts_from_stage(ctx.state, b, fid, ctx.turn)
+        # The stage is the pair's shared history, so both directions moved: the
+        # one NPC in the pair is the one who feels it.
+        felt_by = a if a != player else b
+        if felt_by != player:
+            thought = MO.thoughts_from_stage(ctx.state, felt_by, fid, ctx.turn)
             if thought is not None:
-                ctx.thoughts.append({"npc_id": b, "thought": thought})
+                ctx.thoughts.append({"npc_id": felt_by, "thought": thought})
     ctx.observable = True
     ctx.relationship_reasons.append(op["reason"])
     ctx.applied.append({

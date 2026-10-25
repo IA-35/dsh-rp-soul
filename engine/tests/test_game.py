@@ -349,13 +349,30 @@ def a_relationship_toward_the_player_keeps_playing(s):
     assert turn_result["turn"] == 1, turn_result
     row = [a for a in turn_result["applied"] if a["op"] == "relationship"][0]
     assert row["trust"] == 1, row
-    # He is the one who moved, so the trace lands on the player side, which has
-    # no mood blob: nothing is planted anywhere, and nothing crashes.
+    # The edge a>b is a's attitude toward b, so lin_wan is the one who feels it
+    # even though the other end is the player (who has no mood blob at all).
+    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    labels = [t["label"] for t in panel["thoughts"]]
+    assert any("信任" in label for label in labels), labels
+    # The player id is not an addressable mood subject at all.
+    assert s.fail("debug-mood", {"session_id": sid, "npc_id": "player"})["code"] == "NOT_FOUND"
+
+
+def a_relation_from_the_player_is_recorded_but_not_felt(s):
+    """A move starting at the player writes the ledger and no mood anywhere."""
+    sid, rev, _ = e2e.start(s)
+    ops = [
+        {"op": "enter_scene", "character_id": "lin_wan"},
+        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她嗯了一声。"},
+        {"op": "relationship", "from": "player", "to": "lin_wan", "trust_delta": 1, "reason": "他把自己那杯让给她"},
+        npc_action(),
+    ]
+    _rev, data = play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
+    row = [a for a in data["turns"][0]["applied"] if a["op"] == "relationship"][0]
+    assert row["trust"] == 1, row
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     labels = [t["label"] for t in panel["thoughts"]]
     assert not any("信任" in label for label in labels), labels
-    # The player id is not an addressable mood subject at all.
-    assert s.fail("debug-mood", {"session_id": sid, "npc_id": "player"})["code"] == "NOT_FOUND"
 
 
 def an_an_npc_relation_still_plants_a_thought(s):
@@ -368,12 +385,16 @@ def an_an_npc_relation_still_plants_a_thought(s):
         npc_action(),
     ]
     play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
-    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    # zhou_yi is the one whose attitude moved, so the trace is on him.
+    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "zhou_yi"})
     labels = [t["label"] for t in panel["thoughts"]]
     assert any("信任" in label for label in labels), labels
+    other = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    assert not any("信任" in t["label"] for t in other["thoughts"]), other["thoughts"]
 
 
 check("a relation toward the player still plays", with_sc(a_relationship_toward_the_player_keeps_playing))
+check("a relation from the player is recorded, not felt", with_sc(a_relation_from_the_player_is_recorded_but_not_felt))
 check("an NPC-to-NPC relation still leaves a trace", with_sc(an_an_npc_relation_still_plants_a_thought))
 check("a quiet turn advances the clock", with_sc(a_quiet_turn))
 check("a turn needs an observable change", with_sc(turn_is_not_observable_without_ops))
