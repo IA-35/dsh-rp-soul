@@ -269,6 +269,27 @@ def update_session(conn, state, now, turns_since_save=None):
         )
 
 
+def refresh_persona(conn, state, persona, now):
+    """Rewrite the stored persona snapshot after the player edited the file.
+
+    Only the persona-derived columns move: revision/turn/activity stay put, so a
+    read that happens to refresh the persona does not reorder the save list or
+    invalidate anything the caller is holding.
+    """
+    conn.execute(
+        "UPDATE sessions SET persona_id=?, persona_title=?, persona_revision=?, state=?, persona=?, updated_at=? WHERE session_id=?",
+        (
+            state["persona_id"],
+            state["persona_title"],
+            state["persona_revision"],
+            pack(hot(state)),
+            pack(persona),
+            now,
+            state["session_id"],
+        ),
+    )
+
+
 def set_save_info(conn, session_id, slot, version, now):
     conn.execute(
         "UPDATE sessions SET current_slot=?, slot_version=?, turns_since_save=0, updated_at=? WHERE session_id=?",

@@ -261,6 +261,32 @@ def new_game(ctx, payload):
     return create_write(ctx, "new-game", payload, handler)
 
 
+def _refresh_persona(conn, state, persona, raw, now):
+    """Swap the on-disk persona's static facts into a running session.
+
+    Returns (persona, report). A persona that does not validate keeps the
+    session exactly as it is and reports why, instead of taking the story down
+    with it: the settings page may be half-written while the player is playing.
+    """
+    payload = validate(specs.PERSONA_PAYLOAD, raw)
+    assembled = PE.from_markdown(payload["front"], payload["prose"], payload["title"], payload["persona_id"])
+    fresh, errors = PE.validate(assembled)
+    if errors:
+        return persona, {
+            "ok": False,
+            "changed": False,
+            "count": len(errors),
+            "text": PE.problems_text(errors),
+            "problems": errors,
+        }
+    if fresh["revision"] == state.get("persona_revision"):
+        # Same file, nothing to do: touching the row here would only churn it.
+        return persona, {"ok": True, "changed": False, "revision": fresh["revision"]}
+    report = PE.apply_static(state, fresh)
+    repo.refresh_persona(conn, state, fresh, now)
+    return fresh, {"ok": True, "changed": True, **report}
+
+
 # ---------------------------------------------------------------------------
 # get-context
 
@@ -268,14 +294,29 @@ def new_game(ctx, payload):
 def get_context(ctx, payload):
     payload = validate(specs.GET_CONTEXT, payload)
     conn = ctx.db()
+    # `persona` is the file the user is editing right now. Sending it here is
+    # what makes an edit visible without restarting the story: the persona is
+    # static facts, the story is not, and only the former gets replaced.
     session = repo.load_session(conn, payload["session_id"])
     state, persona = session["state"], session["persona"]
+    persona_report = None
+    if payload["persona"] is not None:
+        db.begin_write(conn)
+        try:
+            persona, persona_report = _refresh_persona(conn, state, persona, payload["persona"], now_iso())
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
     context = CX.full(state, persona, save_info(session)) if payload["depth"] == "full" else CX.brief(state, persona, save_info(session))
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
     if payload["want_twist"]:
         out["twists"] = list(persona.get("twists") or [])
         if not out["twists"]:
             out["twists_note"] = "这份人设没有预设转折；转折要由你自己想，不能替玩家决定结局"
+    if persona_report is not None:
+        out["persona"] = persona_report
     out["commit_template"] = CX.commit_template(state, persona)
     return out
 
@@ -360,6 +401,8 @@ def _commit_turn(ctx, payload):
         sid = session["session_id"]
         state = session["state"]
         persona = session["persona"]
+        if payload.get("persona") is not None:
+            persona, _ = _refresh_persona(conn, state, persona, payload["persona"], now)
         failed_before = repo.take_commit_failure(conn, sid) is not None
         unsaved = session["turns_since_save"]
         results = []

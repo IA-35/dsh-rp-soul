@@ -1,6 +1,7 @@
 """One whole game through the sidecar: open it, play turns, look around,
 undo, save, load, export, import, and the mood panel with a debug delete."""
 
+import copy
 import json
 import os
 
@@ -265,6 +266,74 @@ def import_rejects_a_damaged_file(s):
     assert "校验" in err["message"] or "不一致" in err["message"], err
 
 
+def persona_refresh_moves_static_facts(s):
+    """Edit persona.md mid-story: names and the mood baseline follow, the story does not."""
+    sid, rev, _ = e2e.start(s)
+    payload = copy.deepcopy(e2e.persona_payload())
+    front = payload["front"]
+    front["title"] = "雨夜诊所·续"
+    front["mood_base"] = 88
+    for place in front["places"]:
+        if place["id"] == "hall":
+            place["name"] = "值班室"
+    for member in front["cast"]:
+        if member["id"] == "lin_wan":
+            member["name"] = "林晚晚"
+            member["age"] = 32
+    out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
+    report = out["persona"]
+    assert report["ok"] is True, report
+    assert report["changed"] is True, report
+    assert "lin_wan" in report["updated"], report
+    context = out["context"]
+    assert context["scene"]["location_id"] == "hall", context["scene"]
+    assert context["scene"]["location"] == "值班室", context["scene"]
+    npc = [row for row in context["present_npcs"] if row["id"] == "lin_wan"]
+    if npc:
+        assert npc[0]["name"] == "林晚晚", npc[0]
+    # The story itself does not move: no time passes and no turn is added.
+    assert out["revision"] == rev, (out["revision"], rev)
+    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    assert panel["base"] == 88, panel
+
+
+def persona_refresh_leaves_a_started_relationship_alone(s):
+    """start_stage is the opening of a bond; once trust moved, the file has no say."""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        {"op": "enter_scene", "character_id": "lin_wan"},
+        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她把灯往他那边挪了挪。"},
+        {"op": "relationship", "from": "player", "to": "lin_wan", "trust_delta": 1,
+         "reason": "他把伞留在了门口"},
+        npc_action(),
+    ], mode="attempt", acts_on=["lin_wan"])
+    payload = copy.deepcopy(e2e.persona_payload())
+    for member in payload["front"]["cast"]:
+        if member["id"] == "lin_wan":
+            member["start_stage"] = "intimate"
+    out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
+    report = out["persona"]
+    assert report["ok"] is True, report
+    npc = [row for row in out["context"]["present_npcs"] if row["id"] == "lin_wan"]
+    assert npc, out["context"]["present_npcs"]
+    assert npc[0]["stage"] != "亲密", npc[0]
+
+
+def persona_refresh_does_not_break_a_broken_persona(s):
+    """A half-written file must not take a running story down with it."""
+    sid, rev, _ = e2e.start(s)
+    payload = copy.deepcopy(e2e.persona_payload())
+    payload["front"]["places"] = []
+    payload["front"]["cast"] = []
+    out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
+    report = out["persona"]
+    assert report["ok"] is False, report
+    assert report["changed"] is False, report
+    assert report["count"] >= 1, report
+    assert report["text"], report
+    assert out["revision"] == rev, (out["revision"], rev)
+
+
 def status_levels(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev)
@@ -510,5 +579,8 @@ check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))
 check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
+check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
+check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))
+check("a broken persona does not take the story down", with_sc(persona_refresh_does_not_break_a_broken_persona))
 
 run("game")

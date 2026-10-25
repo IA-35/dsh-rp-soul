@@ -268,6 +268,109 @@ def render_cards(persona, cards):
     return cards
 
 
+STATIC_CARD_FIELDS = (
+    "name",
+    "call",
+    "tier",
+    "age",
+    "gender",
+    "adult_context",
+    "public_role",
+    "appearance",
+    "voices",
+    "schedule",
+)
+
+
+def apply_static(state, persona):
+    """Copy the persona's *static* facts onto a running state, in place.
+
+    A session stores the persona it opened with, so editing `persona.md` after
+    the story started used to change nothing until a new session was begun — the
+    settings page would show one thing and the prompt another. What a persona
+    says about *who someone is* (name, how they are called, age, role, looks,
+    voices, schedule) and the mood baseline is static, so a read may refresh it.
+
+    Deliberately not touched:
+
+    * ``start_stage`` — the relationship already carries a live stage; replaying
+      the opening value would erase everything that happened since.
+    * the scene, the clock, the relationship edges, thoughts and facts — those
+      are the story, not the persona.
+    * cast members that do not exist in the session yet. Dropping a stranger in
+      mid-scene with no placement and no relationship is worse than telling the
+      caller to start a new session, so they are reported instead.
+
+    Returns a small report; never raises.
+    """
+    cards = characters(persona)
+    known = state.get("characters") or {}
+    common = [cid for cid in sorted(cards) if cid in known]
+    missing = [cid for cid in sorted(cards) if cid not in known]
+    orphan = [cid for cid in sorted(known) if cid not in cards and cid != PLAYER_ID]
+    restaged = []
+    for cid in common:
+        char = known[cid]
+        card = cards[cid]
+        for key in STATIC_CARD_FIELDS:
+            char[key] = card[key]
+        if isinstance(char.get("mood"), dict):
+            # base is the baseline; thoughts are the live part and stay put.
+            char["mood"]["base"] = persona["mood_base"]
+        # start_stage describes the *opening* of a relationship, so once anything
+        # has happened it must not be replayed over the live stage. A pair that
+        # is still untouched, though, has no story to lose - and the player who
+        # wrote "亲密" in the file expects to see it, which is the whole point
+        # of editing after the session already exists.
+        if _restage(state, cid, persona):
+            restaged.append(cid)
+    # Placeholders like {npc.name} were rendered once at opening against the old
+    # names, so a rename would otherwise leave stale text inside the cards.
+    render_cards(persona, known)
+    state["mood_base"] = persona["mood_base"]
+    state["mood_thresholds"] = dict(persona["mood_thresholds"])
+    state["persona_id"] = persona["id"]
+    state["persona_title"] = persona["title"]
+    state["persona_revision"] = persona["revision"]
+    return {
+        "revision": persona["revision"],
+        "updated": common,
+        "restaged": restaged,
+        "missing": missing,
+        "orphan": orphan,
+    }
+
+
+def _restage(state, cid, persona):
+    """Put the persona's start_stage on a pair nothing has happened to yet.
+
+    "Nothing happened" is the engine's own bookkeeping: zero trust, zero tension
+    and an empty history on both directions. The moment any of those moved, the
+    live stage is the truth and the file has no say over it any more.
+    """
+    member = None
+    for item in persona["cast"]:
+        if item["id"] == cid:
+            member = item
+            break
+    if member is None or not member.get("start_stage"):
+        return False
+    player = state["player_id"]
+    edges = [
+        (state.get("relationships") or {}).get("%s>%s" % (player, cid)),
+        (state.get("relationships") or {}).get("%s>%s" % (cid, player)),
+    ]
+    live = [edge for edge in edges if edge is not None]
+    if not live:
+        return False
+    for edge in live:
+        if (edge.get("trust") or 0) != 0 or (edge.get("tension") or 0) != 0 or (edge.get("history") or []):
+            return False
+    for edge in live:
+        edge["stage"] = member["start_stage"]
+    return True
+
+
 def problems_text(errors, limit=6):
     """Compact one-line summary for the settings page and the CLI."""
     rows = ["%s：%s" % (item["path"], item["reason"]) for item in errors[:limit]]

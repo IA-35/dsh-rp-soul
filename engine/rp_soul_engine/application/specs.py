@@ -88,6 +88,8 @@ GET_CONTEXT = _obj(
         "depth": F(S.Enum("brief", "full"), required=False, default="brief"),
         "want_twist": F(S.Bool(), required=False, default=False,
                         desc="玩家说“来点转折”时为 true：返回 2–3 个类别不同的转折候选"),
+        "persona": F(S.Nullable(PERSONA_PAYLOAD), required=False, default=None,
+                     desc="磁盘上现在的人设包；给了就按它刷新这一局的静态事实（名字、外貌、语态、作息、心情基准），关系与剧情不动"),
     },
     "get-context",
 )
@@ -95,6 +97,8 @@ GET_CONTEXT = _obj(
 COMMIT_TURN = _obj(
     dict(
         session_write_fields(),
+        persona=F(S.Nullable(PERSONA_PAYLOAD), required=False, default=None,
+                  desc="磁盘上现在的人设包；给了就先按它刷新这一局的静态事实再记这回合"),
         turns=F(
             S.List(S.Obj(commit_fields(), name="回合"), 1, RECORD_MAX_TURNS),
             desc="这次记录的回合，按发生的顺序；引擎逐项应用，全有或全无",
