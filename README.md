@@ -22,6 +22,9 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 - **首装即有东西可写**：插件第一次运行会自动建出空的 `SOUL.md` 和 `rp-soul/parts/角色档案.md`
   （0 字节，你写什么就是什么），并把它们写进清单——设置页一打开就能看到文件、点开就能编辑，
   不用先手动建文件。**已存在的文件绝不会被覆盖**。
+- **引擎（可选）**：人设文件可以带一个 YAML 前置块（`---` 包起来的结构化字段），
+  引擎据此维护**情绪（心情条）/ 人际关系（信任·张力·阶段）/ 自主行动**三本账，
+  由 SQLite 记账、可存档可回滚。人设散文仍原样进系统提示，引擎状态以一段 brief 追加在后面。
 - **乱码拒收**：文件名里出现 `U+FFFD`（说明送来的字节不是合法 UTF-8，典型是客户端按 GBK 编码发中文名）
   直接 400，不允许在磁盘上留下乱码文件名。
 
@@ -65,6 +68,10 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
   打开标签页时会**自动选中第一个真实存在的文件**（清单里若全是缺失文件则选第一个），
   避免右侧一开始是「未选择文件」让人以为功能没生效。
 - **空文件**：编辑器显示占位提示「这个文件还是空的 —— 直接在这里写」，直接写、保存即可。
+- **引擎**：Python 侧车是否就绪（版本 / 数据目录）、当前人设包的结构摘要、
+  真引擎校验人设（`/engine/persona`）、这一局每个 NPC 的**心情面板**
+  （当前值 / 档位 / 阈值 / 每条情绪条目的 delta 与剩余时间），
+  以及每条情绪右侧的 `×` —— 手动删掉一条（会留一条审计记录，之后引擎不再复述这件事）。
 - **高级**：总开关、每段 `soul-part` 注释、总字节上限、分隔符、合成预览。
 
 ## HTTP 接口
@@ -80,6 +87,11 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 | POST | `/rp-soul/new` | 新建文件 `{name, text}` |
 | GET | `/rp-soul/config` | 读生效配置 |
 | POST | `/rp-soul/config` | 写配置 `{files, separator, annotate, enabled, maxBytes}` |
+| GET | `/rp-soul/engine` | 引擎健康 + 人设摘要 + 当前这一局 |
+| GET | `/rp-soul/engine/persona` | 用真引擎校验人设，返回结构摘要或带 path 的错误 |
+| GET | `/rp-soul/engine/session?session_id=` | 读该局上下文（`depth=brief|full`） |
+| GET | `/rp-soul/engine/mood?session_id=&npc_id=` | 心情面板（值 / 档位 / 阈值 / 条目 / 审计） |
+| DELETE | `/rp-soul/engine/thought` | 手动删一条情绪 `{session_id, npc_id, thought_id, revision, reason}` |
 
 状态码：400 = 参数不合法（扩展名不在白名单 / 路径穿越 / 含 `U+FFFD` 的乱码名）、
 413 = 请求体超 1 MiB、503 = 缺 `connection` 服务时 fail closed、401/403 = 信任栅栏拦下。
@@ -145,8 +157,87 @@ $DSH_HOME\profiles\plugins\soul-persona\
 | `annotate` | `false` | 每段前加 `<!-- soul-part: 文件名 -->` |
 | `maxBytes` | `65536` | **总预算**（字节），逐文件累加，超了截断并停止 |
 | `storeFile` | `rp-soul/config.json` | 设置页写入的存储文件（相对 `$DSH_HOME`） |
+| `engineEnabled` | `true` | 关掉则完全不启引擎（工具会明确报未启用，人设仍照常注入） |
+| `engineDataDir` | `""` | 引擎数据目录；空 = `$DSH_HOME/rp-soul/engine/` |
+| `engineTimeoutMs` | `30000` | 单次侧车调用超时（毫秒） |
+| `engineSessions` | `rp-soul/engine-sessions.json` | DSH 会话 id → 引擎局 id 的映射表 |
+| `title` | `""` | 覆盖存档列表里显示的人设标题（空 = 取前置块 `title`，再退到正文首行） |
+| `personaId` | `""` | 覆盖人设 id（空 = 取前置块 `id`） |
 
 设置页里保存的值写入 `$DSH_HOME/rp-soul/config.json`，优先级高于 `cordis.patch.yml` 的 `config`。
+
+## 引擎（可选）
+
+人设散文解决「他是什么人」，引擎解决「他现在怎么样、会怎么变」。引擎是随插件分发的
+Python 包（无第三方依赖，`python -m rp_soul_engine` 常驻子进程，stdio JSON-lines 通信），
+需要 **Python ≥ 3.10**；找不到 Python 时插件照常工作，只是三个工具会明确报未就绪。
+
+### 人设前置块
+
+在**第一个**人设文件开头写一段 `---` 包起来的 YAML（只认第一个文件，后面的静默忽略）：
+
+```yaml
+---
+id: rain_clinic
+title: 雨夜诊所
+start: {day: 1, minute: 1320}
+mood_base: 55
+mood_thresholds: {open: 72, closed: 40, break: 18}
+places:
+  - {id: clinic, name: 诊所, privacy: private}
+cast:
+  - id: lin_wan
+    name: 林晚
+    tier: major
+    role: 夜班医生
+    age: 34
+    gender: female
+    adult_context: 独立执业五年的全科医生
+    voices: {surface: 说话克制。, inner: 一直在等一句道歉。}
+    situation: {trigger: 雨还没停, pressure: 值班表没人补}
+    schedule: [{from: 0, to: 1439, location_id: clinic}]
+---
+林晚是这家小诊所的夜班医生。（下面这些散文就是给人看的正文，引擎从不解析它）
+```
+
+没有前置块也能用：引擎会用正文首行当标题、只有一个默认地点，但**不发明角色**——
+`cast` 缺了就是缺了，`soul_admin start` 会报错告诉你缺什么。
+
+### 三个工具
+
+| 工具 | 什么时候用 |
+|---|---|
+| `soul_state` | 每回合开始读上下文（`brief` 约 6 KB；换地点 / 换人 / 新的一天 / 上回合被驳回用 `full` 约 20 KB）。还能 `preview_time` 预演快进、`want_twist` 取转折 |
+| `soul_commit` | 写完这一回合后提交。`operations` 是账本改动清单（`npc_response` / `relationship` / `add_thought` / `advance_time` / `move` …，最多 40 条），引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次） |
+| `soul_admin` | 开局（`start`）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
+
+### 心情条（情绪怎么算）
+
+`mood = clamp(mood_base + Σ thoughts, 0, 100)`。每条 thought 是
+`{label(≤20字), delta(-30..+15), kind, source_fact_id, since_turn, expires_at, decay}`
+——**引擎自己算情境类**（在场 / 缺席 / 离开太久 / 事件到期 / 张力高 / 深夜打扰），
+模型只能通过 `add_thought` 加记忆类，且必须挂到一个事实 id 上（不能凭空扣心情）。
+衰减两种：`linear`（默认，随时间等比缩小，`|delta| < 1` 才删）与 `none`（到点一刀切）。
+同一角色最多 20 条（12 记忆 + 8 情境），超了按「原始强度」淘汰最弱的。
+
+档位只做**行为门禁**，不产生精神状态：
+
+| 档位 | 区间（默认） | 影响 |
+|---|---|---|
+| `open` | ≥ 75 | 允许关系阶段前进；`npc_action` 的 `significant` 冷却 −1 回合 |
+| `normal` | 45–75 | 无额外约束 |
+| `closed` | 25–45 | 驳回 `stage_advance`；`npc_response` 只允许 refuse/negotiate/surface，回应 ≤30 字 |
+| `break` | < 25 | 本回合强制一条 `npc_action(significant, provoke/leave)`，结束即恢复 |
+
+阈值可在前置块 `mood_thresholds` 里改（必须满足 `0 ≤ break < closed < open ≤ 100`，
+不满足**报错而不回退默认**）。玩家自己的心情**不入库**——只记录 NPC 怎么想。
+
+### 心情与关系是两条轴
+
+mood 是「此刻怎么样」（短期会回落），trust / stage 是「长期怎么判断你」（慢变 7 级）。
+信任高 + 心情低 = 会抱怨会冷一下但不会走；信任低 + 心情高 = 意外地好说话。
+`relationship` 的 `trust` 单回合最多变动 2，阶段前进要求本回合有玩家实际行动 + NPC 同回合
+`partial`/`genuine` 回应，否则报 `INVARIANT_VIOLATION` 而不是自动截断。
 
 ## 与 `AGENTS.md` 的区别
 
@@ -166,11 +257,22 @@ $DSH_HOME\profiles\plugins\soul-persona\
     default: standard
   ```
 - 若你同时把 SOUL 内容合并进了 `AGENTS.md`，建议删掉那份，避免人设注入两次。
+- **引擎每回合至少一次 stdio 往返**（毫秒级）。引擎不可用时不会阻塞对话，只是
+  `soul_state` / `soul_commit` / `soul_admin` 会返回「引擎未就绪」并说明原因
+  （缺 Python / 版本太低 / 引擎包缺失），此时人设注入照常生效。
+- **引擎要 3.10 以上**，且不加 `PYTHONPATH` 也能 import 的形态是「装完就带 `engine/` 目录」，
+  所以请用 `dsh plugin add dsh-rp-soul` 安装，别手工拷 `lib/`。
+- **人设改心情阈值不需要迁存档**：`revision` 是「散文 + 前置块」的 sha256，
+  但引擎只在新开局时读阈值，已有存档沿用开局时那份。
 
 ## 验证 / 卸载
 
 - **验证**：新开一个对话，观察系统提示开头出现 `SOUL.md` 的人设文本；修改
   `SOUL.md` 再发消息，随下一条请求更新。
+- **验证引擎**：设置 →「角色人设」→ 引擎卡里应显示「就绪」与 Python 版本；
+  让模型 `soul_admin start` 之后，同一张卡里能看到这一局与 NPC 的心情条。
+  或直接命令行：`python -m rp_soul_engine <<< '{"id":"c1","command":"doctor"}'`
+  （在 `engine/` 目录下），返回 `{"id":"c1","ok":true,...}` 即通。
 - **卸载**：`dsh plugin remove dsh-rp-soul`（自动移除 bundle 挂载）；
   若曾手动安装，再从 `cordis.patch.yml` 删除 `soul-persona` 行并删除
   `profiles\plugins\soul-persona\` 目录。

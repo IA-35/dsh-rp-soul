@@ -39,11 +39,11 @@ ok(clamped === 'threw', '2. maxBytes 过小时 Config() 直接抛错');
 
 // ---- 3. 真实 cordis 挂载 ----
 const app = new Context();
-let section = null;
+const sections = new Map();
 const routes = [];
 app.provide('systemPrompt', {
   getSectionOrder(name) { return name === 'DEPLOYMENT_PERSONA_PREFIX' ? 120 : 0; },
-  section(def) { section = def; return () => { section = null; }; },
+  section(def) { sections.set(def.name, def); return () => { sections.delete(def.name); }; },
 });
 app.provide('webServer', {
   register(def) { routes.push(def); return () => { const i = routes.indexOf(def); if (i >= 0) routes.splice(i, 1); }; },
@@ -53,14 +53,15 @@ app.provide('connection', { requestRejection() { return undefined; } });
 const fiber = app.plugin(plugin.apply, plugin.Config({ files: ['SOUL.md', 'TONE.md'], annotate: true }));
 await fiber;
 
-ok(section !== null, '3. 挂载后 section 已注册');
-eq(section.name, 'soul-persona', '3. section name');
-eq(section.order, 120, '3. order 取自 DEPLOYMENT_PERSONA_PREFIX');
+ok(sections.has('soul-persona'), '3. 挂载后 soul-persona section 已注册');
+ok(sections.has('soul-engine'), '3. 挂载后 soul-engine section 已注册');
+eq(sections.get('soul-persona').order, 120, '3. soul-persona order 取自 DEPLOYMENT_PERSONA_PREFIX');
+eq(sections.get('soul-engine').order, 121, '3. soul-engine 紧跟在人设后面');
 eq(routes.length, 1, '3. 注册了 1 条路由');
 eq(routes[0].kind, 'prefix', '3. 路由 kind=prefix');
 eq(routes[0].path, '/rp-soul', '3. 路由 path');
 
-const composed = section.text();
+const composed = sections.get('soul-persona').text();
 has(composed, '夜航船的领航员', '3. 合成含 SOUL.md');
 has(composed, '克制，不解释', '3. 合成含 TONE.md');
 has(composed, '<!-- soul-part: SOUL.md -->', '3. annotate=true 带分段注释');
@@ -90,7 +91,7 @@ const r1 = await call('POST', '/rp-soul/config', {
   files: ['TONE.md'], annotate: false, separator: '\n\n', enabled: true, maxBytes: 8192,
 });
 eq(r1.statusCode, 200, '4. POST /config 200');
-eq(section.text(), '口吻：克制，不解释。', '4. 改配置后合成文本立即变化（无需重启）');
+eq(sections.get('soul-persona').text(), '口吻：克制，不解释。', '4. 改配置后合成文本立即变化（无需重启）');
 const store = JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8'));
 eq(store.files, ['TONE.md'], '4. store 落盘 files');
 eq(store.annotate, false, '4. store 落盘 annotate');
@@ -103,7 +104,7 @@ eq(JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8')).maxByt
 
 // ---- 6. fiber 释放后全部回收 ----
 await fiber.dispose();
-eq(section, null, '6. dispose 后 section 已撤');
+eq(sections.size, 0, '6. dispose 后 section 已全部撤回');
 eq(routes.length, 0, '6. dispose 后路由已撤');
 
 done('mount');

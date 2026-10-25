@@ -4,7 +4,7 @@
  * 这层跑在 vm 沙箱里，不能替代真浏览器，但能挡住绝大多数低级错误。 */
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { eq, ok, has, done } from './_check.mjs';
+import { eq, ok, has, hasNot, done } from './_check.mjs';
 
 // ───────────────────────── 1. 装载 bundle ─────────────────────────
 let registered = null;
@@ -284,5 +284,14 @@ sepField.props.onBlur({ target: { value: '' } });
 for (let i = 0; i < 12; i++) await Promise.resolve();
 const emptyCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config');
 eq(emptyCall.body.separator, '', '10. 留空 → 空分隔符');
+
+// ---- 引擎卡：client.js 必须引用 /engine 系列路由，且不出现裸 fetch ----
+const clientSrc = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+has(clientSrc, '"/engine"', '引擎卡读 /engine');
+has(clientSrc, '"/engine/persona"', '引擎卡有校验人设入口');
+has(clientSrc, '"/engine/mood', '引擎卡有心情面板入口');
+has(clientSrc, '"/engine/thought"', '引擎卡有删情绪入口');
+has(clientSrc, 'EngineCard', '引擎卡组件存在');
+hasNot(clientSrc, 'fetch("http', '客户端不直连绝对地址');
 
 done('client-bundle');

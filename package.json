@@ -1,11 +1,14 @@
 {
   "name": "dsh-rp-soul",
-  "version": "0.3.0",
-  "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor (Runtime-Persona Soul loader).",
+  "version": "0.4.0",
+  "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor and a Python roleplay engine (mood / relationships / autonomous action).",
   "type": "module",
   "main": "lib/index.js",
   "files": [
     "lib",
+    "engine",
+    "!engine/tests",
+    "!engine/**/__pycache__",
     "cordis.patch.yml"
   ],
   "exports": {

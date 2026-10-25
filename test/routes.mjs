@@ -17,7 +17,8 @@ const mod = await import(new URL('../lib/index.js', import.meta.url).href);
 
 // ---- mock ctx ----
 const routes = [];
-let sectionDef = null;
+const sectionDefs = new Map();
+const tools = [];
 const ctx = {
   effect(fn) { const d = fn(); return () => { if (typeof d === 'function') d(); }; },
   inject(deps, cb) {
@@ -26,21 +27,25 @@ const ctx = {
       inject: (d, c) => ctx.inject(d, c),
       get webServer() { return { register(def) { routes.push(def); return () => {}; } }; },
       get connection() { return { requestRejection() { return undefined; } }; },
+      get tools() { return { register(def) { tools.push(def); return () => {}; } }; },
     });
     cb(mkctx());
   },
   systemPrompt: {
     getSectionOrder(name) { return name === 'DEPLOYMENT_PERSONA_PREFIX' ? 100 : 0; },
-    section(def) { sectionDef = def; return () => {}; },
+    section(def) { sectionDefs.set(def.name, def); return () => {}; },
   },
 };
 mod.apply(ctx, { files: ['SOUL.md', 'STYLE.md'], maxBytes: 65536 });
 
 // ---- 1. section ----
-ok(sectionDef !== null, '1. section 已注册');
-eq(sectionDef.name, 'soul-persona', '1. section name');
-eq(sectionDef.order, 100, '1. section order 跟随 DEPLOYMENT_PERSONA_PREFIX');
-const text = sectionDef.text();
+ok(sectionDefs.has('soul-persona'), '1. soul-persona section 已注册');
+ok(sectionDefs.has('soul-engine'), '1. soul-engine section 已注册');
+eq(sectionDefs.get('soul-persona').order, 100, '1. section order 跟随 DEPLOYMENT_PERSONA_PREFIX');
+eq(sectionDefs.get('soul-engine').order, 101, '1. soul-engine 紧跟人设');
+eq(tools.length, 3, '1. 注册了 3 个工具');
+eq(tools.map((t) => t.name).sort().join(','), 'soul_admin,soul_commit,soul_state', '1. 三个工具名');
+const text = sectionDefs.get('soul-persona').text();
 has(text, '你是暗夜侦探', '1. 合成文本含 SOUL.md');
 has(text, '第一人称', '1. 合成文本含 STYLE.md');
 // annotate 默认 false（见 lib/index.js:32），所以默认合成文本里不该有分段注释
@@ -122,22 +127,22 @@ const c = await call('POST', '/rp-soul/config', {
   maxBytes: 4096,
 });
 eq(c.status, 200, '7. POST /config 200');
-const after = sectionDef.text();
+const after = sectionDefs.get('soul-persona').text();
 has(after, '不要主动提问', '7. 新配置的第一段生效');
 has(after, '你是暗夜侦探', '7. 新配置的第二段生效');
 has(after, '\n---\n', '7. 自定义 separator 生效');
 ok(after.indexOf('不要主动提问') < after.indexOf('你是暗夜侦探'), '7. files 顺序决定拼接顺序');
 
 // ---- 8. 插值关闭 ----
-eq(sectionDef.interpolate, false, '8. section 声明 interpolate:false（渲染时不做 {{变量}} 插值）');
+eq(sectionDefs.get('soul-persona').interpolate, false, '8. section 声明 interpolate:false（渲染时不做 {{变量}} 插值）');
 await call('POST', '/rp-soul/config', { files: ['rp-soul/evil.md'] });
-const esc = sectionDef.text();
+const esc = sectionDefs.get('soul-persona').text();
 has(esc, '{{user}}', '8. 原文 {{user}} 原样保留（由 interpolate:false 保证不炸）');
 hasNot(esc, String.fromCharCode(0x200b), '8. 不再塞零宽字符');
 
 // ---- 9. 总开关 ----
 await call('POST', '/rp-soul/config', { enabled: false });
-eq(sectionDef.text(), '', '9. enabled=false 时合成文本为空串');
+eq(sectionDefs.get('soul-persona').text(), '', '9. enabled=false 时合成文本为空串');
 
 // ---- 10. 异常输入 ----
 const badCfg = await call('POST', '/rp-soul/config', { maxBytes: -1 });

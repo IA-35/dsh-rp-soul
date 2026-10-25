@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rp-soul-engine"
+version = "0.1.0"
+description = "Deterministic role-play state engine for the dsh-rp-soul plugin (mood, relationships, agency)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "IA-35" }]
+keywords = ["role-play", "narrative", "state-machine", "sqlite"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+# No third-party runtime dependencies: stdlib + the sqlite3 module only.
+dependencies = []
+
+[project.scripts]
+rp-soul-engine = "rp_soul_engine.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/IA-35/dsh-rp-soul"
+
+[tool.setuptools]
+packages = [
+    "rp_soul_engine",
+    "rp_soul_engine.application",
+    "rp_soul_engine.domain",
+    "rp_soul_engine.persistence",
+    "rp_soul_engine.projections",
+]
