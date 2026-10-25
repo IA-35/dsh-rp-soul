@@ -26,9 +26,8 @@ from . import rng
 from . import state as SS
 from . import structure as ST
 
-# (kind, reason-key) -> weight. Reasons, not story: the label is rendered from
-# the persona's own places and cast, so no text lives here.
-PRIOR_GOAL = 1.5
+# Reasons, not story: the label is rendered from the persona's own places and
+# cast, so no text lives here.
 RECENT_TURNS = 3
 NUDGE = 1.0
 
@@ -58,15 +57,33 @@ def _due_soon(state, cid):
     return soonest
 
 
-def _goal_kind(state, cid):
-    goal = (state["characters"].get(cid) or {}).get("goal") or {}
-    kind = goal.get("kind")
-    return kind if kind in ST.AGENCY_KINDS else None
+def _band_reason(band, value, weighing):
+    """Why the mood band is what it is, in the persona's own vocabulary.
+
+    `weighing` are the labels mood.py already put on his mind ("你不在",
+    "有件该办的事快到期"). Reusing them keeps one vocabulary for "why" instead
+    of inventing a second one here. Band names match README's 开心/平稳/低落/难过
+    so the prompt and the settings page say the same word.
+    """
+    named = {"open": "心情开心", "normal": "心情平稳", "closed": "心情低落", "break": "心情难过"}
+    head = "%s（%d）" % (named.get(band, "心情"), value)
+    if weighing:
+        return head + "，" + "、".join(weighing[:2])
+    return head
 
 
 def score(state, cid, turn):
-    """[(score, kind, basis_fact_ids, event_ids)] in declaration order."""
-    band = MO.evaluate(state, cid)[1]
+    """[(score, kind, basis_fact_ids, event_ids, reason)] in declaration order.
+
+    `reason` is a short "why" phrase built from state the character can see, so
+    the prompt can say why he leans that way instead of only what he leans
+    toward. Several contributions to the same kind carry several reasons; the
+    caller keeps the candidate with the highest score and merges theirs.
+    """
+    mood = MO.brief(state, cid)
+    band = mood["band"]
+    value = mood["value"]
+    weighing = [row.get("label") for row in mood.get("top") or [] if row.get("label")]
     edge = SS.edge(state, cid, state["player_id"])
     tension = edge["tension"] if edge else 0
     trust = edge["trust"] if edge else 0
@@ -80,52 +97,60 @@ def score(state, cid, turn):
     pending = _pending_for(state, cid)
     due = _due_soon(state, cid)
     rows = []
+    band_reason = _band_reason(band, value, weighing)
 
-    def add(kind, weight, basis=None, events=None):
-        rows.append((float(weight), kind, list(basis or []), list(events or [])))
+    def add(kind, weight, basis=None, events=None, reason=None):
+        rows.append((float(weight), kind, list(basis or []), list(events or []), reason))
 
     # mood band is the loudest signal: a low bar narrows what he can do
-    add("approach", 2.0 if band == "open" else 0.0)
-    add("request", 1.0 if band == "open" else 0.0)
-    add("observe", 1.0 if band in ("normal", "closed") else 0.0)
-    add("provoke", 3.0 if band == "break" else (1.0 if band == "closed" else 0.0))
-    add("leave", 3.0 if band == "break" else (0.5 if band == "closed" else 0.0))
+    add("approach", 2.0 if band == "open" else 0.0, reason=band_reason)
+    add("request", 1.0 if band == "open" else 0.0, reason=band_reason)
+    add("observe", 1.0 if band in ("normal", "closed") else 0.0, reason=band_reason)
+    add("provoke", 3.0 if band == "break" else (1.0 if band == "closed" else 0.0), reason=band_reason)
+    add("leave", 3.0 if band == "break" else (0.5 if band == "closed" else 0.0), reason=band_reason)
 
     # unfinished business pulls him towards the player - he wants an answer
     if pending:
-        add("request", 2.0, events=pending)
+        titles = [state["events"][eid].get("title") or "那件事" for eid in pending]
+        add("request", 2.0, events=pending, reason="还有件事没个答复：" + titles[0])
         if due is not None and due <= ST.DAY:
-            add("approach", 2.0, events=pending)
+            add("approach", 2.0, events=pending, reason="有件该办的事快到期：" + titles[0])
     # a frayed thread is easier to pull than a calm one
     if tension >= 3:
-        add("provoke", 2.0)
-        add("observe", 1.0)
+        add("provoke", 2.0, reason="你们之间还绷着（张力 %d）" % tension)
+        add("observe", 1.0, reason="你们之间还绷着，得先看清楚")
     # an established bond lets him close the distance unasked
     if trust >= 2 and stage >= 2:
-        add("approach", 2.0)
+        add("approach", 2.0, reason="已经熟了（信任 %d），敢自己凑过来" % trust)
     if trust <= -2:
-        add("leave", 1.0)
-        add("provoke", 1.0)
+        add("leave", 1.0, reason="信不过他（信任 %d）" % trust)
+        add("provoke", 1.0, reason="信不过他（信任 %d）" % trust)
     # something he just learned is worth acting on
     if recent:
-        add("observe", 2.0, basis=recent)
-        add("request", 1.0, basis=recent)
+        add("observe", 2.0, basis=recent, reason="刚知道点事，正琢磨")
+        add("request", 1.0, basis=recent, reason="刚知道点事，想问个明白")
     if sick:
-        add("leave", 2.0)
-        add("observe", 0.5)
+        add("leave", 2.0, reason="身体不太对劲")
+        add("observe", 0.5, reason="身体不太对劲，不太想动")
     if late:
-        add("leave", 1.0)
-        add("observe", 0.5)
+        add("leave", 1.0, reason="这么晚了，想收场")
+        add("observe", 0.5, reason="这么晚了，不想多说话")
     if not present:
         # an absent character can only appear (approach) or stay out (observe)
-        add("observe", 0.5)
-    goal = _goal_kind(state, cid)
-    if goal:
-        add(goal, PRIOR_GOAL)
+        add("observe", 0.5, reason="这会儿不在场")
+
+    # No手填 goal prior here on purpose: what he wants right now is what these
+    # state terms say it is. A static "current goal" typed into the persona
+    # would outrank every live signal with the same weight on every turn, which
+    # is the opposite of an engine-measured intent.
 
     # deterministic nudge: same state, same order, every replay
     nudge = {row[1]: rng.unit(state["seed"], "beat", turn, cid, row[1]) * NUDGE for row in rows}
-    rows = [(score_ + nudge[kind], kind, basis, events) for (score_, kind, basis, events) in rows if score_ > 0]
+    rows = [
+        (score_ + nudge[kind], kind, basis, events, reasons)
+        for (score_, kind, basis, events, reasons) in rows
+        if score_ > 0
+    ]
     return rows
 
 
@@ -166,12 +191,19 @@ def candidates(state, persona, cid, turn=None, limit=None):
         return []
     rows = score(state, cid, turn)
     rows.sort(key=lambda row: (-row[0], ST.AGENCY_KINDS.index(row[1])))
+    # Whichever row wins a kind, every reason that pushed that kind belongs on
+    # it: a candidate with "心情压得低" alone hides the event that is due.
+    reasons_of = {}
+    for _score, kind, _basis, _events, reason in rows:
+        if reason and reason not in reasons_of.setdefault(kind, []):
+            reasons_of[kind].append(reason)
     out = []
     seen = set()
-    for score_, kind, basis, events in rows:
+    for score_, kind, basis, events, _reason in rows:
         if kind in seen:
             continue
         seen.add(kind)
+        reasons = reasons_of.get(kind) or []
         out.append({
             "kind": kind,
             "label": ST.AGENCY_GOAL_KINDS.get(kind, kind),
@@ -179,10 +211,25 @@ def candidates(state, persona, cid, turn=None, limit=None):
             "weight": round(score_, 3),
             "basis_fact_ids": basis,
             "event_ids": events,
+            "reasons": reasons[:3],
+            "because": _because(reasons),
         })
         if len(out) >= limit:
             break
     return out
+
+
+def _because(reasons):
+    """One clause a prompt can append verbatim; empty when there is nothing to say.
+
+    Kept short on purpose: this line rides inside a system-prompt snapshot next
+    to the clock and the cast, and a wall of text there costs more than it tells.
+    """
+    kept = [r.strip() for r in reasons if isinstance(r, str) and r.strip()][:2]
+    if not kept:
+        return ""
+    line = "因为" + "，而且".join(kept)
+    return line if len(line) <= 90 else line[:89] + "…"
 
 
 def brief(state, persona, turn=None):

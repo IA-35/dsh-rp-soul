@@ -400,14 +400,77 @@ responses.set('GET /rp-soul/engine/activity', () => jsonResponse({
   ],
 }));
 responses.set('DELETE /rp-soul/engine/thought', () => jsonResponse({ ok: true, revision: 8 }));
+responses.set('GET /rp-soul/engine/persona-file', () => jsonResponse({
+  ok: true,
+  rel: 'rp-soul/persona.md',
+  exists: false,
+  bytes: 0,
+  mtimeMs: null,
+  source: 'legacy',
+  legacyRel: 'rp-soul/parts/角色档案.md',
+  error: null,
+  preview: 'id: rain_clinic\ntitle: 雨夜诊所\n',
+  front: {
+    id: 'rain_clinic', title: '雨夜诊所', mood_base: 60,
+    mood_thresholds: { open: 72, closed: 42, break: 20 },
+    places: [{ id: 'clinic', name: '诊所', privacy: 'private' }],
+    cast: [{
+      id: 'lin_wan', name: '林晚', call: '林医生', gender: 'female', age: 26, tier: 'major',
+      role: '夜班医生', appearance: '白大褂',
+      voices: { surface: '冷淡', inner: '其实很在意' },
+      schedule: [{ from: 0, to: 1439, location_id: 'clinic' }],
+    }],
+  },
+}));
+responses.set('PUT /rp-soul/engine/persona-file', (init) => jsonResponse({
+  ok: true,
+  rel: 'rp-soul/persona.md',
+  exists: true,
+  bytes: 512,
+  mtimeMs: 1,
+  source: 'file',
+  legacyRel: null,
+  error: null,
+  preview: '',
+  front: init.body.front,
+}));
 
 const tabTree = await renderUntil((t) => t.props['data-render-state'] === 'ready');
 const tabText = textOf(tabTree);
 eq(tabTree.props['data-tab'], 'persona', '11. 默认停在「人设提示词」页');
 has(tabText, '人设提示词', '11. 有「人设提示词」页签');
+has(tabText, '引擎人设', '11. 有「引擎人设」页签');
 has(tabText, '情绪', '11. 有「情绪」页签');
 has(tabText, '自主行动记录', '11. 有「自主行动记录」页签');
 has(tabText, '拼接顺序', '11. 人设页仍然渲染原来的内容');
+
+// 切到「引擎人设」：表单要能从 persona-file 读出结构化字段并渲染
+calls.length = 0;
+findButton(tabTree, '引擎人设').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const engineTree = await renderUntil((t) => t.props['data-tab'] === 'engine' && textOf(t).includes('林晚'));
+eq(engineTree.props['data-tab'], 'engine', '11. 切到「引擎人设」页');
+ok(calls.some((c) => c.method === 'GET' && c.url === '/rp-soul/engine/persona-file'), '11. 引擎人设页读 persona-file');
+const engineText = textOf(engineTree);
+has(engineText, 'rp-soul/persona.md', '11. 表单上写明文件位置');
+ok(findAll(engineTree, (n) => n.type === 'input' && n.props.value === '雨夜诊所').length === 1, '11. 表单带出标题');
+has(engineText, '心情基准', '11. 表单有心情基准字段');
+has(engineText, '看 YAML', '11. 表单能切到 YAML 预览');
+has(engineText, '前置块', '11. 未落盘时提示从散文前置块迁移');
+
+// 改一个字段再存：请求体里必须带改后的值
+calls.length = 0;
+const titleInput = findAll(engineTree, (n) => n.type === 'input' && n.props.value === '雨夜诊所')[0];
+ok(titleInput !== undefined, '11. 标题输入框在表单里');
+titleInput.props.onChange({ target: { value: '雨夜诊所·续' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const dirtyTree = await renderUntil((t) => textOf(t).includes('未保存'));
+has(textOf(dirtyTree), '未保存', '11. 改字段后标记未保存');
+findButton(dirtyTree, '保存').props.onClick();
+for (let i = 0; i < 30; i++) await Promise.resolve();
+const personaPut = calls.filter((c) => c.method === 'PUT' && c.url === '/rp-soul/engine/persona-file')[0];
+ok(personaPut !== undefined, '11. 点保存发出 PUT');
+eq(personaPut.body.front.title, '雨夜诊所·续', '11. PUT 里带改后的标题');
 
 // 切到「情绪」
 calls.length = 0;
@@ -421,7 +484,7 @@ const moodText = textOf(moodTree);
 has(moodText, '林晚', '11. 情绪页列出 NPC 名字');
 has(moodText, '42 / 100', '11. 情绪页显示心情值');
 has(moodText, '低落', '11. 心情值带 band 文案');
-has(moodText, '舒展 ≥ 75', '11. 情绪页显示阈值');
+has(moodText, '开心 ≥ 75', '11. 情绪页显示阈值');
 has(moodText, '他记得我不喝冰的', '11. 列出情绪条目');
 has(moodText, '+6', '11. 正 delta 带加号');
 has(moodText, '-4', '11. 负 delta');
@@ -487,6 +550,6 @@ findButton(emptyPersona, '情绪').props.onClick();
 for (let i = 0; i < 20; i++) await Promise.resolve();
 const emptyMood = await renderUntil((t) => t.props['data-tab'] === 'mood' && textOf(t).includes('这局还没开局'));
 has(textOf(emptyMood), '这局还没开局', '11. 没开局时情绪页给提示');
-has(textOf(emptyMood), 'soul_admin', '11. 提示里指明开局命令');
+has(textOf(emptyMood), 'soul_state', '11. 提示里指明会自动开局（soul_state）');
 
 done('client-bundle');

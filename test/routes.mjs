@@ -149,4 +149,77 @@ const badCfg = await call('POST', '/rp-soul/config', { maxBytes: -1 });
 ok(badCfg.status === 200 || badCfg.status === 400, '10. 非法 maxBytes 不崩（200 夹紧 或 400）');
 await call('POST', '/rp-soul/config', { enabled: true, maxBytes: 8192, files: ['SOUL.md'] });
 
+// ---- 11. 引擎人设独立文件 ----
+const pf0 = await call('GET', '/rp-soul/engine/persona-file');
+eq(pf0.status, 200, '11. GET /engine/persona-file 200');
+eq(pf0.parsed.rel, 'rp-soul/persona.md', '11. 人设文件固定叫 rp-soul/persona.md');
+eq(pf0.parsed.exists, false, '11. 还没建时 exists=false');
+eq(pf0.parsed.source, 'empty', '11. 散文里也没有前置块时 source=empty');
+
+// 老样子：散文里带前置块 → 表单初值从散文里来（source=legacy），此时还没落盘
+writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
+  '---',
+  'id: legacy_hero',
+  'title: 旧世界',
+  'mood_base: 60',
+  'places:',
+  '  - {id: room, name: 房间, privacy: private}',
+  'cast:',
+  '  - {id: hero, name: 英雄, gender: female, age: 20, tier: major, voices: {surface: 冷, inner: 热}}',
+  '---',
+  '',
+  '这是散文正文。',
+  '',
+].join('\n'), 'utf8');
+await call('POST', '/rp-soul/config', { files: ['rp-soul/legacy.md'] });
+const pf1 = await call('GET', '/rp-soul/engine/persona-file');
+eq(pf1.parsed.source, 'legacy', '11. 前置块在散文里时表单以 legacy 迁移');
+eq(pf1.parsed.front.id, 'legacy_hero', '11. legacy 初值能读到 id');
+eq(pf1.parsed.legacyRel, 'rp-soul/legacy.md', '11. legacy 来源文件可追溯');
+has(pf1.parsed.preview, 'mood_base:', '11. legacy 也能给出 YAML 预览');
+
+const injected = sectionDefs.get('soul-persona').text();
+has(injected, '这是散文正文', '11. 提示词里保留散文');
+hasNot(injected, 'legacy_hero', '11. 提示词里不再出现前置块字段');
+
+// 表单保存 → 落盘成独立文件，之后一律以文件为准
+const saved = await call('PUT', '/rp-soul/engine/persona-file', {
+  front: {
+    id: 'new_world',
+    title: '新世界',
+    mood_base: 66,
+    places: [{ id: 'hall', name: '大厅', privacy: 'public' }],
+    cast: [{
+      id: 'ace', name: '艾斯', gender: 'male', age: 24, tier: 'major',
+      voices: { surface: '敷衍', inner: '很在意' },
+    }],
+  },
+});
+eq(saved.status, 200, '11. PUT 保存 200');
+eq(saved.parsed.exists, true, '11. 保存后文件存在');
+eq(saved.parsed.source, 'file', '11. 保存后来源变 file');
+eq(saved.parsed.front.mood_base, 66, '11. 写回的字段完整');
+ok(saved.parsed.front.places[0].id === 'hall', '11. 嵌套地点写回正确');
+ok(saved.parsed.front.cast[0].voices.surface === '敷衍', '11. 嵌套角色语态写回正确');
+
+const pf2 = await call('GET', '/rp-soul/engine/persona-file');
+eq(pf2.parsed.front.id, 'new_world', '11. 重读拿到刚存的 id');
+
+const badFront = await call('PUT', '/rp-soul/engine/persona-file', { front: [1, 2] });
+eq(badFront.status, 400, '11. front 不是对象时 400');
+
+// 文件优先：散文里的前置块不再影响结构化字段
+writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
+  '---',
+  'id: should_be_ignored',
+  'places: []',
+  'cast: []',
+  '---',
+  '',
+  '散文变了。',
+  '',
+].join('\n'), 'utf8');
+const pf3 = await call('GET', '/rp-soul/engine/persona-file');
+eq(pf3.parsed.front.id, 'new_world', '11. persona.md 存在时散文前置块被忽略');
+
 done('routes');

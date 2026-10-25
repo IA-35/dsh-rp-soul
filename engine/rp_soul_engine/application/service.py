@@ -220,12 +220,10 @@ def new_game(ctx, payload):
         raise AppError(problems[0]["code"], problems[0]["reason"], problems)
 
     def handler(conn, now):
-        state, warnings = opening.new_session(persona, seed=payload["seed"])
+        state, warnings = opening.new_session(persona, seed=payload["seed"], now=now)
         if payload["start_location"] is not None:
             state["scene"]["location_id"] = payload["start_location"]
             state["characters"][state["player_id"]]["status"]["location_id"] = payload["start_location"]
-        if payload["start_minute"] is not None:
-            state["clock"]["minute"] = payload["start_minute"]
         if payload["present"]:
             player = state["player_id"]
             present = sorted(set(payload["present"]) | {player}, key=lambda cid: (cid != player, cid))
@@ -268,16 +266,12 @@ def new_game(ctx, payload):
 
 
 def get_context(ctx, payload):
-    from ..domain import simulation
-
     payload = validate(specs.GET_CONTEXT, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
     state, persona = session["state"], session["persona"]
     context = CX.full(state, persona, save_info(session)) if payload["depth"] == "full" else CX.brief(state, persona, save_info(session))
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
-    if payload["preview_time"] is not None:
-        out["preview_time"] = simulation.preview(state, payload["preview_time"])
     if payload["want_twist"]:
         out["twists"] = list(persona.get("twists") or [])
         if not out["twists"]:
@@ -421,7 +415,7 @@ def _apply_turn(conn, session, state, persona, commit, unsaved, now, undo_base=N
             # first, so the domain sees the facts from before it.
             repo.revert_turn_facts(conn, sid, replacing)
             state["facts"] = repo.FactSource(conn, sid)
-    new_state, result = turn.commit_turn(state, persona, commit, snapshot)
+    new_state, result = turn.commit_turn(state, persona, commit, snapshot, now)
     replaced = result["replaced_turn"]
     if replaced is not None:
         repo.mark_turn_undone(conn, sid, replaced)
@@ -461,7 +455,7 @@ def _turn_result(result):
         "applied": result["applied"],
         "resolved_events": result["resolved_events"],
         "simulation": result["simulation"],
-        "default_time_advance": result["default_time_advance"],
+        "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
     for key in ("chapter", "replaced_turn", "thoughts"):
@@ -1158,7 +1152,7 @@ def _activity_row(state, row):
                 "label": item.get("label") or "",
                 "delta": item.get("delta"),
             })
-        elif kind in ("advance_time", "move", "enter_scene", "exit_scene"):
+        elif kind in ("clock", "move", "enter_scene", "exit_scene"):
             mood_moves.append(kind)
     return {
         "turn": row.get("turn"),

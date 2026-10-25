@@ -78,11 +78,10 @@ CONDITION_KINDS = ("drunk", "asleep", "unconscious", "injured", "away", "busy", 
 # Characters in these conditions never take part in intimate scenes.
 INCAPACITATING = ("drunk", "asleep", "unconscious")
 
-# Clock anchors for advance_time.until (minutes of day)
-UNTIL_ANCHORS = {"morning": 7 * 60, "noon": 12 * 60, "evening": 18 * 60, "night": 21 * 60}
+# The story clock is read off the real wall clock, so there are no anchors to
+# skip to: a gap is however long the user was away, never a chosen span.
 MINUTES_PER_DAY = 1440
 MAX_ADVANCE_MINUTES = 30 * MINUTES_PER_DAY
-DEFAULT_ADVANCE_MINUTES = 3
 SCENE_BREAK_MINUTES = 60
 
 COOLDOWN_TURNS = 3

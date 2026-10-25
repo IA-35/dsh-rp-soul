@@ -61,11 +61,26 @@ def character_cards():
 
 
 def placeholders_are_rendered():
-    got, _ = PE.validate(PERSONA)
+    raw = copy.deepcopy(PERSONA)
+    raw["cast"][0]["appearance"] = "白大褂上别着{npc.name}自己的牌子"
+    raw["cast"][0]["voices"] = {"surface": "喊自己{player.name}", "inner": "总在算时间"}
+    got, errors = PE.validate(raw)
+    assert got is not None, PE.problems_text(errors)
     cards = PE.characters(got)
     cards[PE.PLAYER_ID] = PE.player_card(name="陈默", gender="male", age=30, role="送药的人")
     PE.render_cards(got, cards)
-    assert cards["lin_wan"]["goal"]["text"] == "看林晚今晚会不会留下来", cards["lin_wan"]["goal"]
+    assert cards["lin_wan"]["appearance"] == "白大褂上别着林晚自己的牌子", cards["lin_wan"]["appearance"]
+    assert cards["lin_wan"]["voices"]["surface"] == "喊自己陈默", cards["lin_wan"]["voices"]
+
+
+def no_typed_in_goal_fields():
+    # 动机由引擎测算，人设里不再接受 decision / goal / situation。
+    for key in ("decision", "goal", "situation"):
+        raw = copy.deepcopy(PERSONA)
+        raw["cast"][0][key] = {"kind": "observe", "text": "随手填的"}
+        got, errors = PE.validate(raw)
+        assert got is None, "引擎不该再接受 %s" % key
+        assert "未知字段" in PE.problems_text(errors), PE.problems_text(errors)
 
 
 def player_card_shape():
@@ -94,10 +109,29 @@ def revision_changes_with_prose():
     assert one["revision"] != two["revision"]
 
 
+def accepts_without_adult_context():
+    got, errors = PE.validate(mutated(cast=cast(adult_context="")))
+    assert got is not None, PE.problems_text(errors)
+    cards = PE.characters(got)
+    assert cards["lin_wan"]["public_role"] == "夜班医生", cards["lin_wan"]["public_role"]
+
+
+def public_role_falls_back_to_name():
+    # role 与 adult_context 都省略：公开身份退回名字，不能因为缺说明字段就炸。
+    item = copy.deepcopy(PERSONA["cast"][0])
+    item.pop("role", None)
+    item["adult_context"] = ""
+    got, errors = PE.validate(mutated(cast=[item]))
+    assert got is not None, PE.problems_text(errors)
+    cards = PE.characters(got)
+    assert cards["lin_wan"]["public_role"] == "林晚", cards["lin_wan"]["public_role"]
+
+
 check("accepts a good persona", accepts)
 check("fills engine defaults, not content", defaults_are_filled)
 check("builds character cards", character_cards)
 check("renders placeholders in persona text", placeholders_are_rendered)
+check("人设不再接受手填的 decision/goal/situation", no_typed_in_goal_fields)
 check("player card has no mood", player_card_shape)
 check("from_markdown ids are stable and distinct", from_markdown_ids)
 check("revision tracks the prose", revision_changes_with_prose)
@@ -110,7 +144,25 @@ check("schedule must point at a place", lambda: rejects(mutated(cast=cast(schedu
 check("cast ids must be unique", lambda: rejects(mutated(cast=[copy.deepcopy(PERSONA["cast"][0]), dict(copy.deepcopy(PERSONA["cast"][1]), id="lin_wan")]), "角色 id 重复", "INVALID_INPUT"))
 check("player id is reserved", lambda: rejects(mutated(cast=cast(id="player")), "保留 id", "INVALID_INPUT"))
 check("at least one major", lambda: rejects(mutated(cast=[copy.deepcopy(PERSONA["cast"][1])]), "至少要有一个 major", "INVALID_INPUT"))
-check("adult_context is required", lambda: rejects(mutated(cast=cast(adult_context="")), "缺少成年身份说明", "INVALID_INPUT"))
+check("adult_context is optional", accepts_without_adult_context)
+check("public_role falls back to name", public_role_falls_back_to_name)
+
+
+def start_stage_defaults_to_stranger():
+    got, errors = PE.validate(PERSONA)
+    assert got is not None, PE.problems_text(errors)
+    assert got["cast"][0]["start_stage"] == "stranger"
+
+
+def start_stage_is_carried_into_the_card():
+    got, errors = PE.validate(mutated(cast=cast(start_stage="familiar")))
+    assert got is not None, PE.problems_text(errors)
+    assert PE.characters(got)["lin_wan"]["start_stage"] == "familiar"
+
+
+check("start_stage defaults to stranger", start_stage_defaults_to_stranger)
+check("start_stage is carried into the card", start_stage_is_carried_into_the_card)
+check("start_stage must be a known stage", lambda: rejects(mutated(cast=cast(start_stage="soulmate")), "不在允许范围内", "INVALID_INPUT"))
 check("age is required", lambda: rejects(mutated(cast=cast(age=None)), "缺少年龄", "INVALID_INPUT"))
 check("gender is required", lambda: rejects(mutated(cast=cast(gender=None)), "缺少性别", "INVALID_INPUT"))
 check("place ids must be unique", lambda: rejects(mutated(places=[{"id": "clinic", "name": "诊所"}, {"id": "clinic", "name": "走廊"}], cast=cast(schedule=[])), "地点 id 重复", "INVALID_INPUT"))

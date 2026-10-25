@@ -79,6 +79,25 @@ def clock_label(state):
     return CL.label(state["clock"])
 
 
+def real_span(state, now):
+    """(minutes, clock) for a turn happening at the real moment `now`.
+
+    `real_at` is when the last turn settled; `start_date` is the day the
+    session opened, which is day one of the story. Time only goes forward: if
+    the clock moved backwards (a machine whose wall clock was adjusted) the span
+    is treated as zero rather than rewinding the story.
+    """
+    moment = CL.parse_iso(now)
+    start = CL.parse_iso(state.get("real_start")) or moment
+    if moment is None:
+        return 0, dict(state["clock"])
+    clock = CL.stamp(moment, start.date())
+    minutes = CL.real_minutes_between(state.get("real_at"), now)
+    if minutes <= 0 or CL.compare(clock, state["clock"]) <= 0:
+        return 0, dict(state["clock"])
+    return minutes, clock
+
+
 def place(persona, lid):
     for item in persona.get("places") or []:
         if item["id"] == lid:

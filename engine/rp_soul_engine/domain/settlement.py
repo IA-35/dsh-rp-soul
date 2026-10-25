@@ -1,33 +1,26 @@
-"""Time advance and settlement, in a fixed order:
+"""Settlement of elapsed time, in a fixed order:
 
-1. clock forward (a jump of >= 60 minutes starts a new scene)
+1. clock forward to the real moment (a jump of >= 60 minutes starts a new scene)
 2. due events, by (due, id): expire, roll chance events, surface foreshadows
 3. timed conditions expire, then mood thoughts age
 4. offscreen simulation (by span tier)
 5. propagation of spreading facts
 6. context requests for the next commit
 
+The span is never authored: it is however much real time passed since the last
+settled moment (`state["real_at"]`). The model cannot skip ahead, because a
+skip that never happened would settle events that are not due yet.
+
 Step 3 is where mood joins: thoughts and conditions share one clock walk, so
-a long time skip ages a feeling exactly once and never twice. That matters
-because a linear-decayed thought is a function of the clock - if two code
-paths both "ticked" it, a 5-day grudge would evaporate in a 6-hour skip.
+a long gap ages a feeling exactly once and never twice. That matters because a
+linear-decayed thought is a function of the clock - if two code paths both
+"ticked" it, a 5-day grudge would evaporate in a 6-hour gap.
 """
 
 from . import clock as CL
 from . import mood as MO
 from . import rng
 from . import structure as ST
-
-ADVANCE_KEYS = ("minutes", "until", "days")
-
-
-def minutes_for(clock, spec):
-    """Minutes for an advance spec with exactly one of minutes / until / days."""
-    if "minutes" in spec:
-        return spec["minutes"]
-    if "days" in spec:
-        return spec["days"] * ST.MINUTES_PER_DAY
-    return CL.until_target(clock, spec["until"])
 
 
 def tier_for(minutes, crossed_day=False):
@@ -96,15 +89,20 @@ def expire_conditions(state, until_clock):
     return expired
 
 
-def advance(state, minutes, turn, hooks=None):
-    """Advance the clock and settle. Returns the settlement report.
+def advance(state, minutes, turn, hooks=None, to_clock=None):
+    """Move the clock forward and settle. Returns the settlement report.
+
+    `minutes` is how much real time passed; `to_clock` is the clock that moment
+    maps to. When `to_clock` is given the clock is set to it instead of being
+    incremented, so a session left alone for three days lands on the right day
+    rather than on "day one, minute 4323".
 
     `hooks` lets later stages plug offscreen simulation, propagation and
     request computation into steps 4-6 without changing the order.
     """
     hooks = hooks or {}
     before = dict(state["clock"])
-    state["clock"] = CL.add_minutes(before, minutes)
+    state["clock"] = dict(to_clock) if to_clock is not None else CL.add_minutes(before, minutes)
     crossed_day = state["clock"]["day"] > before["day"]
     report = {
         "from": before,

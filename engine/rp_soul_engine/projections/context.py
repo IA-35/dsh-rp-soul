@@ -63,16 +63,17 @@ def _npc_brief(state, persona, cid, turn):
         "stage": SS.stage_label(to_player.get("stage", "stranger")),
     }
     if mood.get("top"):
-        # The three heaviest things on his mind, as labels: the model writes
-        # them into the scene, it does not get to name them.
-        entry["mood"]["weighing"] = [row["label"] for row in mood["top"]]
+        # The three heaviest things on his mind, as labels plus how much each
+        # one moves the mood right now: the model writes them into the scene,
+        # it does not get to name them, and the numbers are the engine's.
+        entry["mood"]["weighing"] = [
+            {"label": row["label"], "delta": row["delta"]} for row in mood["top"]
+        ]
     if char["status"]["conditions"]:
         entry["conditions"] = [c["text"] for c in char["status"]["conditions"]]
-    decision = char.get("decision") or {}
-    if decision.get("current_goal"):
-        entry["goal"] = decision["current_goal"]
-    if decision.get("relationship_stance"):
-        entry["stance"] = decision["relationship_stance"]
+    # No goal/stance here: what he wants right now is measured from state and
+    # already in context["agency"] (kind + weight + because). A typed-in
+    # current_goal would just repeat a line the prose already carries.
     return entry
 
 
@@ -200,12 +201,6 @@ def _card(state, persona, char):
     }
     if char.get("voices"):
         card["voices"] = dict(char["voices"])
-    if char.get("decision"):
-        card["decision"] = char["decision"]
-    if char.get("goal"):
-        card["goal"] = char["goal"]
-    if char.get("situation"):
-        card["situation"] = char["situation"]
     if char.get("schedule"):
         card["schedule"] = [dict(s) for s in char["schedule"]]
     return card
@@ -314,39 +309,9 @@ def commit_template(state, persona):
                 {"op": "npc_action", "npc_id": npc, "kind": kind, "action": "<他自己做了什么>", "significant": True},
                 {"op": "add_fact", "key": "<小写点分键，如 %s.secret.letter>" % (npc if present else "npc"), "text": "<正文里新写出、以后要用到的细节>", "visibility": "public", "origin": "observed"},
                 {"op": "relationship", "from": npc, "to": player, "trust_delta": "<-2..2 的整数；关系没变就删掉这条>", "reason": "<为什么>"},
-                {"op": "advance_time", "minutes": 5},
             ],
         },
     )
-
-
-def skip_template(state, persona, spec, preview):
-    """The commit for a fast-forward, returned as skip_template beside
-    get-context's preview: the time skip as previewed first, then one
-    offscreen beat for each NPC the preview requires. A continue turn: the
-    player only asked for time to pass."""
-    player = state["player_id"]
-    operations = [dict({"op": "advance_time"}, **spec)]
-    for beat in preview["required_beats"]:
-        cid = beat["npc_id"]
-        options = AG.candidates(state, persona, cid, state["turn"] + 1, limit=1)
-        kind = options[0]["kind"] if options else "observe"
-        operations.append(
-            {
-                "op": "offscreen_beat",
-                "npc_id": cid,
-                "summary": "<这段离屏一句话，<=120 字>",
-                "operations": [
-                    {"op": "npc_action", "npc_id": cid, "kind": kind, "action": "<按他的 goal 与 knows，他自己做了什么>", "significant": True}
-                ],
-            }
-        )
-    present = [cid for cid in state["scene"]["present"] if cid != player]
-    if present:
-        operations.append(
-            {"op": "npc_action", "npc_id": present[0], "kind": "observe", "action": "<在场的人这段时间后在做什么；用不上就删掉>"}
-        )
-    return _template(state, {"action_mode": "continue", "player_input": "<玩家原话>", "acts_on": [], "operations": operations})
 
 
 def _template(state, body):

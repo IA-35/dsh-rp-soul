@@ -30,8 +30,8 @@ def check(state, before_clock=None):
                 bad(base + ".age", "角色 %s 缺少明确年龄" % cid)
             elif age < 18:
                 bad(base + ".age", "角色 %s 年龄 %d 小于 18" % (cid, age), SAFETY_BLOCK)
-            if not char.get("adult_context"):
-                bad(base + ".adult_context", "角色 %s 缺少成年身份说明" % cid)
+            # adult_context 只是「一句话交代成年身份」的补充说明，人设里可以不写：
+            # 年龄这一关已经在上面把住了，这里不再要求它非空。
         if char.get("tier") not in ST.TIERS:
             bad(base + ".tier", "角色层级非法")
         mood = char.get("mood")

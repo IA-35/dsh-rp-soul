@@ -29,12 +29,6 @@ writeFileSync(join(home, 'SOUL.md'), [
   '    voices:',
   '      surface: 说话克制。',
   '      inner: 一直在等一句道歉。',
-  '    situation:',
-  '      trigger: 雨还没停',
-  '      pressure: 值班表没人补',
-  'start:',
-  '  day: 1',
-  '  minute: 1320',
   'mood_base: 55',
   'mood_thresholds:',
   '  open: 72',
@@ -156,9 +150,41 @@ ok(eng2.body.session !== null && eng2.body.session.session_id === sid, '7. /engi
 const mood = await j('/rp-soul/engine/mood?session_id=' + encodeURIComponent(sid) + '&npc_id=lin_wan');
 ok(Array.isArray(mood.body.thoughts), '7. 心情面板有 thoughts');
 eq(mood.body.thresholds.open, 72, '7. 阈值来自人设');
+// 开局不再自带情绪条目（situation.pressure 已删）：先提交一回合记一条事实，再拿它的 id 记一条情绪。
+let latestRevision = started.revision;
+if (mood.body.thoughts.length === 0) {
+  const seeded = await tools.get('soul_commit').execute({
+    action_mode: 'result',
+    player_input: '我把伞靠在门边，说了句今天雨真大。',
+    operations: [
+      { op: 'add_fact', key: 'wet_umbrella', text: '门边靠着一把湿伞', visibility: 'public', origin: 'observed' },
+    ],
+    content_tags: [],
+    summary: '玩家进门，把湿伞靠在门边。',
+    open_action: '林晚会不会搭话',
+  }, exec);
+  ok(seeded.committed === true, '7. 记一条事实（' + JSON.stringify(seeded.error ?? '') + '）');
+  latestRevision = seeded.revision;
+  const applied = (seeded.turns || [])[0]?.applied || [];
+  const factOp = applied.filter((a) => a.op === 'add_fact')[0];
+  ok(factOp !== undefined, '7. 事实拿到 id');
+  const seeded2 = await tools.get('soul_commit').execute({
+    action_mode: 'continue',
+    player_input: '',
+    operations: [
+      { op: 'add_thought', npc_id: 'lin_wan', label: '雨太大了', delta: -4, basis_fact_id: factOp.fact_id },
+    ],
+    content_tags: [],
+    summary: '林晚看了眼门边的湿伞。',
+    open_action: '林晚还站在门口',
+  }, exec);
+  ok(seeded2.committed === true, '7. 造一条情绪（' + JSON.stringify(seeded2.error ?? '') + '）');
+  latestRevision = seeded2.revision;
+}
+const mood2 = await j('/rp-soul/engine/mood?session_id=' + encodeURIComponent(sid) + '&npc_id=lin_wan');
 
-if (mood.body.thoughts.length > 0) {
-  const victim = mood.body.thoughts[0];
+if (mood2.body.thoughts.length > 0) {
+  const victim = mood2.body.thoughts[0];
   const del = await j('/rp-soul/engine/thought', {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
@@ -166,7 +192,7 @@ if (mood.body.thoughts.length > 0) {
       session_id: sid,
       npc_id: 'lin_wan',
       thought_id: victim.id,
-      revision: mood.body.revision ?? started.revision,
+      revision: mood2.body.revision ?? latestRevision,
       reason: '设置页手动删除',
     }),
   });
@@ -177,7 +203,8 @@ if (mood.body.thoughts.length > 0) {
   ok(Array.isArray(after.body.deletions) && after.body.deletions.length >= 1, '7. 留了审计');
   const mapRaw = readFileSync(join(home, 'rp-soul', 'engine-sessions.json'), 'utf8');
   const map = JSON.parse(mapRaw);
-  eq(map['conv-http'].revision, del.body.revision, '7. 删完后会话映射的 revision 同步了');
+  // 默认作用域是 global：所有 DSH 会话共用 "shared" 这一局，与 exec.agent.id 无关。
+  eq(map['shared'].revision, del.body.revision, '7. 删完后会话映射的 revision 同步了');
 } else {
   ok(false, '7. 开局居然没有情绪条目');
 }

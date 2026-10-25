@@ -1,7 +1,7 @@
 /* 真机接线测试：用真实 Python 侧车跑完整一局（mock 掉 DSH 的 ctx 与 tools）。
  * 验的是「Node 层 ↔ 引擎」的协议与语义：开局、读状态、交账、被驳回、心情面板、
  * 删情绪、存档、撤销、导出。任何一条不成立就抛错、退出码非 0。 */
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, ok, has, done } from './_check.mjs';
@@ -38,9 +38,6 @@ writeFileSync(join(home, 'SOUL.md'), [
   '    age: 29',
   '    gender: male',
   '    adult_context: 在城里做木工的自由职业者',
-  'start:',
-  '  day: 1',
-  '  minute: 1320',
   'mood_base: 55',
   'mood_thresholds:',
   '  open: 72',
@@ -129,7 +126,6 @@ const committed = await call('soul_commit', {
   action_mode: 'result',
   player_input: '我把伞靠在门边，问她今晚忙不忙。',
   operations: [
-    { op: 'advance_time', minutes: 10 },
     { op: 'npc_response', npc_id: 'zhou_yi', response: 'partial', note: '还行，就是雨大。' },
   ],
   content_tags: [],
@@ -196,12 +192,56 @@ ok(status.engine !== undefined && status.engine.ready === true, '12. 引擎 read
 eq(status.persona.title, '雨夜诊所', '12. 人设标题');
 ok(status.session !== null && typeof status.session.session_id === 'string', '12. 会话映射在');
 
-// ---- 13. 人设为空时 start 明确报错（不静默开局） ----
+// ---- 13. 全局作用域：换个 DSH 会话，读到的还是同一局 ----
+const otherExec = { signal: undefined, agent: { id: 'conv-2' } };
+const otherState = await tools.get('soul_state').execute({}, otherExec);
+eq(otherState.started, true, '13. 另一个会话也能拿到状态');
+eq(otherState.session_id, loaded.session_id, '13. 全局作用域下两个会话共用同一局');
+const scopeStatus = await call('soul_admin', { action: 'status' });
+eq(scopeStatus.scope, 'global', '13. status 报全局作用域');
+
+// ---- 14. 自动开局：没有局时 soul_state 自己开一局 ----
+await call('soul_admin', { action: 'reset_mapping' });
+const born = await call('soul_state', {});
+eq(born.started, true, '14. 解绑后 soul_state 自动开局');
+eq(born.autoStarted, true, '14. 标了 autoStarted');
+ok(typeof born.session_id === 'string' && born.session_id.startsWith('s'), '14. 自动开局拿到会话 id');
+ok(born.context !== undefined && born.context !== null, '14. 自动开局直接带回 context');
+
+// ---- 15. 切回按会话作用域：两个会话各开各的局 ----
+writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'session' }), 'utf8');
+const convA = await call('soul_state', {});
+const convB = await tools.get('soul_state').execute({}, otherExec);
+eq(convA.autoStarted, true, '15. 切到按会话后 conv-1 自动开新局');
+eq(convB.autoStarted, true, '15. 切到按会话后 conv-2 自动开新局');
+ok(convA.session_id !== convB.session_id, '15. 两个会话拿到不同的局');
+const scopeStatus2 = await call('soul_admin', { action: 'status' });
+eq(scopeStatus2.scope, 'session', '15. status 报按会话作用域');
+
+// ---- 16. 人设为空时 start 明确报错（不静默开局） ----
+writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'global' }), 'utf8');
 writeFileSync(join(home, 'SOUL.md'), '   \n', 'utf8');
 const emptyStart = await call('soul_admin', { action: 'reset_mapping' }).then(() =>
   call('soul_admin', { action: 'start' }));
-eq(emptyStart.ok, false, '13. 空人设拒绝开局');
-has(JSON.stringify(emptyStart), '人设', '13. 报错提到人设');
+eq(emptyStart.ok, false, '16. 空人设拒绝开局');
+has(JSON.stringify(emptyStart), '人设', '16. 报错提到人设');
+
+// ---- 17. 切回全局：接管旧的会话局，不重开 ----
+const adopted = await call('soul_state', {});
+eq(adopted.started, true, '17. 切回全局后能直接用');
+ok(adopted.session_id === convA.session_id || adopted.session_id === convB.session_id,
+  '17. 接管的是某个旧的会话局，而不是新开一局');
+const mapAfterAdopt = JSON.parse(readFileSync(join(home, 'rp-soul', 'engine-sessions.json'), 'utf8'));
+ok(mapAfterAdopt.shared !== undefined, '17. 映射表里有了 shared');
+ok(mapAfterAdopt['conv-1'] === undefined && mapAfterAdopt['conv-2'] === undefined,
+  '17. 旧的会话键已清掉（不会两个键指向同一局各记各的）');
+
+// ---- 18. 人设为空时自动开局也不硬开，而是降级 ----
+// 先把映射表清干净：接管旧局是另一回事，这里要验的是「没有局、人设又空」。
+writeFileSync(join(home, 'rp-soul', 'engine-sessions.json'), '{}', 'utf8');
+const emptyBorn = await call('soul_state', {});
+eq(emptyBorn.started, false, '18. 空人设下不自动开局');
+has(JSON.stringify(emptyBorn), '按人设散文演', '18. 明确说降级到纯人设');
 
 done('engine');
 // 侧车是常驻子进程，测试进程要主动退出，否则事件循环被它的管道占着。

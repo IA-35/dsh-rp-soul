@@ -7,9 +7,9 @@ Order inside a commit:
   1. replaces_turn: restore the state before the replaced turn (same commit)
   2. the requests the record was written from (chapter summary, prologue):
      its first turn pays them, so the later turns see none
-  3. operations in order; advance_time settles in the fixed order of
-     settlement.advance() (offscreen and propagation run as hooks); without
-     one the clock moves the default 3 minutes after the operations
+  3. operations in order; the clock then settles to the real moment in the
+     fixed order of settlement.advance() (offscreen and propagation run as
+     hooks). No operation moves the clock: the span is real time, not authored
   4. required offscreen beats, action mode, intimacy and safety checks
   5. invariants, then bookkeeping: memory, chapter archive, prologue and the
      offscreen candidates for the next turn
@@ -34,7 +34,7 @@ F = S.Field
 MAX_MEMORY_TURNS = 40          # backstop only: chapter summaries keep it near 20
 UNDO_KEEP = 30                 # undo points kept per session
 REWRITE_OPS = (
-    "add_fact", "advance_time", "npc_action", "npc_state",
+    "add_fact", "npc_action", "npc_state",
     "enter_scene", "exit_scene", "offscreen_beat", "add_thought",
 )
 
@@ -220,22 +220,16 @@ def _mode_checks(ctx):
 
 
 def _beat_checks(ctx):
-    """Every NPC a large time skip named must get an offscreen beat, written
-    after the skip: the beat is what they did in the skipped time."""
+    """Every NPC a large real-time gap named must get an offscreen beat,
+    written after the gap: the beat is what they did while nobody was there."""
     missing = [npc for npc in ctx.required_beats if npc not in ctx.beats_after_time]
     if not missing:
         return None
     report = ctx.settlements[0]
     names = "、".join(ctx.name(npc) for npc in missing)
-    if report["default"]:
-        hint = "默认的 3 分钟推进跨过了午夜：在操作列表开头加 advance_time（例如 minutes: 3），再在其后为 %s 各加一条 offscreen_beat" % names
-    else:
-        hint = "在 advance_time 之后为 %s 各加一条 offscreen_beat；错误附带的 preview 给出他们的目标与信息集" % names
+    hint = "用 offscreen_beat 为 %s 各补一条离屏片段；错误附带的 preview 给出他们的目标与信息集" % names
     for npc in missing:
-        if npc in ctx.beat_npcs:
-            ctx.error("$.operations", "%s 的离屏片段写在了时间推进之前" % ctx.name(npc), hint)
-        else:
-            ctx.error("$.operations", "时间跨度大，%s 必须有一段离屏片段" % ctx.name(npc), hint)
+        ctx.error("$.operations", "这段时间不短，%s 必须有一段离屏片段" % ctx.name(npc), hint)
     return report["preview"]
 
 
@@ -345,11 +339,16 @@ def _simulation_result(ctx):
 # ---------------------------------------------------------------------------
 
 
-def commit_turn(state, persona, commit, undo_snapshot=None):
+def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     """Return (new_state, result) or raise AppError with every problem found.
 
     `undo_snapshot` is the stored state from before turn `replaces_turn`
     (loaded by the application); that turn is undone in this same commit.
+
+    `now` is the real moment this turn happens (an ISO timestamp, so the record
+    stays reproducible). The clock is read off it: `real_at` is the moment the
+    last turn settled, and the difference between the two is the span this turn
+    pays for. The model never chooses it.
     """
     replaced = commit["replaces_turn"]
     base = _replace_base(state, replaced, undo_snapshot) if replaced is not None else state
@@ -364,13 +363,14 @@ def commit_turn(state, persona, commit, undo_snapshot=None):
             ctx.error(
                 path + ".op",
                 "“其实……”回合不能用 %s" % op["op"],
-                "只允许追溯事实（add_fact，origin: retcon）、NPC 的反应（npc_action、npc_state、add_thought、enter_scene、exit_scene）与时间推进",
+                "只允许追溯事实（add_fact，origin: retcon）与 NPC 的反应用（npc_action、npc_state、add_thought、enter_scene、exit_scene）",
             )
             continue
         OPS.apply_op(ctx, op, path)
     ctx.op_failed = bool(ctx.errors)
-    if ctx.time_ops == 0:
-        OPS.advance(ctx, ST.DEFAULT_ADVANCE_MINUTES, "$", default=True)
+    span, to_clock = SS.real_span(work, now)
+    work["real_at"] = now
+    OPS.advance(ctx, span, "$", default=True, to_clock=to_clock)
     preview = _beat_checks(ctx)
     _mode_checks(ctx)
     _intimacy_checks(ctx)
@@ -423,7 +423,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None):
         "thoughts": list(ctx.thoughts),
         "simulation": _simulation_result(ctx),
         "clock": dict(work["clock"], label=CL.label(work["clock"])),
-        "default_time_advance": any(s.get("default") for s in ctx.settlements),
+        "time_settled": span,
         "scene_changed": scene_changed,
         "location_changed": ctx.player_moved,
         "crossed_day": crossed_day,

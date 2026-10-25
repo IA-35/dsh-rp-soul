@@ -12,13 +12,11 @@ the player's markdown files (``lib/persona-pack.js``) and hands to the engine:
       "prose": "...",             # the composed text; the engine never parses it
       "person": "second",         # narrative person
       "clock_style": "hm",
-      "start": {"day": 1, "minute": 1290},
       "mood_base": 50,
       "mood_thresholds": {"open": 75, "closed": 45, "break": 25},
       "places": [{"id","name","detail","privacy","visibility":[],"affordances":[]}],
       "cast":   [{"id","name","call","gender","age","tier","role","adult_context",
-                  "appearance","voices":{},"decision":{},"intimacy":{},
-                  "goal":{},"situation":{},"schedule":[]}],
+                  "appearance","voices":{},"schedule":[]}],
       "rules":  ["..."],          # optional narration rules, plain text
       "channels": [...],          # optional: message routes between places
       "twists": [...]             # optional: engine may offer these later
@@ -56,39 +54,6 @@ PLACE = S.Obj(
 
 VOICES = S.Obj({"surface": F(S.Str(1, 120)), "inner": F(S.Str(1, 120))}, name="语态")
 
-PRESSURE_RESPONSES = S.Obj(
-    {level: F(S.Str(1, 120)) for level in ("low", "mid", "high", "breaking")},
-    name="压力反应四档",
-)
-
-DECISION = S.Obj(
-    {
-        "core_value": F(S.Str(1, 60), required=False),
-        "current_goal": F(S.Str(1, 80), required=False),
-        "pressure_responses": F(PRESSURE_RESPONSES, required=False),
-        "withdrawal": F(S.Str(1, 120), required=False),
-        "relationship_stance": F(S.Str(1, 80), required=False),
-        "contrast": F(S.Str(1, 80), required=False),
-        "prefers": F(S.List(S.Str(1, 80)), required=False, default=[]),
-        "avoids": F(S.List(S.Str(1, 80)), required=False, default=[]),
-        "never": F(S.List(S.Str(1, 80)), required=False, default=[]),
-    },
-    name="决策卡",
-)
-
-GOAL = S.Obj({"kind": F(S.Enum(*ST.AGENCY_KINDS)), "text": F(S.Str(1, 80))}, name="当前目标")
-
-EXIT = S.Obj({"option": F(S.Str(1, 80)), "cost": F(S.Str(1, 120))})
-
-SITUATION = S.Obj(
-    {
-        "trigger": F(S.Str(1, 120), required=False, default=""),
-        "pressure": F(S.Str(1, 120), required=False, default=""),
-        "exits": F(S.List(EXIT, max_items=4), required=False, default=[]),
-    },
-    name="处境",
-)
-
 SCHEDULE = S.Obj(
     {"from": F(S.Int(0, 1439)), "to": F(S.Int(0, 1439)), "location_id": F(S.Id())},
     name="时段",
@@ -106,9 +71,9 @@ CAST = S.Obj(
         "adult_context": F(S.Str(0, 120), required=False, default=""),
         "appearance": F(S.Str(1, 120), required=False, default=""),
         "voices": F(S.Nullable(VOICES), required=False, default=None),
-        "decision": F(S.Nullable(DECISION), required=False, default=None),
-        "goal": F(S.Nullable(GOAL), required=False, default=None),
-        "situation": F(S.Nullable(SITUATION), required=False, default=None),
+        # 开局时她和玩家的关系阶段。人设里就写明是主仆、老相识还是素未谋面，
+        # 不该让人人一律从「陌生」熬起 —— 那和散文里写的身份自相矛盾。
+        "start_stage": F(S.Enum(*ST.STAGES), required=False, default="stranger"),
         "schedule": F(S.List(SCHEDULE, max_items=6), required=False, default=[]),
     },
     name="角色",
@@ -122,11 +87,6 @@ PERSONA = S.Obj(
         "prose": F(S.Str(0, 200000), required=False, default=""),
         "person": F(S.Enum(*ST.PERSONS), required=False, default="second"),
         "clock_style": F(S.Enum("hm", "shichen"), required=False, default="hm"),
-        "start": F(
-            S.Obj({"day": F(S.Int(1, 100000)), "minute": F(S.Int(0, 1439))}),
-            required=False,
-            default={"day": 1, "minute": 8 * 60},
-        ),
         "mood_base": F(S.Int(0, 100), required=False, default=ST.MOOD_BASE),
         "mood_thresholds": F(
             # Every key is optional at the schema layer so that
@@ -205,8 +165,8 @@ def validate(raw):
             errors.append(detail(base + ".age", "年龄 %d 小于 18" % member["age"], "所有角色都必须年满 18 岁", SAFETY_BLOCK))
         if member["gender"] is None:
             errors.append(detail(base + ".gender", "缺少性别", "female / male / nonbinary；代词与称呼靠它", INVALID_INPUT))
-        if not member["adult_context"]:
-            errors.append(detail(base + ".adult_context", "缺少成年身份说明", "一句话写清这个角色为什么是成年人（职业、处境）", INVALID_INPUT))
+        # adult_context 只是「一句话交代成年身份」的补充说明，可为空：
+        # 年龄已经在上面强制校验过，不靠这段文字把关。
         if member["tier"] == "major":
             majors += 1
             if member["voices"] is None:
@@ -256,12 +216,12 @@ def characters(persona):
             "age": member["age"],
             "gender": member["gender"],
             "adult_context": member["adult_context"],
-            "public_role": member["role"] or member["adult_context"][:20],
+            # role 与 adult_context 都是可选的：两个都空就退回名字，
+            # 不能因为省略了说明字段就炸在公开身份上。
+            "public_role": member["role"] or (member["adult_context"] or "")[:20] or member["name"],
             "appearance": member["appearance"],
             "voices": member["voices"],
-            "decision": member["decision"] or {},
-            "goal": member["goal"],
-            "situation": member["situation"],
+            "start_stage": member["start_stage"],
             "schedule": list(member["schedule"]),
             "status": {"location_id": None, "conditions": []},
             "mood": MO.initial(persona["mood_base"]),
@@ -282,9 +242,6 @@ def player_card(name="你", call=None, gender=None, age=28, role=""):
         "public_role": role,
         "appearance": "",
         "voices": None,
-        "decision": {},
-        "goal": None,
-        "situation": None,
         "schedule": [],
         "status": {"location_id": None, "conditions": []},
         "mood": None,
@@ -308,25 +265,6 @@ def render_cards(persona, cards):
                 card[key] = TX.render(card[key], own)
         if card.get("voices"):
             card["voices"] = {k: TX.render(v, own) for k, v in card["voices"].items()}
-        decision = card.get("decision") or {}
-        for key, value in list(decision.items()):
-            if isinstance(value, str):
-                decision[key] = TX.render(value, own)
-            elif isinstance(value, list):
-                decision[key] = [TX.render(item, own) for item in value]
-            elif isinstance(value, dict):
-                decision[key] = {k: TX.render(v, own) for k, v in value.items()}
-        situation = card.get("situation")
-        if situation:
-            for key in ("trigger", "pressure"):
-                situation[key] = TX.render(situation[key], own)
-            situation["exits"] = [
-                {"option": TX.render(item["option"], own), "cost": TX.render(item["cost"], own)}
-                for item in situation["exits"]
-            ]
-        goal = card.get("goal")
-        if goal:
-            goal["text"] = TX.render(goal["text"], own)
     return cards
 
 

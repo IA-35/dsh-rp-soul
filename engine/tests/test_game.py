@@ -88,6 +88,11 @@ def agency_offers_candidates(s):
         for option in row["options"]:
             assert option["kind"] in ("approach", "observe", "request", "accident", "provoke", "leave"), option
             assert option["text"], option
+            # 每个候选都得说清「为什么」，否则模型只看到结论、理由全靠自己编。
+            assert isinstance(option["reasons"], list), option
+            assert option["reasons"], option
+            assert option["because"].startswith("因为"), option
+            assert len(option["because"]) <= 90, option
 
 
 def mood_moves_after_a_refusal(s):

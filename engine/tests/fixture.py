@@ -6,7 +6,6 @@ PERSONA = {
     "revision": "0123456789abcdef",
     "prose": "林晚是社区诊所的夜班医生。",
     "person": "second",
-    "start": {"day": 1, "minute": 22 * 60},
     "mood_base": 55,
     "mood_thresholds": {"open": 72, "closed": 40, "break": 18},
     "places": [
@@ -25,17 +24,6 @@ PERSONA = {
             "adult_context": "社区诊所夜班医生，执夜三年",
             "appearance": "白大褂袖口卷到小臂",
             "voices": {"surface": "话少，句子短", "inner": "总在算时间"},
-            "decision": {
-                "core_value": "不欠人情",
-                "pressure_responses": {
-                    "low": "照常做事",
-                    "mid": "开始沉默",
-                    "high": "把话说绝",
-                    "breaking": "直接离开诊室",
-                },
-            },
-            "goal": {"kind": "observe", "text": "看{npc.name}今晚会不会留下来"},
-            "situation": {"trigger": "雨还没停", "pressure": "值班表没人补", "exits": []},
             "schedule": [{"from": 0, "to": 1439, "location_id": "clinic"}],
         },
         {

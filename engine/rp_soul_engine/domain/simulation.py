@@ -15,6 +15,7 @@ Twists are gone: they were world-pack content. Everything here is derived
 from state plus the persona's read-only cast/places.
 """
 
+from . import agency as AG
 from . import clock as CL
 from . import facts as FA
 from . import rng
@@ -180,26 +181,34 @@ def prologue_source(state):
     }
 
 
-def preview_npc(state, cid):
+def preview_npc(state, cid, persona=None):
     char = state["characters"][cid]
     known = FA.of(state).known_to(cid)
     known.sort(key=lambda f: (f["turn"], FA.order(f)))
+    # `goal` 不再来自人设：离屏那一拍他想干什么，由引擎按当下状态算出来，
+    # 和在场时用的是同一套候选（agency.candidates）。
+    goal = None
+    if persona is not None:
+        options = AG.candidates(state, persona, cid, state["turn"] + 1, limit=1)
+        if options:
+            goal = options[0].get("text")
     return {
         "npc_id": cid,
         "name": char["name"],
-        "goal": (char.get("goal") or {}).get("text"),
+        "goal": goal,
         "location_id": char["status"]["location_id"],
         "knows": [{"id": f["id"], "text": f["text"]} for f in known[-5:]],
     }
 
 
-def preview_payload(state, report):
-    """What a time skip settled, right after steps 1-5.
+def preview_payload(state, report, persona=None):
+    """What the elapsed real time settled, right after steps 1-5.
 
-    Built at the same point for the context's preview and for the commit, so
-    the two agree whenever advance_time is the commit's first operation. The
-    requests the skip raises are left out: they bind the commit after this
-    one, and shown here they read as this commit's.
+    Built at the same point for the commit result and for its summary, so what
+    the model is told happened is exactly what was settled.
+
+    `persona` is only needed to score what a required NPC is now inclined to
+    do; without it `goal` stays None instead of falling back to a typed-in one.
     """
     off = report.get("offscreen") or {}
     spread = (report.get("propagation") or {}).get("spread") or []
@@ -216,19 +225,9 @@ def preview_payload(state, report):
         "frozen": bool(off.get("frozen")),
         "moved": [dict(m) for m in off.get("moved", [])],
         "spread": [dict(s) for s in spread],
-        "required_beats": [preview_npc(state, cid) for cid in off.get("required", [])],
+        "required_beats": [preview_npc(state, cid, persona) for cid in off.get("required", [])],
         "beat_candidates": list(off.get("candidates", [])),
     }
-
-
-def preview(state, spec):
-    """Settle a time skip on a copy and describe it; the state is untouched."""
-    from . import settlement
-
-    work = FA.working_copy(state)
-    minutes = settlement.minutes_for(work["clock"], spec)
-    report = settlement.advance(work, minutes, work["turn"] + 1, hooks(work["turn"] + 1))
-    return preview_payload(work, report)
 
 
 def label(state):

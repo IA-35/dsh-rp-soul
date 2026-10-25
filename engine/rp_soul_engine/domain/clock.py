@@ -1,6 +1,14 @@
-"""The in-game clock: {"day": N, "minute": 0..1439}. Time never flows back."""
+"""The story clock: {"day": N, "minute": 0..1439}. Time never flows back.
 
-from .structure import MINUTES_PER_DAY, UNTIL_ANCHORS
+It is not an in-game clock the model can push around: it is read straight off
+the real wall clock. Day 1 is the day the session started, and the minute of
+the day is the real minute of the day, so "第一大天晚上十点" keeps meaning the
+same thing whether the user came back after five minutes or five days.
+"""
+
+from datetime import datetime
+
+from .structure import MINUTES_PER_DAY
 
 CN_DIGITS = "零一二三四五六七八九"
 SHICHEN = ("子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥")
@@ -10,25 +18,35 @@ def to_abs(clock):
     return (clock["day"] - 1) * MINUTES_PER_DAY + clock["minute"]
 
 
+def stamp(moment, start_date):
+    """The clock a real moment maps to, with `start_date` as day one."""
+    return {
+        "day": (moment.date() - start_date).days + 1,
+        "minute": moment.hour * 60 + moment.minute,
+    }
+
+
+def parse_iso(text):
+    """Parse one of the engine's stored ISO timestamps (None stays None)."""
+    if not text:
+        return None
+    return datetime.fromisoformat(text)
+
+
+def real_minutes_between(earlier, later):
+    """Whole minutes of real time between two stored ISO timestamps."""
+    first, second = parse_iso(earlier), parse_iso(later)
+    if first is None or second is None:
+        return 0
+    return int((second - first).total_seconds() // 60)
+
+
 def from_abs(total):
     return {"day": total // MINUTES_PER_DAY + 1, "minute": total % MINUTES_PER_DAY}
 
 
 def add_minutes(clock, minutes):
     return from_abs(to_abs(clock) + minutes)
-
-
-def until_target(clock, anchor):
-    """Minutes from `clock` to the next occurrence of an anchor (strictly later)."""
-    now = to_abs(clock)
-    if anchor == "next_morning":
-        target = clock["day"] * MINUTES_PER_DAY + UNTIL_ANCHORS["morning"]
-        return target - now
-    minute = UNTIL_ANCHORS[anchor]
-    target = (clock["day"] - 1) * MINUTES_PER_DAY + minute
-    if target <= now:
-        target += MINUTES_PER_DAY
-    return target - now
 
 
 def cn_number(value):

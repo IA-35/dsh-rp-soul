@@ -46,7 +46,7 @@ _register("list-commands", APP + "info", "commands", "none", "read", "全部命�
 _register("check-persona", APP + "service", "check_persona", "required", "read", "校验一份人设包，返回问题清单", "CHECK_PERSONA")
 _register("preview-persona", APP + "service", "preview_persona", "required", "read", "用一份人设开个局看看（不写库）", "PREVIEW_PERSONA")
 _register("new-game", APP + "service", "new_game", "required", "create", "开局：由人设包建立会话", "NEW_GAME")
-_register("get-context", APP + "service", "get_context", "required", "read", "当前上下文（brief / full）；可带快进预览 preview_time", "GET_CONTEXT")
+_register("get-context", APP + "service", "get_context", "required", "read", "当前上下文（brief / full）", "GET_CONTEXT")
 _register("commit-turn", APP + "service", "commit_turn", "required", "session_write", "叙事回合：提交操作，返回结果与下一回合上下文", "COMMIT_TURN")
 _register("undo-turn", APP + "service", "undo_turn", "required", "session_write", "撤销上一回合（最多退到本次读档或开局）", "UNDO_TURN")
 _register("save-slot", APP + "service", "save_slot", "required", "session_write", "存档（省略名字时存到当前槽或自动命名）", "SAVE_SLOT")

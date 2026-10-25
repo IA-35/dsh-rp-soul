@@ -3,8 +3,9 @@
 What the old `opening.py` did - score world packs, roll cast combos, fill name
 pools - is gone, because there are no world packs. What remains is the honest
 part: take the persona the player wrote, place its cast on its map, put the
-player in the first room, and open the clock. Determinism comes from the seed
-alone, so the same persona + same seed always yields the same opening turn.
+player in the first room, and open the clock on the real moment the session is
+created. Determinism comes from the seed alone, so the same persona + same seed
+always yields the same opening turn.
 """
 
 from . import persona as PE
@@ -12,15 +13,21 @@ from .domain import clock as CL
 from .domain import mood as MO
 from .domain import relationship as RL
 from .domain import rng as RNG
-from .domain import structure as ST
 from .errors import INVALID_INPUT, detail
 
 STATE_SCHEMA_VERSION = 1
 
 
-def _start_clock(persona):
-    start = persona.get("start") or {}
-    return {"day": int(start.get("day", 1)), "minute": int(start.get("minute", 8 * 60))}
+def _start_clock(now):
+    """Day one, at the real time of day the session opened.
+
+    There is no "the story starts at 20:00" any more: it starts whenever the
+    session is created, which is the only moment the engine can honestly point
+    at.
+    """
+    moment = CL.parse_iso(now)
+    minute = moment.hour * 60 + moment.minute if moment is not None else 8 * 60
+    return {"day": 1, "minute": minute}
 
 
 def _initial_location(persona, seed):
@@ -52,41 +59,32 @@ def _place_cast(state, persona, seed):
 
 
 def _seed_relationships(state):
-    """Every NPC starts with the player at `stranger`, 0 trust, 0 tension."""
+    """Every NPC starts with the player at its persona-declared stage.
+
+    `start_stage` defaults to `stranger`; a persona that already says the two of
+    them are master and maid should not open on 陌生 and contradict its own prose.
+    """
     player = state["player_id"]
     for cid in sorted(state["characters"]):
         if cid == player:
             continue
-        RL._maybe_create(state, player, cid, stage="stranger")
-        RL._maybe_create(state, cid, player, stage="stranger")
+        stage = state["characters"][cid].get("start_stage") or "stranger"
+        RL._maybe_create(state, player, cid, stage=stage)
+        RL._maybe_create(state, cid, player, stage=stage)
 
 
-def _initial_thoughts(state, persona):
-    """Situational thoughts that hold from turn 1 (weather, being at work)."""
-    turn = state["turn"]
-    for cid in sorted(state["characters"]):
-        if cid == state["player_id"]:
-            continue
-        char = state["characters"][cid]
-        situation = char.get("situation") or {}
-        if situation.get("pressure"):
-            MO.add_thought(
-                state,
-                cid,
-                situation["pressure"],
-                ST.SITUATIONAL_DELTA["condition"],
-                "situational",
-                turn=turn,
-                minutes=None,
-            )
 
+def new_session(persona, seed=None, player=None, now=None):
+    """Build the initial state for a persona. Returns (state, warnings).
 
-def new_session(persona, seed=None, player=None):
-    """Build the initial state for a persona. Returns (state, warnings)."""
+    `now` is the real ISO moment the session is created: day one of the story is
+    that date, and the clock opens at that time of day. It is also the baseline
+    the next turn measures its real-time gap against.
+    """
     if persona is None:
         raise ValueError("persona is required")
     seed = seed or RNG.seed_of(persona["revision"])
-    clock = _start_clock(persona)
+    clock = _start_clock(now)
     cards = PE.characters(persona)
     cards[PE.PLAYER_ID] = PE.player_card(
         name=(player or {}).get("name") or "你",
@@ -122,6 +120,10 @@ def new_session(persona, seed=None, player=None):
         "player_id": PE.PLAYER_ID,
         "turn": 0,
         "clock": clock,
+        # Day one is the date the session opened; `real_at` is the moment the
+        # last turn settled. Both come from the wall clock, never from the model.
+        "real_start": now,
+        "real_at": now,
         "characters": cards,
         "relationships": {},
         "facts": {},
@@ -147,7 +149,6 @@ def new_session(persona, seed=None, player=None):
     )
     state["scene"]["present"].sort(key=lambda cid: (cid != state["player_id"], cid))
     _seed_relationships(state)
-    _initial_thoughts(state, persona)
     warnings = []
     if len(state["scene"]["present"]) == 1:
         warnings.append("开局地点只有玩家一个人：%s" % PE.place_name(persona, opening))

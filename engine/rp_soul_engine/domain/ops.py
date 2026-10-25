@@ -83,7 +83,6 @@ class TurnContext:
         self.responses = {}
         self.actors = set()
         self.observable = False
-        self.time_ops = 0
         self.trust_start = {}
         self.stage_pairs = set()
         self.player_moved = False
@@ -191,34 +190,16 @@ def _note(ctx, key, text, known_by, visibility="private", origin=None):
 # time
 
 
-@register(
-    "advance_time",
-    {
-        "minutes": F(S.Int(1, ST.MAX_ADVANCE_MINUTES), required=False),
-        "until": F(S.Enum("morning", "noon", "evening", "night", "next_morning"), required=False),
-        "days": F(S.Int(1, 30), required=False),
-    },
-    "推进游戏时钟：minutes / until / days 三选一；触发到期事件与状态到期结算。没有此操作时时钟默认推进 3 分钟",
-    branch=False,
-)
-def op_advance_time(ctx, op, path):
-    errs = []
-    given = [k for k in ("minutes", "until", "days") if k in op]
-    if len(given) != 1:
-        errs.append(detail(path, "minutes、until、days 必须且只能给一个", None, INVARIANT_VIOLATION))
-    ctx.time_ops += 1
-    if ctx.time_ops > 1:
-        errs.append(detail(path, "一个回合最多一个 advance_time", "把两段时间合并成一次推进", INVARIANT_VIOLATION))
-    if not _flush(ctx, errs):
-        return
-    advance(ctx, settlement.minutes_for(ctx.state["clock"], op), path)
+def advance(ctx, minutes, path, default=False, to_clock=None):
+    """Settle the real time that passed since the last turn.
 
-
-def advance(ctx, minutes, path, default=False):
-    report = settlement.advance(ctx.state, minutes, ctx.turn, ctx.hooks)
+    Nothing here is model-authored: `minutes` is the real gap and `to_clock` is
+    the moment it lands on, both computed from the wall clock by the caller.
+    """
+    report = settlement.advance(ctx.state, minutes, ctx.turn, ctx.hooks, to_clock=to_clock)
     report["default"] = default
     offscreen = report.get("offscreen") or {}
-    report["preview"] = simulation.preview_payload(ctx.state, report)
+    report["preview"] = simulation.preview_payload(ctx.state, report, ctx.persona)
     for npc in offscreen.get("required", []):
         if npc not in ctx.required_beats:
             ctx.required_beats.append(npc)
@@ -229,7 +210,7 @@ def advance(ctx, minutes, path, default=False):
         ctx.observable = True
     ctx.applied.append(
         {
-            "op": "advance_time",
+            "op": "clock",
             "minutes": minutes,
             "default": default,
             "clock": dict(ctx.state["clock"]),

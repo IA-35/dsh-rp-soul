@@ -72,8 +72,6 @@ NEW_GAME = _obj(
         ),
         "start_location": F(S.Nullable(S.Id()), required=False, default=None,
                             desc="开场地点；省略时用人设的 default_location 或第一个地点"),
-        "start_minute": F(S.Nullable(S.Int(0, 1439)), required=False, default=None,
-                          desc="开场分钟数（0=00:00）；省略时用人设的 clock_start，再退到 08:00"),
         "present": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[],
                      desc="开场在场的角色 id；省略时取该地点排班里此刻在场的人"),
     },
@@ -84,26 +82,10 @@ NEW_GAME = _obj(
 # 游戏进行
 
 
-PREVIEW_TIME = S.Obj(
-    {
-        "minutes": F(S.Int(1, ST.MAX_ADVANCE_MINUTES), required=False),
-        "until": F(S.Enum("morning", "noon", "evening", "night", "next_morning"), required=False),
-        "days": F(S.Int(1, 30), required=False),
-    },
-    name="预览推进",
-    desc="与 advance_time 相同：minutes / until / days 三选一",
-)
-
 GET_CONTEXT = _obj(
     {
         "session_id": F(SESSION_ID),
         "depth": F(S.Enum("brief", "full"), required=False, default="brief"),
-        "preview_time": F(
-            S.Nullable(PREVIEW_TIME),
-            required=False,
-            default=None,
-            desc="快进预览：返回目标时钟、将到期的事件、必须写离屏片段的 NPC；不改变状态",
-        ),
         "want_twist": F(S.Bool(), required=False, default=False,
                         desc="玩家说“来点转折”时为 true：返回 2–3 个类别不同的转折候选"),
     },
