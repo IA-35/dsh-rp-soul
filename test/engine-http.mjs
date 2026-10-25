@@ -89,6 +89,31 @@ eq(chk.status, 200, '2. /engine/persona 200');
 eq(chk.body.ok, true, '2. 校验通过（' + JSON.stringify(chk.body.error ?? '') + '）');
 ok(chk.body.build !== undefined && chk.body.build.bytes > 0, '2. 带了人设摘要');
 
+// ---- 2b. 人设不合格时，details 必须带 path/reason/hint（设置页靠它显示怎么改）----
+const orig = (await j('/rp-soul/file?rel=' + encodeURIComponent('SOUL.md'))).body.text;
+ok(typeof orig === 'string' && orig.length > 100, '2b. 能读回原 SOUL.md');
+const NL = String.fromCharCode(10);
+const BAD = ['---', 'id: broken', 'title: 缺东西的人设', '---', '这里只有散文，没有前置块内容。'].join(NL);
+const putBad = await j('/rp-soul/file', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ rel: 'SOUL.md', text: BAD }),
+});
+eq(putBad.status, 200, '2b. 覆盖 SOUL.md 200');
+const bad = await j('/rp-soul/engine/persona');
+eq(bad.status, 200, '2b. 坏人设不吃 500');
+eq(bad.body.ok, false, '2b. 校验没通过');
+ok(Array.isArray(bad.body.details) && bad.body.details.length >= 2, '2b. 带 details 数组（' + JSON.stringify(bad.body.error ?? '') + '）');
+ok(bad.body.details.every((d) => typeof d.path === 'string' && typeof d.reason === 'string' && typeof d.hint === 'string'), '2b. 每条都有 path/reason/hint');
+ok(bad.body.details.some((d) => d.path.includes('places')), '2b. 指出缺 places');
+await j('/rp-soul/file', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ rel: 'SOUL.md', text: orig }),
+});
+const back = await j('/rp-soul/engine/persona');
+eq(back.body.ok, true, '2b. 恢复后校验通过（' + JSON.stringify(back.body.error ?? '') + '）');
+
 // ---- 3. POST /config 能改 title / personaId ----
 const saved = await j('/rp-soul/config', {
   method: 'POST',

@@ -292,6 +292,8 @@ has(clientSrc, '"/engine/persona"', '引擎卡有校验人设入口');
 has(clientSrc, '"/engine/mood', '引擎卡有心情面板入口');
 has(clientSrc, '"/engine/thought"', '引擎卡有删情绪入口');
 has(clientSrc, 'EngineCard', '引擎卡组件存在');
+has(clientSrc, 'check.details', '校验结果读 details');
+hasNot(clientSrc, 'check.problems', '不再读旧的 problems 字段');
 hasNot(clientSrc, 'fetch("http', '客户端不直连绝对地址');
 
 done('client-bundle');
