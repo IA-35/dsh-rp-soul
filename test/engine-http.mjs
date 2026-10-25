@@ -1,7 +1,7 @@
 /* 真 HTTP + 真 Python 侧车：验 /rp-soul/engine* 这几条设置页路由。
  * 与 engine.mjs 的分工：那边验工具语义（mock ctx），这边验路线与 JSON 形状。 */
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
@@ -175,6 +175,9 @@ if (mood.body.thoughts.length > 0) {
   const after = await j('/rp-soul/engine/mood?session_id=' + encodeURIComponent(sid) + '&npc_id=lin_wan');
   ok(!after.body.thoughts.some((t) => t.id === victim.id), '7. 那条真的没了');
   ok(Array.isArray(after.body.deletions) && after.body.deletions.length >= 1, '7. 留了审计');
+  const mapRaw = readFileSync(join(home, 'rp-soul', 'engine-sessions.json'), 'utf8');
+  const map = JSON.parse(mapRaw);
+  eq(map['conv-http'].revision, del.body.revision, '7. 删完后会话映射的 revision 同步了');
 } else {
   ok(false, '7. 开局居然没有情绪条目');
 }

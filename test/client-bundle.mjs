@@ -353,7 +353,7 @@ responses.set('GET /rp-soul/engine', () => jsonResponse({
 responses.set('GET /rp-soul/engine/moods', () => jsonResponse({
   ok: true,
   session_id: 's_test01',
-  revision: 7,
+  revision: 9,
   turn: 3,
   persona_title: '雨夜诊所',
   clock_label: '第一天 21:30',
@@ -446,7 +446,8 @@ ok(delCall !== undefined, '11. 点 × 发 DELETE /engine/thought');
 eq(delCall.body.session_id, 's_test01', '11. 删除带上 session_id');
 eq(delCall.body.npc_id, 'lin_wan', '11. 删除带上 npc_id');
 ok(delCall.body.thought_id === 'th1' || delCall.body.thought_id === 'th2', '11. 删除带上 thought_id');
-eq(delCall.body.revision, 7, '11. 删除带上 revision（防脏写）');
+eq(delCall.body.revision, 9, '11. 删除用面板里的最新 revision（不是 /engine 的旧值）');
+has(clientSrc, 'panel && panel.revision', '11. 删除逻辑优先用面板 revision');
 
 // 切到「自主行动记录」
 findButton(moodTree, '自主行动记录').props.onClick();
