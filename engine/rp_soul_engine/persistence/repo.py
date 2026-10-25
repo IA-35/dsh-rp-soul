@@ -320,11 +320,11 @@ def insert_turn_log(conn, session_id, turn, revision, kind, action_mode, player_
 
 def recent_turn_log(conn, session_id, limit=5):
     rows = conn.execute(
-        "SELECT turn, revision, kind, action_mode, payload, summary, undone, created_at FROM turn_log "
+        "SELECT turn, revision, kind, action_mode, payload, summary, open_action, undone, created_at FROM turn_log "
         "WHERE session_id=? ORDER BY id DESC LIMIT ?",
         (session_id, limit),
     ).fetchall()
-    keys = ("turn", "revision", "kind", "action_mode", "payload", "summary", "undone", "created_at")
+    keys = ("turn", "revision", "kind", "action_mode", "payload", "summary", "open_action", "undone", "created_at")
     out = []
     for row in rows:
         item = dict(zip(keys, row))

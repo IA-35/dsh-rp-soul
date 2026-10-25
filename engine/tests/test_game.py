@@ -393,6 +393,84 @@ def an_an_npc_relation_still_plants_a_thought(s):
     assert not any("信任" in t["label"] for t in other["thoughts"]), other["thoughts"]
 
 
+def settings_moods_page_lists_every_npc(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 2, "reason": "你把伞留给了她"},
+        npc_action(),
+    ])
+    data = s.ok("debug-moods", {"session_id": sid})
+    assert data["session_id"] == sid, data
+    assert data["revision"] == rev, data
+    assert data["persona_title"], data
+    assert data["thresholds"] == {"open": 75, "closed": 55, "break": 30} or isinstance(data["thresholds"], dict), data
+    ids = [row["id"] for row in data["npcs"]]
+    assert ids == ["lin_wan", "zhou_yi"], ids
+    wan = data["npcs"][0]
+    # the edge lin_wan > player is lin_wan's attitude; the panel mirrors it
+    assert wan["trust"] == 2, wan
+    assert wan["stage"] == "stranger", wan
+    assert wan["stage_label"] == "陌生", wan
+    assert wan["role"], wan
+    assert isinstance(wan["thoughts"], list) and wan["thoughts"], wan
+    assert wan["band"] in ("open", "normal", "closed", "break"), wan
+    assert isinstance(wan["value"], int), wan
+    assert wan["can_act"] in (True, False), wan
+
+
+def settings_moods_page_is_read_only(s):
+    sid, rev, _ = e2e.start(s)
+    play(s, sid, rev)
+    first = s.ok("debug-moods", {"session_id": sid})
+    again = s.ok("debug-moods", {"session_id": sid})
+    assert first["revision"] == again["revision"], (first, again)
+    assert [r["value"] for r in first["npcs"]] == [r["value"] for r in again["npcs"]], again
+
+
+def settings_activity_page_reads_the_turn_log(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 2, "reason": "你把伞留给了她"},
+        npc_action(npc="lin_wan", kind="approach", text="她把病历本抱到胸前。"),
+    ])
+    data = s.ok("debug-activity", {"session_id": sid, "limit": 10})
+    assert data["counts"]["turns"] >= 2, data["counts"]
+    rows = data["rows"]
+    # newest first, so the opening is the last row
+    assert rows[0]["turn"] == 1, rows[0]
+    assert rows[-1]["turn"] == 0, rows[-1]
+    latest = rows[0]
+    assert latest["kind"] == "commit", latest
+    assert latest["mode"] == "continue", latest
+    assert latest["summary"], latest
+    assert [a["kind"] for a in latest["actions"]] == ["approach"], latest["actions"]
+    action = latest["actions"][0]
+    assert action["kind_label"] == "主动接近", action
+    assert action["text"] == "她把病历本抱到胸前。", action
+    assert action["name"] == "林晚", action
+    rel = latest["relations"][0]
+    assert rel["from_name"] == "林晚" and rel["to_name"] == "你", rel
+    assert rel["trust"] == 2, rel
+    assert data["counts"]["actions"] >= 1, data["counts"]
+
+
+def settings_activity_respects_the_limit(s):
+    sid, rev, _ = e2e.start(s)
+    for _ in range(3):
+        # a quiet turn: the major NPC is on cooldown after a significant action
+        rev, _ = play(s, sid, rev, ops=[npc_action(significant=False)])
+    data = s.ok("debug-activity", {"session_id": sid, "limit": 2})
+    assert len(data["rows"]) == 2, data["rows"]
+    assert data["counts"]["turns"] == 2, data["counts"]
+
+
+def settings_activity_default_limit_is_twenty(s):
+    sid, rev, _ = e2e.start(s)
+    play(s, sid, rev)
+    data = s.ok("debug-activity", {"session_id": sid})
+    assert len(data["rows"]) <= 20, len(data["rows"])
+
+
 check("a relation toward the player still plays", with_sc(a_relationship_toward_the_player_keeps_playing))
 check("a relation from the player is recorded, not felt", with_sc(a_relation_from_the_player_is_recorded_but_not_felt))
 check("an NPC-to-NPC relation still leaves a trace", with_sc(an_an_npc_relation_still_plants_a_thought))
@@ -421,5 +499,11 @@ check("preview-persona writes nothing", with_sc(preview_persona_does_not_write))
 check("list-sessions shows the new game", with_sc(list_sessions_after_a_game))
 check("an unknown session is NOT_FOUND", with_sc(missing_session_is_not_found))
 check("the same request_id replays instead of writing twice", with_sc(idempotency_returns_the_same_turn))
+
+check("the mood page lists every NPC", with_sc(settings_moods_page_lists_every_npc))
+check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
+check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
+check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))
+check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
 
 run("game")

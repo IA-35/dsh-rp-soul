@@ -370,7 +370,7 @@ def op_npc_response(ctx, op, path):
         errs.append(detail(path + ".true_intent", "只有 surface 回应需要 true_intent", None, INVARIANT_VIOLATION))
     if not _flush(ctx, errs):
         return
-    entry = {"op": "npc_response", "npc_id": npc, "response": op["response"]}
+    entry = {"op": "npc_response", "npc_id": npc, "response": op["response"], "note": op["note"]}
     if op["response"] == "surface":
         fid = SS.next_id(ctx.state, "fact", "f")
         ctx.state["facts"][fid] = {
@@ -444,7 +444,12 @@ def op_npc_action(ctx, op, path):
         ctx.state["counters"]["major_action_turn"][npc] = ctx.turn
     ctx.actors.add(npc)
     ctx.observable = True
-    ctx.applied.append({"op": "npc_action", "npc_id": npc, "significant": op["significant"], "kind": op["kind"]})
+    # The log in the settings page reads this back, so the action text and the
+    # target have to be recorded here: the operation itself is not stored.
+    ctx.applied.append({
+        "op": "npc_action", "npc_id": npc, "significant": op["significant"],
+        "kind": op["kind"], "action": op["action"], "target_id": op["target_id"],
+    })
 
 
 @register(

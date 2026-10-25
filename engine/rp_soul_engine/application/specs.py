@@ -140,6 +140,22 @@ DEBUG_MOOD = _obj(
     "debug-mood",
 )
 
+DEBUG_MOODS = _obj(
+    {
+        "session_id": F(SESSION_ID),
+    },
+    "debug-moods",
+)
+
+DEBUG_ACTIVITY = _obj(
+    {
+        "session_id": F(SESSION_ID),
+        "limit": F(S.Int(1, 50), required=False, default=20,
+                   desc="读最近多少条回合记录（最多 50）"),
+    },
+    "debug-activity",
+)
+
 DEBUG_DELETE_THOUGHT = _obj(
     dict(
         session_write_fields(),

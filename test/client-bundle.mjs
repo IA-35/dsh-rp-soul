@@ -18,28 +18,47 @@ const hookState = [];
 let hookIndex = 0;
 let pendingEffects = [];
 const hookDeps = [];
+// 子组件（函数组件）用独立的 hook 槽：key = 组件名 + 在树里的位置，跨渲染保留。
+// 根组件仍然用上面那组扁平数组，保证前面各段的断言行为不变。
+const childHooks = new Map();
+let currentOwner = null;
+function ownerSlot() {
+  if (currentOwner === null) return null;
+  let box = childHooks.get(currentOwner);
+  if (!box) {
+    box = { state: [], deps: [], idx: 0 };
+    childHooks.set(currentOwner, box);
+  }
+  return box;
+}
 
 const React = {
   createElement(type, props, ...children) {
     return { type, props: props || {}, children: children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false) };
   },
   useState(init) {
-    const i = hookIndex++;
-    if (!(i in hookState)) hookState[i] = typeof init === 'function' ? init() : init;
-    return [hookState[i], (next) => { hookState[i] = typeof next === 'function' ? next(hookState[i]) : next; }];
+    const box = ownerSlot();
+    const i = box === null ? hookIndex++ : box.idx++;
+    const store = box === null ? hookState : box.state;
+    if (!(i in store)) store[i] = typeof init === 'function' ? init() : init;
+    return [store[i], (next) => { store[i] = typeof next === 'function' ? next(store[i]) : next; }];
   },
   useEffect(fn, deps) {
-    const i = hookIndex++;
-    const prev = hookDeps[i];
+    const box = ownerSlot();
+    const i = box === null ? hookIndex++ : box.idx++;
+    const store = box === null ? hookDeps : box.deps;
+    const prev = store[i];
     const changed = !prev || !deps || deps.length !== prev.length || deps.some((d, k) => d !== prev[k]);
-    if (changed) { hookDeps[i] = deps; pendingEffects.push(fn); }
+    if (changed) { store[i] = deps; pendingEffects.push(fn); }
   },
-  useCallback(fn) { hookIndex++; return fn; },
-  useMemo(fn) { hookIndex++; return fn(); },
+  useCallback(fn) { const box = ownerSlot(); if (box === null) hookIndex++; else box.idx++; return fn; },
+  useMemo(fn) { const box = ownerSlot(); if (box === null) hookIndex++; else box.idx++; return fn(); },
   useRef(init) {
-    const i = hookIndex++;
-    if (!(i in hookState)) hookState[i] = { current: init };
-    return hookState[i];
+    const box = ownerSlot();
+    const i = box === null ? hookIndex++ : box.idx++;
+    const store = box === null ? hookState : box.state;
+    if (!(i in store)) store[i] = { current: init };
+    return store[i];
   },
 };
 
@@ -107,10 +126,30 @@ eq(slotOptions.label(), '角色人设', '3. label 文案');
 eq(typeof slotComponent, 'function', '3. 组件是函数（不是 class）');
 
 // ───────────────────────── 迷你渲染器 ─────────────────────────
+// 默认不展开函数组件（前面各段的行为原样保留）；第 11 段打开它来渲页签面板。
+let expandComponents = false;
+function expandTree(node, path) {
+  if (node === null || node === undefined) return node;
+  if (Array.isArray(node)) return node.map((n, i) => expandTree(n, path + '.' + i));
+  if (typeof node !== 'object' || node.type === undefined) return node;
+  if (typeof node.type === 'function') {
+    const key = (node.type.name || 'anon') + '@' + path;
+    const prev = currentOwner;
+    currentOwner = key;
+    const box = ownerSlot();
+    box.idx = 0;
+    let out;
+    try { out = node.type(node.props || {}); } finally { currentOwner = prev; }
+    return expandTree(out, path);
+  }
+  return { type: node.type, props: node.props, children: (node.children || []).map((c, i) => expandTree(c, path + '.' + i)) };
+}
+
 async function renderOnce() {
   hookIndex = 0;
   pendingEffects = [];
-  const tree = slotComponent({ close: () => {} });
+  let tree = slotComponent({ close: () => {} });
+  if (expandComponents) tree = expandTree(tree, 'root');
   const effects = pendingEffects.slice();
   pendingEffects = [];
   // 注意：不调用 cleanup —— cleanup 会把 alive.current 置 false，
@@ -295,5 +334,158 @@ has(clientSrc, 'EngineCard', '引擎卡组件存在');
 has(clientSrc, 'check.details', '校验结果读 details');
 hasNot(clientSrc, 'check.problems', '不再读旧的 problems 字段');
 hasNot(clientSrc, 'fetch("http', '客户端不直连绝对地址');
+
+// ---- 11. 页签：人设提示词 / 情绪 / 自主行动记录 ----
+// 这一层验的是「三个页签真的能切换、每个页签读自己的路由、渲染出该有的字段」。
+// 引擎路由全部打桩，不让真实引擎参与。
+hookState.length = 0;
+hookDeps.length = 0;
+childHooks.clear();
+expandComponents = true;
+responses.set('GET /rp-soul/state', () => jsonResponse(statePayload));
+responses.set('GET /rp-soul/engine', () => jsonResponse({
+  health: { enabled: true, present: true, python: { ok: true, version: [3, 12, 8] }, dataDir: 'C:/x/rp-soul/engine', ready: true },
+  persona: { title: '雨夜诊所', personaId: 'rain_clinic', bytes: 1024, files: ['SOUL.md'], front: { id: 'rain_clinic', title: '雨夜诊所', cast: [{}], places: [{}, {}] }, error: null },
+  sessionsFile: 'C:/x/rp-soul/engine-sessions.json',
+  sessions: [{ key: 'shared', session_id: 's_test01', turn: 3 }],
+  session: { key: 'shared', session_id: 's_test01', revision: 7, turn: 3, persona_title: '雨夜诊所' },
+}));
+responses.set('GET /rp-soul/engine/moods', () => jsonResponse({
+  ok: true,
+  session_id: 's_test01',
+  revision: 7,
+  turn: 3,
+  persona_title: '雨夜诊所',
+  clock_label: '第一天 21:30',
+  place: 'clinic',
+  thresholds: { open: 75, closed: 55, break: 30 },
+  npcs: [
+    {
+      id: 'lin_wan', name: '林晚', tier: 'major', role: '夜班护士', present: true, conditions: ['感冒'],
+      value: 42, band: 'closed', base: 55,
+      thoughts: [
+        { id: 'th1', label: '他记得我不喝冰的', delta: 6, peak_delta: 8, kind: 'memory', decay: 'slow', since_turn: 1, remaining_minutes: null },
+        { id: 'th2', label: '雨太大了', delta: -4, peak_delta: -4, kind: 'situational', decay: 'fast', since_turn: 3, remaining_minutes: 45 },
+      ],
+      trust: 12, tension: 3, stage: 'stranger', stage_label: '陌生', can_act: false,
+    },
+  ],
+  deletions: [{ turn: 2, npc_id: 'lin_wan', thought_id: 'th0', label: '手上的疤', delta: -3, reason: '设置页手动删除', created_at: '2026-10-25T10:00:00' }],
+}));
+responses.set('GET /rp-soul/engine/activity', () => jsonResponse({
+  ok: true,
+  session_id: 's_test01',
+  revision: 7,
+  turn: 3,
+  persona_title: '雨夜诊所',
+  clock_label: '第一天 21:30',
+  place: 'clinic',
+  open_action: '她把药盘放回车上，回头看了你一眼。',
+  counts: { turns: 2, actions: 1, beats: 1 },
+  rows: [
+    {
+      turn: 3, revision: 7, kind: 'commit', mode: 'continue', undone: false,
+      created_at: '2026-10-25T13:30:00', summary: '她值完了夜班，雨还没停。', open_action: '她把药盘放回车上，回头看了你一眼。',
+      actions: [{ npc_id: 'lin_wan', name: '林晚', kind: 'observe', kind_label: '在旁观察', significant: false, text: '她在门口站了一会儿。', target_id: null }],
+      beats: [{ npc_id: 'lin_wan', name: '林晚', summary: '她把湿伞靠在墙角。' }],
+      responses: [{ npc_id: 'lin_wan', name: '林晚', response: 'partial', label: '半配合', note: '' }],
+      relations: [{ from: 'lin_wan', to: 'player', from_name: '林晚', to_name: '你', trust: 12, tension: 3, stage: 'stranger', stage_label: '陌生' }],
+      thoughts: [{ npc_id: 'lin_wan', name: '林晚', label: '他记得我不喝冰的', delta: 6 }],
+    },
+    {
+      turn: 2, revision: 6, kind: 'commit', mode: 'result', undone: true,
+      created_at: '2026-10-25T13:10:00', summary: '', open_action: '',
+      actions: [], beats: [], responses: [], relations: [], thoughts: [],
+    },
+  ],
+}));
+responses.set('DELETE /rp-soul/engine/thought', () => jsonResponse({ ok: true, revision: 8 }));
+
+const tabTree = await renderUntil((t) => t.props['data-render-state'] === 'ready');
+const tabText = textOf(tabTree);
+eq(tabTree.props['data-tab'], 'persona', '11. 默认停在「人设提示词」页');
+has(tabText, '人设提示词', '11. 有「人设提示词」页签');
+has(tabText, '情绪', '11. 有「情绪」页签');
+has(tabText, '自主行动记录', '11. 有「自主行动记录」页签');
+has(tabText, '拼接顺序', '11. 人设页仍然渲染原来的内容');
+
+// 切到「情绪」
+calls.length = 0;
+findButton(tabTree, '情绪').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const moodTree = await renderUntil((t) => t.props['data-tab'] === 'mood' && textOf(t).includes('林晚'));
+eq(moodTree.props['data-tab'], 'mood', '11. 切到「情绪」页');
+ok(calls.some((c) => c.method === 'GET' && c.url === '/rp-soul/engine'), '11. 情绪页读 /engine 拿当前局');
+ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/moods') === 0), '11. 情绪页读 /engine/moods');
+const moodText = textOf(moodTree);
+has(moodText, '林晚', '11. 情绪页列出 NPC 名字');
+has(moodText, '42 / 100', '11. 情绪页显示心情值');
+has(moodText, '低落', '11. 心情值带 band 文案');
+has(moodText, '舒展 ≥ 75', '11. 情绪页显示阈值');
+has(moodText, '他记得我不喝冰的', '11. 列出情绪条目');
+has(moodText, '+6', '11. 正 delta 带加号');
+has(moodText, '-4', '11. 负 delta');
+has(moodText, '剩 45 分', '11. 有剩余时间的条目显示剩余');
+has(moodText, '记忆', '11. 区分记忆 / 情境');
+has(moodText, '信任 12', '11. 显示对玩家的信任');
+has(moodText, '陌生', '11. 显示关系阶段');
+has(moodText, '感冒', '11. 显示状态');
+has(moodText, '行动冷却中', '11. can_act=false 的文案');
+has(moodText, '手动删除记录', '11. 有删除审计区');
+has(moodText, '手上的疤', '11. 审计区列出被删的条目');
+hasNot(moodText, '拼接顺序', '11. 情绪页不渲染人设页内容');
+
+// 点 × 删一条 → DELETE /engine/thought
+const delBtn = findAll(moodTree, (n) => n.type === 'button' && textOf(n) === '×' && typeof n.props.onClick === 'function')[0];
+ok(delBtn !== undefined, '11. 每条情绪都有删除按钮');
+calls.length = 0;
+delBtn.props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const delCall = calls.find((c) => c.method === 'DELETE' && c.url === '/rp-soul/engine/thought');
+ok(delCall !== undefined, '11. 点 × 发 DELETE /engine/thought');
+eq(delCall.body.session_id, 's_test01', '11. 删除带上 session_id');
+eq(delCall.body.npc_id, 'lin_wan', '11. 删除带上 npc_id');
+ok(delCall.body.thought_id === 'th1' || delCall.body.thought_id === 'th2', '11. 删除带上 thought_id');
+eq(delCall.body.revision, 7, '11. 删除带上 revision（防脏写）');
+
+// 切到「自主行动记录」
+findButton(moodTree, '自主行动记录').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const actTree = await renderUntil((t) => t.props['data-tab'] === 'activity' && textOf(t).includes('第 3 回合'));
+eq(actTree.props['data-tab'], 'activity', '11. 切到「自主行动记录」页');
+ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/activity') === 0), '11. 记录页读 /engine/activity');
+const actText = textOf(actTree);
+has(actText, '第 3 回合', '11. 记录页按回合列出');
+has(actText, '你没说没做', '11. mode 文案（continue）');
+has(actText, '你说的话成了事实', '11. mode 文案（result）');
+has(actText, '在旁观察', '11. 自主行动的类型文案');
+has(actText, '她在门口站了一会儿。', '11. 自主行动的正文');
+has(actText, '她把湿伞靠在墙角。', '11. 离屏片段');
+has(actText, '半配合', '11. 回应文案');
+has(actText, '林晚 对 你', '11. 关系变化');
+has(actText, '信任 12', '11. 关系变化带数值');
+has(actText, '陌生', '11. 关系阶段显示中文名');
+hasNot(actText, 'stranger', '11. 关系阶段不漏英文枚举');
+has(actText, '已撤销', '11. 撤销的回合有标记');
+has(actText, '这回合没有可显示的变化', '11. 空回合有占位文案');
+has(actText, '当前停在这里', '11. 显示 open_action');
+has(actText, '1 次自主行动', '11. 顶部汇总计数');
+hasNot(actText, '条情绪', '11. 记录页不渲染情绪页内容');
+
+// 空局：没有 session 时两个新页都要给出提示而不是崩
+hookState.length = 0;
+hookDeps.length = 0;
+childHooks.clear();
+responses.set('GET /rp-soul/engine', () => jsonResponse({
+  health: { enabled: true, present: true, python: { ok: true, version: [3, 12, 8] }, dataDir: 'C:/x', ready: true },
+  persona: { title: '', personaId: '', bytes: 0, files: [], front: {}, error: null },
+  sessionsFile: 'C:/x/s.json', sessions: [], session: null,
+}));
+const emptyPersona = await renderUntil((t) => t.props['data-render-state'] === 'ready');
+findButton(emptyPersona, '情绪').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const emptyMood = await renderUntil((t) => t.props['data-tab'] === 'mood' && textOf(t).includes('这局还没开局'));
+has(textOf(emptyMood), '这局还没开局', '11. 没开局时情绪页给提示');
+has(textOf(emptyMood), 'soul_admin', '11. 提示里指明开局命令');
 
 done('client-bundle');

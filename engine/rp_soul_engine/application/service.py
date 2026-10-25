@@ -38,6 +38,7 @@ from ..errors import (
     top_code,
 )
 from ..jsonio import canonical
+from ..domain import structure as ST
 from ..persistence import db, repo
 from ..projections import context as CX
 from . import specs
@@ -1023,3 +1024,179 @@ def debug_delete_thought(ctx, payload):
         }
 
     return session_write(ctx, "debug-delete-thought", payload, handler)
+
+
+# ---------------------------------------------------------------------------
+# settings page: the whole ledger at a glance
+#
+# The settings page has three tabs (persona / mood / activity). Both of these
+# are read-only: they never bump a revision and never write, so they are safe
+# to poll while a turn is being written.
+
+
+def _mood_rows(state, persona):
+    """Every NPC's mood panel, plus their edge toward the player."""
+    from ..domain import clock as CL
+    from ..domain import mood as MO
+    from ..domain import state as SS
+
+    player = state["player_id"]
+    thresholds = dict(state.get("mood_thresholds") or {})
+    rows = []
+    for cid in SS.npcs(state):
+        char = state["characters"][cid]
+        panel = MO.panel(state, cid)
+        edge = SS.edge(state, cid, player) or {}
+        rows.append({
+            "id": cid,
+            "name": char["name"],
+            "tier": char.get("tier"),
+            "role": char.get("public_role"),
+            "present": SS.is_present(state, cid),
+            "conditions": [c["kind"] for c in char["status"].get("conditions") or []],
+            "value": panel["value"],
+            "band": panel["band"],
+            "base": panel["base"],
+            "thoughts": panel["thoughts"],
+            # how this character feels about the player (the edge points at them)
+            "trust": edge.get("trust"),
+            "tension": edge.get("tension"),
+            "stage": edge.get("stage"),
+            "stage_label": SS.stage_label(edge["stage"]) if edge.get("stage") else "",
+            "can_act": SS.can_act(state, cid),
+        })
+    return {"thresholds": thresholds, "npcs": rows}
+
+
+def debug_moods(ctx, payload):
+    from ..domain import clock as CL
+
+    payload = validate(specs.DEBUG_MOODS, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state = session["state"]
+    out = {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "persona_title": state["persona_title"],
+        "clock_label": CL.label(state["clock"]),
+        "place": state["scene"]["location_id"],
+        "deletions": repo.thought_deletions(conn, state["session_id"]),
+    }
+    out.update(_mood_rows(state, session["persona"]))
+    return out
+
+
+_ACTION_LABELS = {
+    "approach": "主动接近",
+    "observe": "在旁观察",
+    "request": "提出要求",
+    "accident": "出了意外",
+    "provoke": "挑起冲突",
+    "leave": "离开",
+}
+
+_RESPONSE_TEXT = {
+    "refuse": "拒绝",
+    "partial": "半配合",
+    "genuine": "真心回应",
+    "surface": "表面配合",
+}
+
+
+def _activity_row(state, row):
+    """One turn log row, in the shape the settings page renders."""
+    names = {cid: char["name"] for cid, char in state["characters"].items()}
+    name_of = lambda cid: names.get(cid, str(cid))
+    payload = row.get("payload") or {}
+    applied = payload.get("applied") or []
+    actions, beats, responses, relations, thoughts, mood_moves = [], [], [], [], [], []
+    for item in applied:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("op")
+        if kind == "npc_action":
+            actions.append({
+                "npc_id": item.get("npc_id"),
+                "name": name_of(item.get("npc_id")),
+                "kind": item.get("kind"),
+                "kind_label": _ACTION_LABELS.get(item.get("kind") or "", item.get("kind") or ""),
+                "significant": bool(item.get("significant")),
+                "text": item.get("action") or "",
+                "target_id": item.get("target_id"),
+            })
+        elif kind == "offscreen_beat":
+            beats.append({
+                "npc_id": item.get("npc_id"),
+                "name": name_of(item.get("npc_id")),
+                "summary": item.get("summary") or "",
+            })
+        elif kind == "npc_response":
+            responses.append({
+                "npc_id": item.get("npc_id"),
+                "name": name_of(item.get("npc_id")),
+                "response": item.get("response"),
+                "label": _RESPONSE_TEXT.get(item.get("response") or "", item.get("response") or ""),
+                "note": item.get("note") or "",
+            })
+        elif kind == "relationship":
+            relations.append({
+                "from": item.get("from"),
+                "to": item.get("to"),
+                "from_name": name_of(item.get("from")),
+                "to_name": name_of(item.get("to")),
+                "trust": item.get("trust"),
+                "tension": item.get("tension"),
+                "stage": item.get("stage"),
+                "stage_label": ST.STAGE_LABELS.get(item.get("stage") or "", item.get("stage") or ""),
+            })
+        elif kind == "add_thought":
+            thoughts.append({
+                "npc_id": item.get("npc_id"),
+                "name": name_of(item.get("npc_id")),
+                "label": item.get("label") or "",
+                "delta": item.get("delta"),
+            })
+        elif kind in ("advance_time", "move", "enter_scene", "exit_scene"):
+            mood_moves.append(kind)
+    return {
+        "turn": row.get("turn"),
+        "revision": row.get("revision"),
+        "kind": row.get("kind"),
+        "mode": row.get("action_mode"),
+        "undone": bool(row.get("undone")),
+        "created_at": row.get("created_at"),
+        "summary": row.get("summary") or "",
+        "open_action": row.get("open_action") or "",
+        "actions": actions,
+        "beats": beats,
+        "responses": responses,
+        "relations": relations,
+        "thoughts": thoughts,
+    }
+
+
+def debug_activity(ctx, payload):
+    from ..domain import clock as CL
+
+    payload = validate(specs.DEBUG_ACTIVITY, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state = session["state"]
+    # recent_turn_log already returns the newest row first: the page reads like
+    # a log, not like a book, so no extra reordering here.
+    rows = [_activity_row(state, row) for row in repo.recent_turn_log(conn, state["session_id"], payload["limit"])]
+    beats_total = sum(len(row["beats"]) for row in rows)
+    actions_total = sum(len(row["actions"]) for row in rows)
+    return {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "persona_title": state["persona_title"],
+        "clock_label": CL.label(state["clock"]),
+        "place": state["scene"]["location_id"],
+        "open_action": state["memory"].get("open_action") or "",
+        "counts": {"turns": len(rows), "actions": actions_total, "beats": beats_total},
+        "rows": rows,
+    }
