@@ -1,9 +1,8 @@
 """The story clock: {"day": N, "minute": 0..1439}. Time never flows back.
 
-It is not an in-game clock the model can push around: it is read straight off
-the real wall clock. Day 1 is the day the session started, and the minute of
-the day is the real minute of the day, so "第一大天晚上十点" keeps meaning the
-same thing whether the user came back after five minutes or five days.
+It is not an in-game clock the model can push around: every turn moves it by
+exactly the real time that passed, so a session left alone for five minutes
+or five days both land where the wall clock says they should.
 """
 
 from datetime import datetime
@@ -16,14 +15,6 @@ SHICHEN = ("子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉",
 
 def to_abs(clock):
     return (clock["day"] - 1) * MINUTES_PER_DAY + clock["minute"]
-
-
-def stamp(moment, start_date):
-    """The clock a real moment maps to, with `start_date` as day one."""
-    return {
-        "day": (moment.date() - start_date).days + 1,
-        "minute": moment.hour * 60 + moment.minute,
-    }
 
 
 def parse_iso(text):

@@ -120,8 +120,9 @@ def new_session(persona, seed=None, player=None, now=None):
         "player_id": PE.PLAYER_ID,
         "turn": 0,
         "clock": clock,
-        # Day one is the date the session opened; `real_at` is the moment the
-        # last turn settled. Both come from the wall clock, never from the model.
+        # `real_start` is the moment the session opened (diagnostics only);
+        # `real_at` is the moment the last turn settled, which is what the next
+        # turn measures real time against. Both come from the wall clock.
         "real_start": now,
         "real_at": now,
         "characters": cards,
