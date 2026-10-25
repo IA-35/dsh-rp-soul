@@ -176,7 +176,13 @@ def add_thought(state, cid, label, delta, kind, source_fact_id=None, minutes=Non
         raise ValueError("unknown thought kind: %s" % kind)
     lo, hi = ST.THOUGHT_DELTA_RANGE
     delta = max(lo, min(hi, int(delta)))
-    mood = state["characters"][cid]["mood"]
+    mood = (state["characters"][cid] or {}).get("mood")
+    if mood is None:
+        # The player card has no mood blob on purpose: the player is a slot, and
+        # nothing about how the player feels is stored. A relationship change
+        # whose `to` is the player still reaches here (op_relationship marks the
+        # receiving side), so this is a no-op rather than a crash.
+        return None
     now = CL.to_abs(state["clock"])
     existing = _find(mood, label=label if kind == "situational" else None, source_fact_id=source_fact_id)
     if existing is not None:
@@ -220,7 +226,7 @@ def _enforce_cap(mood, now):
 
 def remove_thought(state, cid, thought_id):
     """Debug deletion from the settings page. Returns the removed thought."""
-    mood = state["characters"][cid]["mood"]
+    mood = SS.mood_of(state, cid)
     for index, thought in enumerate(mood.get("thoughts") or []):
         if thought["id"] == thought_id:
             return mood["thoughts"].pop(index)

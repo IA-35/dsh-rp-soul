@@ -634,18 +634,23 @@ def op_relationship(ctx, op, path):
             "%s 对 %s 的信任 %+d：%s" % (ctx.name(b), ctx.name(a), op["trust_delta"], op["reason"]),
             [ctx.state["player_id"], a, b],
         )
-        thought = MO.thoughts_from_trust(ctx.state, b, op["trust_delta"], fid, ctx.turn)
-        if thought is not None:
-            ctx.thoughts.append({"npc_id": b, "thought": thought})
+        # Only an NPC has a mood bar. When the move points at the player
+        # (``from: an_npc, to: player``) the relation is still recorded, but no
+        # thought is planted: the player is a slot, it stores no feelings.
+        if b != ctx.state["player_id"]:
+            thought = MO.thoughts_from_trust(ctx.state, b, op["trust_delta"], fid, ctx.turn)
+            if thought is not None:
+                ctx.thoughts.append({"npc_id": b, "thought": thought})
     if op["stage_advance"] and after.get("stage") != before.get("stage"):
         fid = _note(
             ctx, "%s.stage.t%d" % (b, ctx.turn),
             "%s 与 %s 的关系进入 %s：%s" % (ctx.name(b), ctx.name(a), ST.STAGE_LABELS[after["stage"]], op["reason"]),
             [ctx.state["player_id"], a, b],
         )
-        thought = MO.thoughts_from_stage(ctx.state, b, fid, ctx.turn)
-        if thought is not None:
-            ctx.thoughts.append({"npc_id": b, "thought": thought})
+        if b != ctx.state["player_id"]:
+            thought = MO.thoughts_from_stage(ctx.state, b, fid, ctx.turn)
+            if thought is not None:
+                ctx.thoughts.append({"npc_id": b, "thought": thought})
     ctx.observable = True
     ctx.relationship_reasons.append(op["reason"])
     ctx.applied.append({

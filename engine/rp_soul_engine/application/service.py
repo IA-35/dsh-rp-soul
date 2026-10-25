@@ -986,7 +986,7 @@ def debug_delete_thought(ctx, payload):
     def handler(conn, session, now):
         state, persona = session["state"], session["persona"]
         cid = payload["npc_id"]
-        if cid not in state["characters"]:
+        if cid not in state["characters"] or cid == state["player_id"]:
             known = sorted(k for k in state["characters"] if k != state["player_id"])
             raise AppError(NOT_FOUND, "没有这个角色：%s" % cid,
                            [detail("$.npc_id", "角色不存在", "可用角色：%s" % "、".join(known), NOT_FOUND)])
