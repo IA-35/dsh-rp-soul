@@ -1,7 +1,7 @@
 {
   "name": "dsh-rp-soul",
-  "version": "0.6.0",
-  "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor, a Python roleplay engine (mood / relationships / autonomous action), cross-session memory and tool-free compaction.",
+  "version": "0.5.0",
+  "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor and a Python roleplay engine (mood / relationships / autonomous action).",
   "type": "module",
   "main": "lib/index.js",
   "files": [
@@ -19,10 +19,7 @@
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json",
-    "./compaction": {
-      "default": "./lib/compaction.js"
-    }
+    "./package.json": "./package.json"
   },
   "keywords": [
     "dsh",
@@ -46,12 +43,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh": ">=0.1.5-rc.1",
-    "react": ">=18.0.0",
-    "@deepseek-ai/dsh-compaction-basic": ">=0.1.5-rc.1",
-    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1",
-    "@deepseek-ai/dsh-session": ">=0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-persistence": ">=0.1.5-rc.1",
-    "@deepseek-ai/dsh-agent": ">=0.1.5-rc.1"
+    "react": ">=18.0.0"
   },
   "dsh": {
     "bundle": {
