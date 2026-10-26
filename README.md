@@ -23,7 +23,7 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
   （0 字节，你写什么就是什么），并把它们写进清单——设置页一打开就能看到文件、点开就能编辑，
   不用先手动建文件。**已存在的文件绝不会被覆盖**。
 - **引擎（可选）**：结构化字段单独放在 `rp-soul/persona.md`（设置页表单可改），
-  引擎据此维护**情绪（心情条）/ 人际关系（信任·张力·阶段）/ 自主行动**三本账，
+  只有**你和她两个人**，引擎据此维护**她的情绪（心情条）/ 她对你的关系（信任·张力·阶段）/ 她的自主行动**三本账，
   由 SQLite 记账、可存档可回滚。人设散文仍原样进系统提示，引擎状态以一段 brief 追加在后面。
 - **乱码拒收**：文件名里出现 `U+FFFD`（说明送来的字节不是合法 UTF-8，典型是客户端按 GBK 编码发中文名）
   直接 400，不允许在磁盘上留下乱码文件名。
@@ -77,8 +77,9 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 ### 引擎人设
 
-`rp-soul/persona.md` 的表单版：id / 标题 / 心情基准 / 心情阈值 / 地点 / 角色，
-角色里还有称呼、年龄、性别、开局态度、身份、外貌、表里两层语态与排班。
+`rp-soul/persona.md` 的表单版：id / 标题 / 心情基准 / 心情阈值，她的名字、称呼、年龄、性别、
+开局态度、身份、外貌、表里两层语态，以及一张**作息表**（从第几分钟到第几分钟、在做什么）。
+旧格式（带 `places` / `cast` 的多角色文件）会按第一个主要角色读成单人表单并标出来，点保存就写成新格式。
 改完点保存写回文件，点「看 YAML」看原文，「校验」直接把这份人设交给引擎校验。
 没有任何人填的「当前目标 / 处境」——那些由引擎按心情、关系、到期的事现场测算。
 
@@ -86,7 +87,7 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 每回合重算的**心情条**（RimWorld 式：基准 + 一组带衰减的 thought，夹在 0..100）：
 
-- 每个 NPC 一张卡：`当前值 / 100 · 档位`、条形图、三档阈值（人设 `mood_thresholds` 可调，
+- 她一张卡：`当前值 / 100 · 档位`、条形图、三档阈值（人设 `mood_thresholds` 可调，
   默认 `开心 ≥ 75` / `低落 < 45` / `难过 < 25`）、对你 的信任 · 张力 · 阶段 · 是否可自主行动。
 - 下面按条列 thought：`delta`、标签、`记忆|情境`、还剩多少分钟。
 - 每条右侧 `×` 手动删掉（会留一条审计记录，之后引擎不再复述这件事）；
@@ -100,7 +101,7 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 - 每条：`第 N 回合` + 行动模式（你说的话成了事实 / 你在尝试 / 其实…… / 你没说没做 / 时间在走）、
   时间、本回合摘要、「停在这里」的 `open_action`。
-- 分组列出这回合实际发生的变化：`自主行动`（NPC 的 kind + 动作文本 + 是否重大）、
+- 分组列出这回合实际发生的变化：`自主行动`（她的 kind + 动作文本 + 是否重大）、
   `离屏片段`、`对方的回应`（拒绝 / 协商 / 半配合 / 表面配合 / 真心回应 + note）、
   `关系变化`（信任 / 张力 / 阶段，阶段显示中文名）、`留下的情绪`。
 - 顶部汇总：当前第几回合 / revision / 共多少条记录 / 多少次自主行动 / 多少个离屏片段 / 时钟。
@@ -122,8 +123,8 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 | GET | `/rp-soul/engine` | 引擎健康 + 人设摘要 + 当前这一局 |
 | GET | `/rp-soul/engine/persona` | 用真引擎校验人设，返回结构摘要或带 path 的错误 |
 | GET | `/rp-soul/engine/session?session_id=` | 读该局上下文（`depth=brief|full`） |
-| GET | `/rp-soul/engine/mood?session_id=&npc_id=` | 单个 NPC 的心情面板（值 / 档位 / 阈值 / 条目 / 审计） |
-| GET | `/rp-soul/engine/moods?session_id=` | 「情绪」页：全部 NPC 的心情面板 + 阈值 + 删除审计 |
+| GET | `/rp-soul/engine/mood?session_id=&npc_id=` | 她的心情面板（值 / 档位 / 阈值 / 条目 / 审计） |
+| GET | `/rp-soul/engine/moods?session_id=` | 「情绪」页：她的心情面板 + 阈值 + 删除审计 |
 | GET | `/rp-soul/engine/activity?session_id=&limit=` | 「自主行动记录」页：最近 N 回合（1–50，默认 20） |
 | DELETE | `/rp-soul/engine/thought` | 手动删一条情绪 `{session_id, npc_id, thought_id, revision, reason}` |
 
@@ -209,7 +210,7 @@ Python 包（无第三方依赖，`python -m rp_soul_engine` 常驻子进程，s
 
 ### 引擎人设：单独一个文件
 
-引擎要的结构化字段（地点、角色、心情阈值……）放在 **`$DSH_HOME/rp-soul/persona.md`**，
+引擎要的结构化字段（她是谁、作息、心情阈值……）放在 **`$DSH_HOME/rp-soul/persona.md`**，
 就是一个纯 YAML 文件（不需要 `---` 包裹，写了也只当装饰）。它和人设提示词是两件事：
 
 - 人设提示词（`files` 里那些 md）只管「他是谁、怎么说话」，会被原样注入 system prompt；
@@ -218,7 +219,7 @@ Python 包（无第三方依赖，`python -m rp_soul_engine` 常驻子进程，s
 设置页「角色人设 → 引擎人设」里是表单，不用手写 YAML；想看一眼原文就点「看 YAML」。
 **改完就生效**：`persona.md` 是静态事实，引擎每次 `soul_state` / `soul_commit` 都会把它
 一并送过去，所以名字、称呼、年龄、外貌、语态、作息、心情基准当场就跟上，不用为了看一眼新的
-名字重开一局。剧情那半不动：时间、地点、你们之间的关系进度、心情里已经发生的想法、
+名字重开一局。剧情那半不动：时间、你们之间的关系进度、心情里已经发生的想法、
 记下的事实都留在原地。唯一有条件的字段是 `start_stage`——它只描述「开局时这段关系在哪」，
 所以只有当两边还干干净净（信任 0、张力 0、没有历史）时才按文件来；一旦有过往来，
 关系进度就是账本说了算，文件改不动它。
@@ -227,33 +228,34 @@ Python 包（无第三方依赖，`python -m rp_soul_engine` 常驻子进程，s
 点一次保存就搬过来，之后散文里的前置块不再参与解析）。
 
 ```yaml
-id: rain_clinic
+id: lin_wan
 title: 雨夜诊所
+name: 林晚
+role: 夜班医生
+age: 34
+gender: female
+voices: {surface: 说话克制。, inner: 一直在等一句道歉。}
+start_stage: familiar
 mood_base: 55
 mood_thresholds: {open: 72, closed: 40, break: 18}
-places:
-  - {id: clinic, name: 诊所, privacy: private}
-cast:
-  - id: lin_wan
-    name: 林晚
-    tier: major
-    role: 夜班医生
-    age: 34
-    gender: female
-    voices: {surface: 说话克制。, inner: 一直在等一句道歉。}
-    start_stage: familiar
-    schedule: [{from: 0, to: 1439, location_id: clinic}]
+routine:
+  - {from: 540, to: 1080, doing: 在诊所上班}
+  - {from: 1380, to: 420, doing: 睡觉}
 ```
 
-`places` 与 `cast` 是硬要求。`cast` 里 `id` / `name` / `age` / `gender` 必填，`tier: major` 的角色
-还得填 `voices.surface` 与 `voices.inner`；`adult_context`、`appearance`、`call`、`role` 这些
-可选的，不写就不写，引擎不会替你编。
+只有一个人，所以是平铺的：`id`（ASCII 小写，既是人设 id 也是她的 id）/ `name` / `age` / `gender` /
+`voices.surface` / `voices.inner` 必填；`title` 不写就用名字；`adult_context`、`appearance`、`call`、`role`
+可选，不写就不写，引擎不会替你编。没有地点，也没有登场退场：「在场」就是你们在说话。
+`routine` 是**作息**：一天里某段时间（分钟数 0–1439，可以跨午夜）她通常在做什么。引擎拿它回答
+「你不在的时候她在干嘛」——上下文里会给出 `routine_now`，隔了一阵再回来时会列出这段时间她的作息。
+**旧格式照样能读**：带 `places` + `cast` 的多角色文件，按第一个 `tier: major` 的角色读成她，
+她的 `schedule` 换成作息「在<地点名>」，其他角色和地点不再参与。
 `start_stage` 是**开局时她对你的关系阶段**，不填就是 `stranger`（陌生）；可选
 `stranger` / `acquainted` / `familiar` / `flirting` / `testing` / `intimate` / `committed`。
 **没有 `goal` / `decision` / `situation` 这几项**：他现在想做什么、心里压着什么，由引擎按心情、
 关系、到期的事现场测算，人写一份静态的反而会每回合盖住活的信号。性格与说话方式写进人设提示词就够了。
-没有 `persona.md`、散文里也没有前置块时，正文首行当标题、只有一个默认地点，但**不发明角色**——
-`cast` 缺了就是缺了，自动开局与 `soul_admin start` 都会拒绝，并说明缺什么。
+没有 `persona.md`、散文里也没有前置块时，正文首行当标题，但**不发明角色**——
+名字、年龄这些缺了就是缺了，自动开局与 `soul_admin start` 都会拒绝，并说明缺什么。
 
 ### 作用域：全局还是按会话
 
@@ -264,7 +266,7 @@ cast:
 需要「每个会话各自一局」时把 `engineScope` 设成 `session`（设置页引擎卡上有切换按钮）。
 
 全局作用域下开局是**自动的**：`soul_state` 发现没有局会就地开一局（返回 `autoStarted: true`），
-不需要先跑 `soul_admin start`。开不起来（人设缺 `places`/`cast` 等）不算失败，工具会如实说
+不需要先跑 `soul_admin start`。开不起来（人设缺名字、年龄等）不算失败，工具会如实说
 「这回合只按人设散文演，不要假装有账本」。
 
 ### 时间：按真实墙钟，不是虚拟时钟
@@ -276,8 +278,11 @@ cast:
 
 - 时钟按真实分钟数累加：`day` / `minute` 是「建局那一刻」加上这段时间走过的分钟推出来的，
   所以同一天内不变，跨过零点自然 `day + 1`，隔了几天回来也落在正确的那一天。
-- 跨度 ≥ 60 分钟（或跨天）判定为 `full` 档：这段时间不在场的 major 角色必须各补一条
-  `offscreen_beat`，说明他们这段时间干了什么；≥ 16 分钟为 `brief`，其余 `routine`。
+- 跨度 ≥ 60 分钟（或跨天）判定为 `full` 档：这回合必须先补一条 `offscreen_beat`，
+  说明你不在的这段时间她做了什么（引擎附上她这段时间的作息作参考）；≥ 16 分钟为 `brief`，
+  可以写也可以不写；再短就是 `routine`，你们一直在说话，不算分开。
+- 时间**先结算、再应用这回合的操作**：分开的那段时间发生在这回合之前，所以离屏片段描述的是它，
+  这回合新记的情绪和约定从「现在」开始算，不会被刚过去的那段时间立刻消磨掉。
 - 模型不能快进、也不能自己写时间：`soul_state` 不再接受快进参数，`new-game` 不再有
   `start_minute`，`persona.md` 里也不再需要 `start` 字段。
 - 时钟只在真实时间向前时前进；同一时刻重复提交不会让时间倒流。
@@ -286,18 +291,19 @@ cast:
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 每回合开始读上下文（`brief` 约 6 KB；换地点 / 换人 / 新的一天 / 上回合被驳回用 `full` 约 20 KB）。`want_twist` 取转折 |
-| `soul_commit` | 写完这一回合后提交。`operations` 是账本改动清单（`npc_response` / `relationship` / `add_thought` / `move` …，最多 40 条），引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这回合过了多久 |
+| `soul_state` | 每回合开始读上下文（`brief` 约 6 KB；隔了一阵再回来 / 新的一天 / 上回合被驳回用 `full` 约 20 KB）。`want_twist` 取转折 |
+| `soul_commit` | 写完这一回合后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这回合过了多久 |
 | `soul_admin` | 开局（`start`，全局作用域下通常不必手动开）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
 
 ### 心情条（情绪怎么算）
 
 `mood = clamp(mood_base + Σ thoughts, 0, 100)`。每条 thought 是
 `{label(≤20字), delta(-30..+15), kind, source_fact_id, since_turn, expires_at, decay}`
-——**引擎自己算情境类**（在场 / 缺席 / 离开太久 / 事件到期 / 张力高 / 深夜打扰），
+——**引擎自己算情境类**（在你身边 / 你不在 / 隔了一天以上才回来 / 事件到期 / 张力高 / 深夜打扰；
+带时限的那几条——比如「很久没见你」挂一天——起因过去了也会挂到时限再消失），
 模型只能通过 `add_thought` 加记忆类，且必须挂到一个事实 id 上（不能凭空扣心情）。
-引擎自己写的记忆类只来自**别人对他做了什么**：信任变化（×3）、关系阶段前进、事情搞砸。
-**他自己选的回应（拒绝 / 配合）不进他自己的心情**——否则「低落 → 只能冷回应 → 更低落」会一路滑进崩溃档。
+引擎自己写的记忆类只来自**你对她做了什么**：信任变化（×3）、关系阶段前进、事情搞砸。
+**她自己选的回应（拒绝 / 配合）不进她自己的心情**——否则「低落 → 只能冷回应 → 更低落」会一路滑进崩溃档。
 衰减两种：`linear`（默认，随时间等比缩小，`|delta| < 1` 才删）与 `none`（到点一刀切）。
 同一角色最多 20 条（12 记忆 + 8 情境），超了按「原始强度」淘汰最弱的。
 
@@ -309,19 +315,19 @@ cast:
 | `open` | ≥ 75 | 允许关系阶段前进；`npc_action` 的 `significant` 冷却 −1 回合 |
 | `normal` | 45–75 | 无额外约束 |
 | `closed` | 25–45 | 驳回 `stage_advance`；`npc_response` 只允许 refuse/negotiate/surface，回应（`note`）≤30 字 |
-| `break` | < 25 | 驳回 `npc_response` 与 `stage_advance`；在场的他本回合必须有一条 `npc_action(significant: true, kind: provoke/leave)`，不受冷却限制，并顶替玩家 attempt 所需的回应；心情回升即恢复 |
+| `break` | < 25 | 驳回 `npc_response` 与 `stage_advance`；她本回合必须有一条 `npc_action(significant: true, kind: provoke/leave)`，不受冷却限制，并顶替玩家 attempt 所需的回应；心情回升即恢复 |
 
 非崩溃档下，`significant: true` 的 `npc_action` 必须写 `kind`，且只能取本回合开始时引擎给出的
 agency 候选里的种类（`soul_state` 的 `agency`）；不重大的行动不受此限。
 
 阈值可在 `persona.md` 的 `mood_thresholds` 里改（必须满足 `0 ≤ break < closed < open ≤ 100`，
-不满足**报错而不回退默认**）。玩家自己的心情**不入库**——只记录 NPC 怎么想。
+不满足**报错而不回退默认**）。玩家自己的心情**不入库**——只记录她怎么想。
 
 ### 心情与关系是两条轴
 
 mood 是「此刻怎么样」（短期会回落），trust / stage 是「长期怎么判断你」（慢变 7 级）。
 信任高 + 心情低 = 会抱怨会冷一下但不会走；信任低 + 心情高 = 意外地好说话。
-`relationship` 的 `trust` 单回合最多变动 2，阶段前进要求本回合有玩家实际行动 + NPC 同回合
+`relationship` 的 `trust` 单回合最多变动 2，阶段前进要求本回合有玩家实际行动 + 她同回合
 `partial`/`genuine` 回应，否则报 `INVARIANT_VIOLATION` 而不是自动截断。
 
 ## 与 `AGENTS.md` 的区别
@@ -342,6 +348,10 @@ mood 是「此刻怎么样」（短期会回落），trust / stage 是「长期�
     default: standard
   ```
 - 若你同时把 SOUL 内容合并进了 `AGENTS.md`，建议删掉那份，避免人设注入两次。
+- **旧存档自动升级**：多角色时代的存档（state schema 1）在引擎第一次启动时迁移成单人格式，
+  迁移前先在数据目录的 `backups/` 里备份一份数据库，迁移失败会自动还原。规则和旧人设文件一样：
+  第一个主要角色是她，她的心情、她对你的关系、你们知道的事和约定都保留，其他角色、地点、
+  NPC 之间的关系不再保留。旧版导出的存档文件导入时按同一套规则升级。
 - **引擎每回合至少一次 stdio 往返**（毫秒级）。引擎不可用时不会阻塞对话，只是
   `soul_state` / `soul_commit` / `soul_admin` 会返回「引擎未就绪」并说明原因
   （缺 Python / 版本太低 / 引擎包缺失），此时人设注入照常生效。
@@ -355,7 +365,7 @@ mood 是「此刻怎么样」（短期会回落），trust / stage 是「长期�
 - **验证**：新开一个对话，观察系统提示开头出现 `SOUL.md` 的人设文本；修改
   `SOUL.md` 再发消息，随下一条请求更新。
 - **验证引擎**：设置 →「角色人设」→ 引擎卡里应显示「就绪」与 Python 版本；
-  让模型 `soul_admin start` 之后，同一张卡里能看到这一局与 NPC 的心情条。
+  让模型 `soul_admin start` 之后，同一张卡里能看到这一局与她的心情条。
   或直接命令行：`python -m rp_soul_engine <<< '{"id":"c1","command":"doctor"}'`
   （在 `engine/` 目录下），返回 `{"id":"c1","ok":true,...}` 即通。
 - **卸载**：`dsh plugin remove dsh-rp-soul`（自动移除 bundle 挂载）；
