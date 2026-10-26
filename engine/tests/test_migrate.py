@@ -117,6 +117,17 @@ def legacy_persona():
     return copy.deepcopy(LEGACY_PERSONA)
 
 
+def stored_legacy_persona():
+    """库里存的是旧引擎校验过的人设：没写的 call/role/appearance 被补成 None / "" / ""。"""
+    raw = legacy_persona()
+    for member in raw["cast"]:
+        member.setdefault("call", None)
+        member["call"] = None
+        member["role"] = ""
+        member["appearance"] = ""
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # 纯函数层
 
@@ -167,6 +178,21 @@ def the_old_persona_becomes_her():
     assert persona["revision"] == LEGACY_PERSONA["revision"]
 
 
+def a_stored_persona_with_blank_fields_upgrades():
+    """回归：旧引擎把没写的可选字段存成 None / ""，新 schema 不收这两种值。"""
+    persona = MG.persona_v1_to_v2(stored_legacy_persona())
+    assert persona["name"] == "林晚", persona
+    assert persona["call"] is None and persona["role"] == "" and persona["appearance"] == "", persona
+
+
+def events_with_someone_else_are_dropped():
+    """你和周奕的约定不该变成你和她的约定。"""
+    state = v1_state()
+    state["events"]["e4"] = event("e4", "promise", "陪周奕去还债", ["player", "zhou_yi"], "debt_help")
+    new = MG.state_v1_to_v2(state, legacy_persona())
+    assert "e4" not in new["events"], sorted(new["events"])
+
+
 def the_input_is_not_touched():
     old = v1_state()
     MG.state_v1_to_v2(old, legacy_persona())
@@ -189,7 +215,7 @@ def make_v1_db(data_dir):
     db.begin_write(conn)
     db._migrate_to_1(conn)
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '1')")
-    repo.insert_session(conn, v1_state(), legacy_persona(), "new_game", NOW)
+    repo.insert_session(conn, v1_state(), stored_legacy_persona(), "new_game", NOW)
     repo.put_undo_point(conn, "s_old00001", 3, v1_state(turn=2))
     repo.put_slot(conn, "旧档", "s_old00001", "第一天 21:00", "林晚 49", "等你开口。", 1, NOW)
     conn.execute("COMMIT")
@@ -240,6 +266,8 @@ check("her bond survives, the rest goes", her_bond_survives_the_rest_goes)
 check("facts and events are trimmed to the two of you", facts_and_events_are_trimmed)
 check("the upgraded state passes the invariants", the_upgraded_state_passes_the_invariants)
 check("the old persona becomes her", the_old_persona_becomes_her)
+check("a stored persona with blank optional fields upgrades", a_stored_persona_with_blank_fields_upgrades)
+check("events with someone else are dropped", events_with_someone_else_are_dropped)
 check("the upgrade does not touch its input", the_input_is_not_touched)
 check("a new state passes through untouched", a_new_state_passes_through)
 check("an old database is migrated (with a backup) and playable", an_old_database_is_migrated_and_playable)

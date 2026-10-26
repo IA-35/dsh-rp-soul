@@ -481,6 +481,8 @@ eq(personaPut.body.front.id, 'lin_wan', '11. 她的 id 来自原来那个角色'
 eq(personaPut.body.front.cast, undefined, '11. PUT 里不再有 cast');
 eq(personaPut.body.front.places, undefined, '11. PUT 里不再有 places');
 eq(personaPut.body.front.legacy, undefined, '11. 界面用的 legacy 标记不写进文件');
+eq(personaPut.body.front.adult_context, undefined, '11. 留空的可选字段不写成空串（引擎不收空串）');
+eq(personaPut.body.front.call, '林医生', '11. 填了的可选字段照常写回');
 eq(personaPut.body.front.routine, [{ from: 0, to: 1439, doing: '在诊所' }], '11. 作息随 PUT 写回');
 
 // 切到「情绪」

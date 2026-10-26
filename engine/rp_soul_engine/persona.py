@@ -135,7 +135,8 @@ def from_legacy(raw):
     names = {p.get("id"): p.get("name") or p.get("id") for p in raw.get("places") or [] if isinstance(p, dict)}
     out = {k: v for k, v in raw.items() if k not in LEGACY_KEYS}
     for key in COMPANION_KEYS:
-        if key in member:
+        # 旧引擎存库时把没写的可选字段补成 None / ""；新 schema 不收这两种值，没写就是没写
+        if member.get(key) not in (None, ""):
             out[key] = member[key]
     if "id" in member:
         out["id"] = member["id"]

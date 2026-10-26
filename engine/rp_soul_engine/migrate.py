@@ -8,7 +8,9 @@ keeps everything that was about her and the player and drops the rest:
   major) - the same rule ``persona.from_legacy`` uses for the markdown file -
   or, if that id is not in the save, the first other character in it;
 * her mood thoughts, her relationship with the player, what she and the
-  player know, the events either of them is part of: kept as they are;
+  player know: kept as they are; events she is part of, or that were the
+  player's alone, are kept (as hers and the player's); an event between the
+  player and someone who is dropped goes with that someone;
 * other characters, NPC-to-NPC edges, places, the scene's location and the
   gossip bookkeeping: dropped;
 * her schedule becomes a routine named after the places ("在诊所").
@@ -114,9 +116,9 @@ def state_v1_to_v2(state, persona):
     }
     events = {}
     for eid, event in (s.get("events") or {}).items():
-        people = [cid for cid in event.get("participants") or [] if cid in keep]
-        if not people:
-            continue  # 只关于别的角色的事
+        people = list(event.get("participants") or [])
+        if her not in people and set(people) != {player}:
+            continue  # 和她无关、又牵涉别的角色的事（比如你和周奕的约定）：跟着那个角色一起走
         event["participants"] = [her] + ([player] if player in people else [])
         events[eid] = event
     s["events"] = events
