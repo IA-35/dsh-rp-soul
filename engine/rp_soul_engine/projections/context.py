@@ -25,7 +25,7 @@ BRIEF_LIMIT = 6 * 1024
 FULL_LIMIT = 20 * 1024
 # size_bytes is added after fitting; its own bytes count toward the limit.
 SIZE_FIELD_RESERVE = 24
-LIMITS = {"due_soon": 10, "known_facts": 8, "recent": 3}
+LIMITS = {"due_soon": 10, "known_facts": 8, "her_knows": 5}
 
 # Every session is opened from a persona; the field stays so a caller that
 # remembers the old world-mode envelope does not break.
@@ -116,6 +116,30 @@ def player_facts(state, limit=None):
     return out
 
 
+def her_knows(state, cue="", limit=LIMITS["her_knows"]):
+    """What only she knows (her secrets, her real intentions, what she was told
+    alone): RimTalk's common-knowledge track. Matched against the cue first,
+    the most recent next; the player's own facts are known_facts."""
+    her = SS.companion(state)
+    player = state["player_id"]
+    if not her:
+        return []
+    own = [f for f in FA.of(state).known_to(her) if player not in f["known_by"] and player not in f["believed_by"]]
+    cue_keys = MEM.cue_keywords(state, cue)
+
+    def match(fact):
+        return sum(1 for key in cue_keys if key in fact["text"])
+
+    own.sort(key=lambda f: (-match(f), -f["turn"], -FA.order(f)))
+    out = []
+    for fact in own[:limit]:
+        item = {"id": fact["id"], "text": fact["text"], "visibility": fact["visibility"]}
+        if not fact["truth"]:
+            item["believes_but_untrue"] = True
+        out.append(item)
+    return out
+
+
 def _events(state, limit=None):
     pending = [e for e in state["events"].values() if e["state"] == "pending"]
     pending.sort(key=lambda e: (CL.to_abs(e["due"]), e["id"]))
@@ -135,7 +159,7 @@ def _events(state, limit=None):
     return out
 
 
-def brief(state, persona, save=None):
+def brief(state, persona, save=None, cue=""):
     player = state["player_id"]
     pchar = state["characters"][player]
     scene = state["scene"]
@@ -161,8 +185,10 @@ def brief(state, persona, save=None):
         "companion": _companion_brief(state, her, state["turn"] + 1),
         "due_soon": _events(state, LIMITS["due_soon"]),
         "known_facts": player_facts(state, LIMITS["known_facts"]),
-        "recent": [t["summary"] for t in state["memory"]["turns"][-LIMITS["recent"]:]],
-        "last_quotes": list(state["memory"].get("last_quotes") or []),
+        "her_knows": her_knows(state, cue),
+        # 她的记忆：最近 3 轮原样（你说的话 + 她的原话），再按 RimTalk 的打分补满；
+        # 这是她亲身经历过的事，用来记住彼此，不是这一回合要执行的指令
+        "memories": MEM.inject(state, cue, MEM.TOTAL_BRIEF),
         "open_action": state["memory"].get("open_action") or "",
         "scene_responses": [r["response"] for r in scene.get("responses", [])[-3:]],
         # What she might do next, from her own state: the model picks one or
@@ -186,7 +212,7 @@ def brief(state, persona, save=None):
         view = MEM.request_view(state, state["requests"].get(key))
         if view is not None:
             context[key + "_sources"] = view
-    _fit(context, BRIEF_LIMIT, ("known_facts", "due_soon", "scene_responses", "recent", "last_quotes", "agency"))
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency"))
     return context
 
 
@@ -211,8 +237,8 @@ def _card(state, char):
     return card
 
 
-def full(state, persona, save=None):
-    context = brief(state, persona, save)
+def full(state, persona, save=None, cue=""):
+    context = brief(state, persona, save, cue)
     context["depth"] = "full"
     player = state["player_id"]
     her = SS.companion(state)
@@ -249,6 +275,7 @@ def full(state, persona, save=None):
     context.pop("due_soon", None)
     context["player_facts"] = player_facts(state, 30)
     context["events"] = _events(state)
+    context["memories"] = MEM.inject(state, cue, MEM.TOTAL_FULL)
     _fit_full(context)
     return context
 
@@ -328,11 +355,15 @@ def _fit_steps(context):
         while context.get("events") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["events"].pop()
 
+    def memories_cut():
+        while context.get("memories") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
+            context["memories"].pop()
+
     def agency_cut():
         while context.get("agency") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["agency"].pop()
 
-    return [rules_cut, card_clipped, facts_cut, events_cut, agency_cut]
+    return [rules_cut, card_clipped, facts_cut, events_cut, memories_cut, agency_cut]
 
 
 def _fit_full(context):

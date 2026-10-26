@@ -405,7 +405,10 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         OPS.clear_plan(work)
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
-    # 她的记忆：这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
+    # 她的记忆：你这句话勾起来的那几条算「被想起」，变牢一点（和 soul_state 注入时同一套挑法）
+    _rounds, recalled = MEM.select(base, commit["player_input"], MEM.TOTAL_BRIEF)
+    MEM.reinforce(work, [e["id"] for e in recalled])
+    # 这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
     remembered = MEM.capture(work, ctx, commit)
     forgetting = MEM.maintain(work)
     crossed_day = work["clock"]["day"] > before_clock["day"]

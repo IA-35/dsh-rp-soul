@@ -20,6 +20,7 @@ Capture costs no model call: every committed turn leaves one entry in 刚刚
 an offscreen beat leaves an "experience", a minor action leaves an "action".
 """
 
+import math
 import re
 
 from . import clock as CL
@@ -326,6 +327,130 @@ def request_view(state, request):
     if "day" in request:
         out["day"] = request["day"]
     return out
+
+
+# ---------------------------------------------------------------------------
+# injection: quota harvesting (RimTalk's UnifiedMemoryInjector + DynamicMemoryInjection)
+
+ROUNDS = 3                      # maxABMInjectionRounds：最近几轮原样放
+TOTAL_BRIEF = 8                 # brief 6 KB 的预算里用 8 条
+TOTAL_FULL = 10                 # maxInjectedMemories
+THRESHOLD = 0.15                # memoryScoreThreshold
+LAYER_BONUS = {"now": 1.0, "days": 0.7, "events": 0.4, "years": 0.2}
+LAYER_WEIGHT = 0.2
+PINNED_BONUS = 0.5
+EDITED_BONUS = 0.3
+ACTIVITY_WEIGHT = 0.1
+RECALL_BOOST = 0.1
+TEXT_MAX = 80
+# 场景动态权重（SceneAnalyzer）：你在 = 社交场景；她一个人 = 普通场景
+SCENES = {
+    "together": {"time_decay": 0.05, "importance": 0.2, "keyword": 0.25, "window_days": 30},
+    "alone": {"time_decay": 0.3, "importance": 0.3, "keyword": 0.35, "window_days": 3},
+}
+
+
+def cue_keywords(state, cue=""):
+    """What can remind her: your words, what she is usually doing now, what is due, what weighs on her."""
+    from .. import persona as PE
+    from . import mood as MO
+    from . import state as SS
+
+    her = SS.companion(state)
+    texts = [cue or ""]
+    if her:
+        texts.append(PE.doing_at(state["characters"][her], state["clock"]["minute"]) or "")
+        texts.extend(row["label"] for row in MO.brief(state, her).get("top") or [])
+    texts.extend(e["title"] for e in state["events"].values() if e["state"] == "pending")
+    return keywords(*texts)
+
+
+def _time_score(entry, now, scene):
+    age = max(0, now - CL.to_abs(entry["at"])) / 1440.0
+    if age > scene["window_days"]:
+        return math.exp(-(age - scene["window_days"]) * 2.0) * 0.1
+    return math.exp(-age * scene["time_decay"])
+
+
+def _keyword_score(entry, cue_keys):
+    if not cue_keys or not entry.get("keywords"):
+        return 0.0
+    mine, theirs = set(entry["keywords"]), set(cue_keys)
+    jaccard = len(mine & theirs) / float(len(mine | theirs))
+    contained = sum(0.2 for key in cue_keys if key in entry["content"])
+    return min(1.0, jaccard + contained)
+
+
+def score(entry, now, cue_keys, scene):
+    weights = SCENES[scene]
+    value = _time_score(entry, now, weights)
+    value += entry["importance"] * weights["importance"]
+    value += _keyword_score(entry, cue_keys) * weights["keyword"]
+    value += LAYER_BONUS[entry["layer"]] * LAYER_WEIGHT
+    if entry.get("pinned"):
+        value += PINNED_BONUS
+    if entry.get("edited"):
+        value += EDITED_BONUS
+    value += activity(entry, now) * ACTIVITY_WEIGHT
+    return value
+
+
+def recent_rounds(state, count=ROUNDS):
+    """The latest conversations / experiences still in 刚刚, newest first."""
+    pool = [e for e in entries(state) if e["layer"] == "now" and e["type"] in KEEPS]
+    pool.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)), reverse=True)
+    return pool[:count]
+
+
+def select(state, cue="", total=TOTAL_BRIEF):
+    """(rounds, picked): the recent rounds as they are, then the best-scored of the rest."""
+    now = CL.to_abs(state["clock"])
+    scene = "together" if (cue or "").strip() else "alone"
+    rounds = recent_rounds(state)
+    taken = set(e["id"] for e in rounds)
+    cue_keys = cue_keywords(state, cue)
+    scored = []
+    for entry in entries(state):
+        if entry["id"] in taken or entry["layer"] == "now" or entry["type"] == "action":
+            continue
+        value = score(entry, now, cue_keys, scene)
+        if value >= THRESHOLD:
+            scored.append((value, entry))
+    scored.sort(key=lambda pair: (-pair[0], -CL.to_abs(pair[1]["at"]), -_num(pair[1])))
+    return rounds, [entry for _value, entry in scored[: max(0, total - len(rounds))]]
+
+
+def _clip(text):
+    return text if len(text) <= TEXT_MAX else text[: TEXT_MAX - 1] + "…"
+
+
+def inject(state, cue="", total=TOTAL_BRIEF):
+    """What the context carries: the rounds (with your words and her quotes), then the recalled."""
+    rounds, picked = select(state, cue, total)
+    rows = []
+    for entry in rounds + picked:
+        item = {"layer": LAYER_LABELS[entry["layer"]], "when": when_label(state, entry["at"]), "text": _clip(entry["content"])}
+        if entry in rounds:
+            if entry.get("you"):
+                item["you"] = entry["you"]
+            if entry.get("quotes"):
+                item["said"] = list(entry["quotes"])
+        if entry.get("pinned"):
+            item["pinned"] = True
+        rows.append(item)
+    return rows
+
+
+def reinforce(state, ids):
+    """Recalled entries come back a little (from MemoryBank: what is thought of fades slower)."""
+    now = CL.to_abs(state["clock"])
+    wanted = set(ids)
+    touched = []
+    for entry in entries(state):
+        if entry["id"] in wanted and entry["layer"] != "now":
+            touch(entry, now, min(1.0, activity(entry, now) + RECALL_BOOST))
+            touched.append(entry["id"])
+    return touched
 
 
 # ---------------------------------------------------------------------------

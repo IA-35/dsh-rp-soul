@@ -326,6 +326,87 @@ def the_old_chain_becomes_her_memory():
     assert MG.state_v2_to_v3(new) is new, "a schema-3 state passes through"
 
 
+# ---------------------------------------------------------------------------
+# 注入：配额收割
+
+
+def rounds_come_first_newest_first():
+    state, persona = start()
+    for i in range(4):
+        state = commit(state, persona, at(0.05 * i), player_input="第%d句" % i, quotes=["回%d" % i],
+                       ops=[{"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "忙%d" % i}]}])
+    MEM.add(state, "days", "conversation", "前几天一起散步", 0.5)
+    rows = MEM.inject(state, "", MEM.TOTAL_BRIEF)
+    assert [r["you"] for r in rows[:3]] == ["第3句", "第2句", "第1句"], rows[:3]
+    assert rows[0]["said"] == ["回3"] and rows[0]["layer"] == "刚刚"
+    assert rows[3]["text"] == "前几天一起散步" and "you" not in rows[3], rows[3:]
+    assert len(rows) <= MEM.TOTAL_BRIEF
+
+
+def a_cue_brings_back_an_old_memory():
+    state, persona = start()
+    sea = MEM.add(state, "events", "summary", "那天我们去看海，风很大", 0.3, at={"day": 1, "minute": 600})
+    MEM.add(state, "events", "summary", "那天吃了一碗面", 0.3, at={"day": 1, "minute": 600})
+    state["clock"] = {"day": 20, "minute": 600}
+    _, quiet = MEM.select(state, "", MEM.TOTAL_BRIEF)
+    _, cued = MEM.select(state, "还记得看海那次吗", MEM.TOTAL_BRIEF)
+    assert cued and cued[0]["id"] == sea["id"], [e["content"] for e in cued]
+    now = MEM.CL.to_abs(state["clock"])
+    assert MEM.score(sea, now, MEM.cue_keywords(state, "还记得看海那次吗"), "together") > MEM.score(sea, now, MEM.cue_keywords(state, ""), "together")
+    assert quiet[0]["id"] != sea["id"], "without the cue the two tie and nothing pulls the sea forward"
+
+
+def the_threshold_drops_the_faint():
+    state, persona = start()
+    faint = MEM.add(state, "years", "chapter", "很久以前的一件小事", 0.0, at={"day": 1, "minute": 0})
+    MEM.touch(faint, faint["t0"], 0.03)
+    state["clock"] = {"day": 200, "minute": 0}
+    _, picked = MEM.select(state, "", MEM.TOTAL_BRIEF)
+    assert faint not in picked, "below 0.15 it is not brought up"
+    faint["pinned"] = True
+    _, picked = MEM.select(state, "", MEM.TOTAL_BRIEF)
+    assert faint in picked, "a pinned memory always clears the threshold"
+
+
+def her_secrets_are_in_context():
+    from rp_soul_engine.projections import context as CX
+    state, persona = start()
+    state = commit(state, persona, at(0), ops=[
+        {"op": "add_fact", "key": "her.letter", "text": "她抽屉里压着一封没寄出的信", "scope": "companion_only", "origin": "observed"},
+        {"op": "add_fact", "key": "umbrella", "text": "伞落在了门口", "scope": "shared", "origin": "observed"},
+    ])
+    knows = [f["text"] for f in CX.her_knows(state, "")]
+    assert "她抽屉里压着一封没寄出的信" in knows and "伞落在了门口" not in knows, knows
+    ctx = CX.brief(state, persona, cue="那封信")
+    assert ctx["her_knows"][0]["text"] == "她抽屉里压着一封没寄出的信"
+    assert "memories" in ctx and "recent" not in ctx and "last_quotes" not in ctx, sorted(ctx)
+
+
+def the_brief_stays_within_budget():
+    from rp_soul_engine.projections import context as CX
+    state, persona = start()
+    for i in range(50):
+        MEM.add(state, "events", "summary", "那些日子里第%d件事，" % i + "细节" * 60, 0.9, pinned=True)
+    ctx = CX.brief(state, persona, cue="细节")
+    assert ctx["size_bytes"] <= 6 * 1024, ctx["size_bytes"]
+    assert all(len(r["text"]) <= MEM.TEXT_MAX for r in ctx["memories"])
+
+
+def mentioning_it_makes_it_stronger():
+    state, persona = start()
+    sea = MEM.add(state, "days", "conversation", "那天我们去看海", 0.3)
+    # 配额只有 8 条：放 9 件同样分量的别的事，只有被你提起的那件才挤得进来
+    for i in range(9):
+        MEM.add(state, "days", "conversation", "别的事%d" % i, 0.3)
+    state["real_at"] = at(0)
+    later = commit(state, persona, at(10), player_input="想再去看海", ops=[beat(), glance()])
+    plain = commit(state, persona, at(10), player_input="今天好累", ops=[beat(), glance()])
+    now = MEM.CL.to_abs(later["clock"])
+    strong = [e for e in MEM.entries(later) if e["id"] == sea["id"]][0]
+    weak = [e for e in MEM.entries(plain) if e["id"] == sea["id"]][0]
+    assert MEM.activity(strong, now) > MEM.activity(weak, now), (MEM.activity(strong, now), MEM.activity(weak, now))
+
+
 def keywords_are_bigrams():
     assert MEM.keywords("下雨天") == ["下雨", "雨天"]
     assert MEM.keywords("Rain 很大") == ["很大", "rain"]
@@ -352,4 +433,10 @@ check("a summary nobody asked for is refused", a_summary_nobody_asked_for_is_ref
 check("ended events leave with the summary", ended_events_leave_with_the_summary)
 check("half a month asks for an archive", half_a_month_asks_for_an_archive)
 check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
+check("the recent rounds come first, newest first", rounds_come_first_newest_first)
+check("a cue brings back an old memory", a_cue_brings_back_an_old_memory)
+check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_faint)
+check("her secrets are in the context", her_secrets_are_in_context)
+check("the brief stays within 6 KB", the_brief_stays_within_budget)
+check("mentioning it makes it stronger", mentioning_it_makes_it_stronger)
 run("memories")

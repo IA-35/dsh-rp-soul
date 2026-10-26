@@ -84,6 +84,8 @@ GET_CONTEXT = _obj(
         "depth": F(S.Enum("brief", "full"), required=False, default="brief"),
         "want_twist": F(S.Bool(), required=False, default=False,
                         desc="玩家说“来点转折”时为 true：返回 2–3 个类别不同的转折候选"),
+        "cue": F(S.Str(0, 500), required=False, default="",
+                 desc="玩家这一句话原样（可截短）：拿它当线索，从她的记忆和她知道的事里挑出会被勾起来的那几条"),
         "persona": F(S.Nullable(PERSONA_PAYLOAD), required=False, default=None,
                      desc="磁盘上现在的人设包；给了就按它刷新这一局的静态事实（名字、外貌、语态、作息、心情基准），关系与剧情不动"),
     },

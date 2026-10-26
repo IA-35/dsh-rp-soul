@@ -295,7 +295,8 @@ def get_context(ctx, payload):
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
-    context = CX.full(state, persona, save_info(session)) if payload["depth"] == "full" else CX.brief(state, persona, save_info(session))
+    project = CX.full if payload["depth"] == "full" else CX.brief
+    context = project(state, persona, save_info(session), payload["cue"])
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
     if payload["want_twist"]:
         out["twists"] = list(persona.get("twists") or [])
