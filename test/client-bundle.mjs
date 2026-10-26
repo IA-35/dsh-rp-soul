@@ -630,4 +630,118 @@ const emptyMood = await renderUntil((t) => t.props['data-tab'] === 'mood' && tex
 has(textOf(emptyMood), '这局还没开局', '11. 没开局时情绪页给提示');
 has(textOf(emptyMood), 'soul_state', '11. 提示里指明会自动开局（soul_state）');
 
+// ---- 13. 「唤醒」页签 ----
+// 验的是：页签能切、读的是 /rp-soul/wake、开关与数字真的发对字段、状态区渲染对、
+// 没宿主与「现在叫醒一次」失败时的文案。
+hookState.length = 0;
+hookDeps.length = 0;
+childHooks.clear();
+responses.set('GET /rp-soul/state', () => jsonResponse(statePayload));
+responses.set('GET /rp-soul/wake', () => jsonResponse({
+  mounted: true,
+  config: {
+    enabled: true, sessionId: 's_test01', dailyLimit: 8, dailyTokens: 120000,
+    quiet: '23:30-07:00', missYou: 6, routine: true,
+  },
+  state: {
+    at: '2026-10-26T21:40:00+08:00', reason: 'plan', why: '这是我说好做到的时间：洗澡',
+    when: '21:40', day: '2026-10-26', count: 3, tokens: 5120, streak: 1,
+    lastError: null, lastDeliveredAt: '2026-10-26T13:40:00+08:00', retryAt: null,
+  },
+  sessions: [
+    { sessionId: 's_test01', title: '雨夜诊所', updatedAt: 2, running: false },
+    { sessionId: 's_other2', title: '另一个会话', updatedAt: 1, running: false },
+  ],
+  engineSession: { session_id: 's_test01', revision: 7, turn: 3 },
+}));
+responses.set('POST /rp-soul/config', () => jsonResponse({ ok: true }));
+responses.set('POST /rp-soul/wake/now', () => jsonResponse({ ok: true, count: 4 }));
+
+const wakeFrom = await renderUntil((t) => t.props['data-render-state'] === 'ready');
+has(textOf(wakeFrom), '唤醒', '13. 有「唤醒」页签');
+findButton(wakeFrom, '唤醒').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const wakeTree = await renderUntil((t) => t.props['data-tab'] === 'wake' && textOf(t).includes('下次'));
+eq(wakeTree.props['data-tab'], 'wake', '13. 切到「唤醒」页');
+ok(calls.some((c) => c.method === 'GET' && c.url === '/rp-soul/wake'), '13. 唤醒页读 /wake');
+const wakeText = textOf(wakeTree);
+has(wakeText, '让她按自己的时间醒来', '13. 有总开关');
+has(wakeText, '她说好做到的时间', '13. 理由显示中文（plan）');
+has(wakeText, '这是我说好做到的时间：洗澡', '13. 显示理由原文');
+has(wakeText, '已就绪', '13. 挂载状态');
+has(wakeText, '今天已唤醒 3 次', '13. 显示今天次数');
+has(wakeText, '用掉 5120 token', '13. 显示今天 token');
+has(wakeText, '雨夜诊所（当前指定）', '13. 会话下拉标出当前指定');
+has(wakeText, '现在叫醒一次', '13. 有手动叫醒按钮');
+hasNot(wakeText, '缺桌面宿主', '13. 挂载时不显示缺宿主');
+
+// 总开关：取消勾选 → wakeEnabled: false
+const wakeToggle = findAll(wakeTree, (n) => n.type === 'input' && n.props.type === 'checkbox')[0];
+ok(wakeToggle !== undefined, '13. 找得到总开关');
+calls.length = 0;
+wakeToggle.props.onChange({ target: { checked: false } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const offCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config');
+ok(offCall !== undefined, '13. 关掉开关发 POST /config');
+eq(offCall.body.wakeEnabled, false, '13. 关掉开关写 wakeEnabled: false');
+
+// 会话下拉：换一场 → wakeSessionId
+const sessionSelect = findAll(wakeTree, (n) => n.type === 'select' && n.props.value === 's_test01')[0];
+ok(sessionSelect !== undefined, '13. 找得到会话下拉');
+calls.length = 0;
+sessionSelect.props.onChange({ target: { value: 's_other2' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const sidCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config');
+eq(sidCall.body.wakeSessionId, 's_other2', '13. 换会话写 wakeSessionId');
+
+// 数字框：每日次数 / token / 想你小时
+calls.length = 0;
+const numberInputs = findAll(wakeTree, (n) => n.type === 'input' && n.props.type === 'number');
+ok(numberInputs.length >= 3, '13. 有每日次数、token、想你三个数字框');
+numberInputs[0].props.onChange({ target: { value: '5' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const limitCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config');
+eq(limitCall.body.wakeDailyLimit, 5, '13. 每日次数写 wakeDailyLimit');
+calls.length = 0;
+numberInputs[1].props.onChange({ target: { value: '90000' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+eq(calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config').body.wakeDailyTokens, 90000, '13. token 写 wakeDailyTokens');
+calls.length = 0;
+numberInputs[2].props.onChange({ target: { value: '9' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+eq(calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config').body.wakeMissYou, 9, '13. 想你小时写 wakeMissYou');
+
+// 安静时段：失焦才写，避免每敲一个字就存盘
+const quietInput = findAll(wakeTree, (n) => n.type === 'input' && n.props.value === '23:30-07:00')[0];
+ok(quietInput !== undefined, '13. 找得到安静时段输入框');
+calls.length = 0;
+quietInput.props.onChange({ target: { value: '01:00-06:00' } });
+has(clientSrc, 'setQuietDraft', '13. 安静时段先存草稿');
+quietInput.props.onBlur({ target: { value: '01:00-06:00' } });
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const quietCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/config');
+ok(quietCall !== undefined, '13. 失焦写安静时段');
+eq(quietCall.body.wakeQuiet, '01:00-06:00', '13. 写 wakeQuiet');
+
+// 手动叫醒
+calls.length = 0;
+findButton(wakeTree, '现在叫醒一次').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+ok(calls.some((c) => c.method === 'POST' && c.url === '/rp-soul/wake/now'), '13. 按钮发 POST /wake/now');
+
+// 失败态：没挂载 + 上次没叫成
+responses.set('GET /rp-soul/wake', () => jsonResponse({
+  mounted: false,
+  config: { enabled: false, sessionId: '', dailyLimit: 12, dailyTokens: 300000, quiet: '00:00-08:00', missYou: 6, routine: true },
+  state: { at: null, reason: null, why: null, when: null, day: '2026-10-26', count: 0, tokens: 0, streak: 0, lastError: '会话不在了', lastDeliveredAt: null, retryAt: null },
+  sessions: [],
+  engineSession: null,
+}));
+findButton(wakeTree, '刷新').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const bareTree = await renderUntil((t) => t.props['data-tab'] === 'wake' && textOf(t).includes('缺桌面宿主'));
+has(textOf(bareTree), '缺桌面宿主', '13. 没挂载时标出缺宿主');
+has(textOf(bareTree), '上次没叫成：会话不在了', '13. 显示上次失败原因');
+has(textOf(bareTree), '唤醒线关着', '13. 关着时给出提示');
+
 done('client-bundle');

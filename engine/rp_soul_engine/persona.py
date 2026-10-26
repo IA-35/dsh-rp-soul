@@ -133,7 +133,9 @@ def from_legacy(raw):
     cast = [m for m in raw.get("cast") or [] if isinstance(m, dict)]
     member = next((m for m in cast if m.get("tier", "major") == "major"), cast[0] if cast else {})
     names = {p.get("id"): p.get("name") or p.get("id") for p in raw.get("places") or [] if isinstance(p, dict)}
-    out = {k: v for k, v in raw.items() if k not in LEGACY_KEYS}
+    # 旧存档里的 persona 还带着旧引擎自己的字段（start / casts 之类）；新 schema 不认识的一律丢掉，
+    # 否则 persona_v1_to_v2 会在「未知字段」上把整次迁移拒掉。
+    out = {k: v for k, v in raw.items() if k not in LEGACY_KEYS and k in PERSONA.fields}
     for key in COMPANION_KEYS:
         # 旧引擎存库时把没写的可选字段补成 None / ""；新 schema 不收这两种值，没写就是没写
         if member.get(key) not in (None, ""):

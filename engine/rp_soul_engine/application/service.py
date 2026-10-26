@@ -989,7 +989,9 @@ def next_wake(ctx, payload):
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
     state, persona = session["state"], session["persona"]
-    now = CL.parse_iso(payload["now"]) if payload["now"] else None
+    # The story clock stands on the last settled turn; a save without one (an
+    # older build, or one migrated from the old engine) stands on right now.
+    now = CL.parse_iso(payload["now"]) if payload["now"] else CL.parse_iso(now_iso())
     pick, rows = WK.next_wake(
         state,
         persona,

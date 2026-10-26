@@ -18,6 +18,7 @@ from stdio import Sidecar
 from rp_soul_engine import opening
 from rp_soul_engine.domain import clock as CL
 from rp_soul_engine import persona as PE
+from rp_soul_engine.domain import structure as ST
 from rp_soul_engine.domain import wake as WK
 
 DATA = e2e.temp_dir()
@@ -305,6 +306,24 @@ def old_state_without_plan_still_reads(s):
     assert out["plan"] is None, out
 
 
+def old_state_without_real_at_still_wakes():
+    """迁移来的存档没有 real_at / real_start：时钟站在此刻，想你了照样能算出来。"""
+    state = fresh()
+    for key in ("real_at", "real_start"):
+        state.pop(key, None)
+    now = datetime(2026, 10, 26, 21, 0, tzinfo=TZ)
+    pick, rows = WK.next_wake(state, None, 6, 0, True, ST.WAKE_QUIET, now)
+    miss = [row for row in rows if row["reason"] == "miss_you"]
+    assert miss, rows
+    at = CL.parse_iso(miss[0]["at_real"])
+    assert at == now + timedelta(hours=6), miss[0]
+    # 没有 real_at 时，别的候选（比如她自己的安排）也要照样有真实时刻
+    state["plan"] = {"note": "去洗澡", "until": CL.add_minutes(state["clock"], 20), "set_turn": 1}
+    pick, rows = WK.next_wake(state, None, 6, 0, True, ST.WAKE_QUIET, now)
+    assert pick["reason"] == "plan", pick
+    assert CL.parse_iso(pick["at_real"]) == now + timedelta(minutes=20), pick
+
+
 def a_quiet_commit(ops):
     return {
         "action_mode": "continue",
@@ -372,6 +391,7 @@ CASES = [
     ("together 关掉时她过自己的时间", with_sc(together_false_allows_her_own_time)),
     ("你说过话的时刻被记下", with_sc(player_input_records_the_last_word)),
     ("旧存档没有 plan 也能读", with_sc(old_state_without_plan_still_reads)),
+    ("迁移来的存档没有 real_at 也能算", old_state_without_real_at_still_wakes),
     ("安排做完了就清掉", plan_is_dropped_once_it_is_done),
     ("安排没到点就留着", plan_survives_a_turn_that_ends_before_its_time),
 ]

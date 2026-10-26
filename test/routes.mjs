@@ -222,4 +222,48 @@ writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
 const pf3 = await call('GET', '/rp-soul/engine/persona-file');
 eq(pf3.parsed.front.id, 'new_world', '11. persona.md 存在时散文前置块被忽略');
 
+// ---- 12. 唤醒页的三条接口 ----
+// 这里没有桌面宿主，所以唤醒线没挂载：验的是「没挂载时不崩、字段照样能存」，
+// 真正的唤醒逻辑与送达在 test/wake.mjs 里单独验。
+const wr = await call('GET', '/rp-soul/wake');
+eq(wr.status, 200, '12. GET /wake 200');
+eq(wr.parsed.mounted, false, '12. 没宿主时 mounted=false');
+ok(wr.parsed.config && typeof wr.parsed.config === 'object', '12. /wake 回配置');
+eq(Array.isArray(wr.parsed.sessions), true, '12. /wake 回会话数组');
+eq(wr.parsed.sessions.length, 0, '12. 没宿主时会话清单为空');
+eq(wr.parsed.config.dailyLimit, 12, '12. 每日次数默认 12');
+eq(wr.parsed.config.dailyTokens, 300000, '12. 每日 token 默认 300000');
+eq(wr.parsed.config.quiet, '00:00-08:00', '12. 安静时段默认 00:00-08:00');
+eq(wr.parsed.config.missYou, 6, '12. 想你阈值默认 6 小时');
+eq(wr.parsed.config.routine, true, '12. 作息换段默认开');
+eq(wr.parsed.config.enabled, false, '12. 唤醒默认关');
+
+const wp = await call('POST', '/rp-soul/wake', { wakeDailyLimit: 7, wakeQuiet: '01:00-06:00', wakeEnabled: true, wakeMissYou: 9 });
+eq(wp.status, 200, '12. POST /wake 200');
+const storedWake = JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8'));
+eq(storedWake.wakeDailyLimit, 7, '12. POST /wake 写进 store');
+eq(storedWake.wakeQuiet, '01:00-06:00', '12. POST /wake 写安静时段');
+eq(storedWake.wakeEnabled, true, '12. POST /wake 写开关');
+eq(storedWake.wakeMissYou, 9, '12. POST /wake 写想你阈值');
+
+const wpBad = await call('POST', '/rp-soul/wake', { wakeQuiet: '乱填', wakeDailyLimit: -5 });
+const storedBad = JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8'));
+eq(storedBad.wakeQuiet, '00:00-08:00', '12. 乱的安静时段回落默认值');
+eq(storedBad.wakeDailyLimit, 0, '12. 负数次数夹到 0');
+
+const wr2 = await call('GET', '/rp-soul/wake');
+eq(wr2.parsed.config.sessionId, '', '12. 会话 id 默认空');
+
+const wn = await call('POST', '/rp-soul/wake/now', {});
+eq(wn.status, 200, '12. POST /wake/now 200');
+eq(wn.parsed.ok, false, '12. 没挂载时叫不醒（ok=false）');
+has(String(wn.parsed.error), '没挂载', '12. 没挂载时给出原因');
+
+// /config 也认唤醒字段（设置页的零散开关走同一条 POST）
+const wc = await call('POST', '/rp-soul/config', { wakeRoutine: false, wakeSessionId: '  s_zz  ' });
+eq(wc.status, 200, '12. POST /config 认唤醒字段');
+const storedCfg = JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8'));
+eq(storedCfg.wakeRoutine, false, '12. /config 能关作息换段');
+eq(storedCfg.wakeSessionId, 's_zz', '12. /config 能定会话（去掉首尾空格）');
+
 done('routes');
