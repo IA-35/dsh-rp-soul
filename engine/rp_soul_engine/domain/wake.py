@@ -71,9 +71,20 @@ def quiet_end(clock, quiet):
     return out
 
 
-def to_real(state, clock):
-    """The wall-clock moment this story-clock moment lands on."""
+def _base(state, now=None):
+    """The wall-clock moment the current story clock stands on.
+
+    Saves written before this line existed (or migrated from the old engine)
+    carry neither `real_at` nor `real_start`; the story clock then stands on
+    the moment we are asked, which is what the next turn will assume anyway.
+    """
     base = CL.parse_iso(state.get("real_at")) or CL.parse_iso(state.get("real_start"))
+    return base or now
+
+
+def to_real(state, clock, now=None):
+    """The wall-clock moment this story-clock moment lands on."""
+    base = _base(state, now)
     if base is None:
         return None
     return (base + timedelta(minutes=CL.minutes_between(state["clock"], clock))).isoformat(timespec="seconds")
@@ -125,7 +136,7 @@ def _event_candidates(state):
 def _miss_you_candidates(state, hours, streak=0, now=None):
     if not hours:
         return []
-    base = CL.parse_iso(state.get("last_player_at")) or CL.parse_iso(state.get("real_at"))
+    base = CL.parse_iso(state.get("last_player_at")) or _base(state, now)
     if base is None:
         return []
     span = ST.WAKE_MISS_YOU_NEXT
@@ -135,7 +146,7 @@ def _miss_you_candidates(state, hours, streak=0, now=None):
     at = base + timedelta(hours=gap)
     if now is not None and at <= now:
         at = now + timedelta(minutes=1)
-    clock = _clock_at_real(state, at)
+    clock = _clock_at_real(state, at, now)
     if clock is None:
         return []
     player = (state["characters"].get(state["player_id"]) or {}).get("name") or "你"
@@ -146,9 +157,9 @@ def _miss_you_candidates(state, hours, streak=0, now=None):
     )]
 
 
-def _clock_at_real(state, moment):
+def _clock_at_real(state, moment, now=None):
     """Inverse of to_real: which story-clock minute a wall-clock moment is."""
-    base = CL.parse_iso(state.get("real_at")) or CL.parse_iso(state.get("real_start"))
+    base = _base(state, now)
     if base is None:
         return None
     minutes = int((moment - base).total_seconds() // 60)
@@ -201,7 +212,7 @@ def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quie
                     row["why"] = "到 %s 了，按平常该「%s」了" % (CL.hm(clock["minute"]), row["doing"])
         row["at"] = clock
         row["clock_label"] = CL.label(clock)
-        row["at_real"] = row.get("at_real") or to_real(state, clock)
+        row["at_real"] = row.get("at_real") or to_real(state, clock, now)
         out.append(row)
     out.sort(key=lambda row: (CL.to_abs(row["at"]), ST.WAKE_REASONS.index(row["reason"])))
     return out
