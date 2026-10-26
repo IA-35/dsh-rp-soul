@@ -40,6 +40,7 @@ ok(clamped === 'threw', '2. maxBytes 过小时 Config() 直接抛错');
 // ---- 3. 真实 cordis 挂载 ----
 const app = new Context();
 const sections = new Map();
+const contexts = new Map();
 const routes = [];
 app.provide('systemPrompt', {
   // 与宿主 SECTION_ORDERS 对齐：persona-prefix 在最前，persona-suffix 在最后。
@@ -48,7 +49,10 @@ app.provide('systemPrompt', {
     if (name === 'DEPLOYMENT_PERSONA_SUFFIX') return 10320;
     return 0;
   },
+  // 与宿主 CONTEXT_ORDERS 对齐，验证账本落在动态上下文的末尾。
+  getContextOrder(name) { return name === 'WEB_SURFACE' ? 210 : undefined; },
   section(def) { sections.set(def.name, def); return () => { sections.delete(def.name); }; },
+  context(def) { contexts.set(def.name, def); return () => { contexts.delete(def.name); }; },
 });
 app.provide('webServer', {
   register(def) { routes.push(def); return () => { const i = routes.indexOf(def); if (i >= 0) routes.splice(i, 1); }; },
@@ -59,10 +63,12 @@ const fiber = app.plugin(plugin.apply, plugin.Config({ files: ['SOUL.md', 'TONE.
 await fiber;
 
 ok(sections.has('soul-persona'), '3. 挂载后 soul-persona section 已注册');
-ok(sections.has('soul-engine'), '3. 挂载后 soul-engine section 已注册');
 eq(sections.get('soul-persona').order, 10321, '3. soul-persona 排在系统提示最末（persona-suffix 之后）');
-eq(sections.get('soul-engine').order, 10322, '3. soul-engine 紧跟人设，仍在最末');
-ok(sections.get('soul-engine').order > 9900, '3. 账本快照排在结构化输出之后，不拖累前面的缓存');
+// 账本改走动态 context：系统提示词必须完全不含每回合会变的内容。
+ok(!sections.has('soul-engine'), '3. soul-engine 不再是系统提示词的 section');
+ok(contexts.has('soul-engine'), '3. soul-engine 注册为动态 runtime context');
+eq(contexts.get('soul-engine').order, 220, '3. 账本落在动态上下文末尾（WEB_SURFACE 210 之后）');
+eq(contexts.get('soul-engine').interpolate, false, '3. 账本关闭插值');
 eq(routes.length, 1, '3. 注册了 1 条路由');
 eq(routes[0].kind, 'prefix', '3. 路由 kind=prefix');
 eq(routes[0].path, '/rp-soul', '3. 路由 path');
@@ -111,6 +117,7 @@ eq(JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8')).maxByt
 // ---- 6. fiber 释放后全部回收 ----
 await fiber.dispose();
 eq(sections.size, 0, '6. dispose 后 section 已全部撤回');
+eq(contexts.size, 0, '6. dispose 后动态 context 已全部撤回');
 eq(routes.length, 0, '6. dispose 后路由已撤');
 
 done('mount');

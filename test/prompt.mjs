@@ -38,7 +38,9 @@ const app = new Context();
 let fiber;
 let promptFiber;
 const assemble = async (agent, signal) => app.systemPrompt.assemble(agent ? assembleContextFor(agent, signal) : {});
-const engineText = (assembly) => assembly.sections.find((s) => s.name === 'soul-engine')?.text ?? '';
+// 账本现在走「有序动态 runtime context」，不再是系统提示词的 section——
+// 系统提示词必须恒定，前缀才能一路命中缓存。
+const engineText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-engine')?.text ?? '';
 try {
   const a = await commit(await start(), '重启前留下的悬念A');
   const b = await commit(await start(), '另一局留下的悬念B');
@@ -52,10 +54,19 @@ try {
   const first = await assemble(agentA);
   has(engineText(first), '重启前留下的悬念A', '1. 第一次装配就从已保存的局恢复账本');
   has(renderPrompt(first), persona.prose, '1. 最终系统提示保留人设');
-  has(renderPrompt(first), '心情：', '1. 最终系统提示实际包含引擎状态');
+  has(engineText(first), '心情：', '1. 动态上下文实际包含引擎状态');
+  // 关键回归：账本绝不能回到系统提示词里，否则前缀哈希每回合都变、缓存全废。
+  hasNot(renderPrompt(first), '心情：', '1. 系统提示词里不含引擎状态（前缀必须恒定）');
   const next = await commit(a, '外部更新后的悬念A');
   has(engineText(await assemble(agentA)), '外部更新后的悬念A', '2. 下一次装配重新读取数据，不依赖工具更新缓存');
   eq(JSON.parse(readFileSync(mappingPath)).shared.revision, next.revision, '2. 会话映射也追上最新 revision');
+
+  // 最要紧的一条回归：账本变了，系统提示词必须**逐字节不变**。
+  // 缓存按整段前缀的字节哈希命中，只要有一个字节变了，整个前缀就废。
+  const promptA = renderPrompt(await assemble(agentA));
+  const again = await commit(next, '外部更新后的悬念A');
+  const promptB = renderPrompt(await assemble(agentA));
+  eq(promptB, promptA, '2. 账本更新后系统提示词逐字节不变（缓存前缀可一直命中）');
 
   await fiber.dispose();
   fiber = app.plugin(plugin, plugin.Config({ files: ['SOUL.md'] }));
@@ -64,7 +75,7 @@ try {
 
   const store = JSON.parse(readFileSync(storePath));
   writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'session' }));
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: next, [agentB.id]: b }));
+  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: again, [agentB.id]: b }));
   const [pa, pb] = await Promise.all([assemble(agentA), assemble(agentB)]);
   has(engineText(pa), '外部更新后的悬念A', '4. 并行装配 A 使用自己的账本');
   hasNot(engineText(pa), '另一局留下的悬念B', '4. A 不串 B 的状态');

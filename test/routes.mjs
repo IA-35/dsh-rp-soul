@@ -18,6 +18,7 @@ const mod = await import(new URL('../lib/index.js', import.meta.url).href);
 // ---- mock ctx ----
 const routes = [];
 const sectionDefs = new Map();
+const contextDefs = new Map();
 const tools = [];
 const ctx = {
   effect(fn) { const d = fn(); return () => { if (typeof d === 'function') d(); }; },
@@ -37,16 +38,19 @@ const ctx = {
       if (name === 'DEPLOYMENT_PERSONA_SUFFIX') return 10300;
       return 0;
     },
+    getContextOrder(name) { return name === 'WEB_SURFACE' ? 210 : undefined; },
     section(def) { sectionDefs.set(def.name, def); return () => {}; },
+    context(def) { contextDefs.set(def.name, def); return () => {}; },
   },
 };
 mod.apply(ctx, { files: ['SOUL.md', 'STYLE.md'], maxBytes: 65536 });
 
 // ---- 1. section ----
 ok(sectionDefs.has('soul-persona'), '1. soul-persona section 已注册');
-ok(sectionDefs.has('soul-engine'), '1. soul-engine section 已注册');
+ok(!sectionDefs.has('soul-engine'), '1. soul-engine 不再是 section（系统提示词必须恒定）');
+ok(contextDefs.has('soul-engine'), '1. soul-engine 注册为动态 runtime context');
 eq(sectionDefs.get('soul-persona').order, 10301, '1. 人设排在 persona-suffix 之后，在最末');
-eq(sectionDefs.get('soul-engine').order, 10302, '1. soul-engine 紧跟人设');
+eq(contextDefs.get('soul-engine').order, 220, '1. 账本落在动态上下文末尾（WEB_SURFACE 之后）');
 eq(tools.length, 3, '1. 注册了 3 个工具');
 eq(tools.map((t) => t.name).sort().join(','), 'soul_admin,soul_commit,soul_state', '1. 三个工具名');
 const text = sectionDefs.get('soul-persona').text();
