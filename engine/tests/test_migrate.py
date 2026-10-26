@@ -128,6 +128,23 @@ def stored_legacy_persona():
     return raw
 
 
+def a_stored_persona_with_engine_own_fields_upgrades():
+    """旧引擎自己的字段（start / goal / 旧 decision）不该让迁移失败：不认识就丢掉。
+
+    真实的旧库里存着 ``start: {day, minute}``——旧引擎的虚拟时钟起点，新引擎按真实墙钟走，
+    这个字段已经没有意义。迁移曾因为它报「未知字段：start」整库失败（备份能还原，但那一局打不开）。
+    """
+    raw = stored_legacy_persona()
+    raw["start"] = {"day": 1, "minute": 1290}
+    raw["rules"] = list(raw.get("rules") or [])
+    raw["cast"][0]["decision"] = {"core_value": "不喧哗", "prefers": ["具体的进度"]}
+    persona = MG.persona_v1_to_v2(raw)
+    assert "start" not in persona, persona.keys()
+    major = next(m for m in raw["cast"] if m.get("tier", "major") == "major")
+    assert persona["name"] == major["name"], persona
+    assert persona["routine"], persona
+
+
 # ---------------------------------------------------------------------------
 # 纯函数层
 
@@ -267,6 +284,7 @@ check("facts and events are trimmed to the two of you", facts_and_events_are_tri
 check("the upgraded state passes the invariants", the_upgraded_state_passes_the_invariants)
 check("the old persona becomes her", the_old_persona_becomes_her)
 check("a stored persona with blank optional fields upgrades", a_stored_persona_with_blank_fields_upgrades)
+check("a stored persona with the old engine's own fields still upgrades", a_stored_persona_with_engine_own_fields_upgrades)
 check("events with someone else are dropped", events_with_someone_else_are_dropped)
 check("the upgrade does not touch its input", the_input_is_not_touched)
 check("a new state passes through untouched", a_new_state_passes_through)
