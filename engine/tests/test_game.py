@@ -96,11 +96,11 @@ def agency_offers_candidates(s):
             assert len(option["because"]) <= 90, option
 
 
-def mood_moves_after_a_refusal(s):
+def a_refusal_leaves_her_own_mood_alone(s):
+    """她自己选的回应不进她自己的心情：否则低落→拒绝→更低落会一路滑进崩溃档。"""
     sid, rev, _ = e2e.start(s)
     before = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     assert before["base"] == 55, before
-    assert before["value"] <= 55, before
     ops = [
         {"op": "enter_scene", "character_id": "lin_wan"},
         {"op": "npc_response", "npc_id": "lin_wan", "response": "refuse", "note": "她把椅子往后推了半步。"},
@@ -108,20 +108,19 @@ def mood_moves_after_a_refusal(s):
     ]
     play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
     after = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
-    assert after["value"] < before["value"], (before["value"], after["value"])
-    labels = [t["label"] for t in after["thoughts"]]
-    assert labels, after
-    assert any("拒" in label for label in labels), labels
-    assert after["thoughts"][0]["kind"] == "memory", after["thoughts"]
+    memories = [t for t in after["thoughts"] if t["kind"] == "memory"]
+    assert memories == [], memories
 
 
 def mood_panel_has_thresholds_and_decay(s):
     sid, rev, _ = e2e.start(s)
     play(s, sid, rev, ops=[
+        {"op": "add_fact", "key": "late", "text": "你迟到了一个钟头", "visibility": "private",
+         "known_by": ["lin_wan"], "origin": "observed"},
         {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "refuse", "note": "她没接话。"},
+        {"op": "add_thought", "npc_id": "lin_wan", "label": "等了很久", "delta": -6, "basis_fact_id": "f1"},
         npc_action(),
-    ], mode="attempt", acts_on=["lin_wan"])
+    ])
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     for key in ("value", "band", "base", "thoughts", "thresholds"):
         assert key in panel, sorted(panel)
@@ -505,7 +504,7 @@ def settings_activity_page_reads_the_turn_log(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
         {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 2, "reason": "你把伞留给了她"},
-        npc_action(npc="lin_wan", kind="approach", text="她把病历本抱到胸前。"),
+        npc_action(npc="lin_wan", kind="observe", text="她把病历本抱到胸前。"),
     ])
     data = s.ok("debug-activity", {"session_id": sid, "limit": 10})
     assert data["counts"]["turns"] >= 2, data["counts"]
@@ -517,9 +516,9 @@ def settings_activity_page_reads_the_turn_log(s):
     assert latest["kind"] == "commit", latest
     assert latest["mode"] == "continue", latest
     assert latest["summary"], latest
-    assert [a["kind"] for a in latest["actions"]] == ["approach"], latest["actions"]
+    assert [a["kind"] for a in latest["actions"]] == ["observe"], latest["actions"]
     action = latest["actions"][0]
-    assert action["kind_label"] == "主动接近", action
+    assert action["kind_label"] == "在旁观察", action
     assert action["text"] == "她把病历本抱到胸前。", action
     assert action["name"] == "林晚", action
     rel = latest["relations"][0]
@@ -554,7 +553,7 @@ check("a stale revision is refused with the current one", with_sc(stale_revision
 check("brief context stays under 6 KB", with_sc(brief_context_is_small))
 check("full context carries the cast but no world", with_sc(full_context_has_the_cast))
 check("agency offers candidates", with_sc(agency_offers_candidates))
-check("a refusal lowers the mood", with_sc(mood_moves_after_a_refusal))
+check("a refusal leaves her own mood alone", with_sc(a_refusal_leaves_her_own_mood_alone))
 check("the mood panel shows thresholds and decay", with_sc(mood_panel_has_thresholds_and_decay))
 check("debug delete removes exactly one thought", with_sc(debug_delete_removes_one_thought))
 check("at most twelve memory thoughts are kept", with_sc(thought_cap_is_enforced))

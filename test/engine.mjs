@@ -78,6 +78,10 @@ mod.apply(ctx, { files: ['SOUL.md'], maxBytes: 65536 });
 // ---- 1. 三个工具都注册了 ----
 eq(tools.size, 3, '1. 注册了 3 个工具');
 ok(tools.has('soul_state') && tools.has('soul_commit') && tools.has('soul_admin'), '1. 工具名齐全');
+const commitProps = tools.get('soul_commit').parameters.properties;
+const bridge = await import(new URL('../lib/engine-bridge.js', import.meta.url).href);
+eq(commitProps.content_tags.items.enum, [...bridge.CONTENT_TAGS], '1. content_tags 枚举就是引擎的标签表');
+eq(commitProps.action_mode.enum, [...bridge.ACTION_MODES], '1. action_mode 枚举就是引擎的五档');
 
 const exec = { signal: undefined, agent: { id: 'conv-1' } };
 const call = (name, args) => tools.get(name).execute(args, exec);
@@ -127,6 +131,8 @@ const committed = await call('soul_commit', {
   player_input: '我把伞靠在门边，问她今晚忙不忙。',
   operations: [
     { op: 'npc_response', npc_id: 'zhou_yi', response: 'partial', note: '还行，就是雨大。' },
+    // 回应本身不进他自己的心情；信任变化才会留下一条记忆，供第 8–9 步删
+    { op: 'relationship', from: 'zhou_yi', to: 'player', trust_delta: 1, reason: '你问起他的近况' },
   ],
   content_tags: [],
   summary: '玩家进门，和周逸搭了两句。',
@@ -168,7 +174,7 @@ if (panel.thoughts.length > 0) {
   ok(!after.thoughts.some((t) => t.id === victim.id), '9. 该条已消失');
   ok(Array.isArray(after.deletions) && after.deletions.length >= 1, '9. 留下删除审计');
 } else {
-  ok(false, '9. 开局居然没有任何情绪条目（预期至少有情境类）');
+  ok(false, '9. 第 6 步的信任变化没有留下情绪条目');
 }
 
 // ---- 10. undo：撤回上一回合 ----

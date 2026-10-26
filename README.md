@@ -296,17 +296,23 @@ cast:
 `{label(≤20字), delta(-30..+15), kind, source_fact_id, since_turn, expires_at, decay}`
 ——**引擎自己算情境类**（在场 / 缺席 / 离开太久 / 事件到期 / 张力高 / 深夜打扰），
 模型只能通过 `add_thought` 加记忆类，且必须挂到一个事实 id 上（不能凭空扣心情）。
+引擎自己写的记忆类只来自**别人对他做了什么**：信任变化（×3）、关系阶段前进、事情搞砸。
+**他自己选的回应（拒绝 / 配合）不进他自己的心情**——否则「低落 → 只能冷回应 → 更低落」会一路滑进崩溃档。
 衰减两种：`linear`（默认，随时间等比缩小，`|delta| < 1` 才删）与 `none`（到点一刀切）。
 同一角色最多 20 条（12 记忆 + 8 情境），超了按「原始强度」淘汰最弱的。
 
-档位只做**行为门禁**，不产生精神状态：
+档位只做**行为门禁**，不产生精神状态。档位按**回合开始时**的心情判定（就是模型在 `soul_state`
+里看到的那一档），本回合中途加减想法不改变这回合的门禁：
 
 | 档位 | 区间（默认） | 影响 |
 |---|---|---|
 | `open` | ≥ 75 | 允许关系阶段前进；`npc_action` 的 `significant` 冷却 −1 回合 |
 | `normal` | 45–75 | 无额外约束 |
-| `closed` | 25–45 | 驳回 `stage_advance`；`npc_response` 只允许 refuse/negotiate/surface，回应 ≤30 字 |
-| `break` | < 25 | 本回合强制一条 `npc_action(significant, provoke/leave)`，结束即恢复 |
+| `closed` | 25–45 | 驳回 `stage_advance`；`npc_response` 只允许 refuse/negotiate/surface，回应（`note`）≤30 字 |
+| `break` | < 25 | 驳回 `npc_response` 与 `stage_advance`；在场的他本回合必须有一条 `npc_action(significant: true, kind: provoke/leave)`，不受冷却限制，并顶替玩家 attempt 所需的回应；心情回升即恢复 |
+
+非崩溃档下，`significant: true` 的 `npc_action` 必须写 `kind`，且只能取本回合开始时引擎给出的
+agency 候选里的种类（`soul_state` 的 `agency`）；不重大的行动不受此限。
 
 阈值可在 `persona.md` 的 `mood_thresholds` 里改（必须满足 `0 ≤ break < closed < open ≤ 100`，
 不满足**报错而不回退默认**）。玩家自己的心情**不入库**——只记录 NPC 怎么想。

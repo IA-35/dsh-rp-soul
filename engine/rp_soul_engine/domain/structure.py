@@ -124,10 +124,19 @@ THOUGHT_DURATION = {
 }
 
 # 行为门禁：band + op → 拒绝原因（None = 放行）
+# 档位按回合开始时的心情判定：模型在 brief 里看到的是哪一档，本回合就按哪一档管。
 MOOD_GATE = {
     "closed": {"stage_advance": "他现在的状态不会接受关系推进"},
-    "break": {"npc_response": "他现在没法好好回应，只能挑衅或离开"},
+    "break": {
+        "npc_response": "他现在没法好好回应，只能挑衅或离开",
+        "stage_advance": "他现在的状态不会接受关系推进",
+    },
 }
+# 收缩档下 npc_response 只能取这些回应
+MOOD_RESPONSES = {"closed": ("refuse", "negotiate", "surface")}
+# 崩溃档：在场的他本回合必须有一条这些种类的重大 npc_action（不受冷却限制），
+# 它同时顶替玩家 attempt 所需的 npc_response
+BREAK_ACTION_KINDS = ("provoke", "leave")
 
 # 情境类想法的来源与幅度（引擎自己算，模型一个字都不写）
 SITUATIONAL_DELTA = {
@@ -150,14 +159,9 @@ SITUATIONAL_EXPIRES = {
     "condition": None,
     "late_hour": 6 * HOUR,
 }
-# 记忆类：由 op 触发，必须带 source_fact_id
-RESPONSE_THOUGHTS = {
-    "refuse": (-12, "refuse"),
-    "negotiate": (-4, "tone"),
-    "partial": (2, "tone"),
-    "surface": (-6, "tone"),
-    "genuine": (8, "tone"),
-}
+# 记忆类：由 op 触发，必须带 source_fact_id。
+# NPC 自己选的回应（拒绝/配合）不进他自己的心情：心情由别人对他做了什么驱动
+# （relationship 的信任变化、add_thought），否则低落→拒绝→更低落会一路滑进崩溃档。
 RELATIONSHIP_THOUGHT_SCALE = 3      # trust 变化 × 3 作为一条想法
 STAGE_ADVANCE_THOUGHT = (15, "stage")
 EVENT_FAILED_THOUGHT = (-10, "refuse")

@@ -82,15 +82,9 @@ def band(value, limits=None):
     return "break"
 
 
-def gate(state, cid, op):
-    """None = allowed; a string = why this op is refused in the current band."""
-    _value, named = evaluate(state, cid)
-    return (ST.MOOD_GATE.get(named) or {}).get(op)
-
-
-def response_limit(state, cid):
-    _value, named = evaluate(state, cid)
-    return ST.MOOD_RESPONSE_LIMIT.get(named)
+def gate(band_name, op):
+    """None = allowed; a string = why this op is refused in that band."""
+    return (ST.MOOD_GATE.get(band_name) or {}).get(op)
 
 
 def open_bonus(state, cid):
@@ -311,27 +305,6 @@ def refresh_situational(state, turn):
         for label, delta, minutes in rows:
             add_thought(state, cid, label, delta, "situational", minutes=minutes, turn=turn)
     return planned
-
-
-RESPONSE_LABELS = {
-    "refuse": "你被拒绝了",
-    "negotiate": "跟你磨了一下",
-    "partial": "你配合了一点点",
-    "surface": "你只是表面答应",
-    "genuine": "你真的答应了",
-}
-
-
-def thoughts_from_response(state, cid, response, fact_id, turn):
-    """A reply leaves a mark: a refusal stings longer than a small yes."""
-    spec = ST.RESPONSE_THOUGHTS.get(response)
-    if spec is None:
-        return None
-    delta, scale = spec
-    return add_thought(
-        state, cid, RESPONSE_LABELS[response], delta, "memory",
-        source_fact_id=fact_id, minutes=ST.THOUGHT_DURATION[scale], turn=turn,
-    )
 
 
 def thoughts_from_trust(state, cid, delta, fact_id, turn):

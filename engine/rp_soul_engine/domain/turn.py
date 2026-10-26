@@ -10,7 +10,8 @@ Order inside a commit:
   3. operations in order; the clock then settles to the real moment in the
      fixed order of settlement.advance() (offscreen and propagation run as
      hooks). No operation moves the clock: the span is real time, not authored
-  4. required offscreen beats, action mode, intimacy and safety checks
+  4. required offscreen beats, the break-band outburst, action mode, intimacy
+     and safety checks
   5. invariants, then bookkeeping: memory, chapter archive, prologue and the
      offscreen candidates for the next turn
 
@@ -196,7 +197,8 @@ def _mode_checks(ctx):
                 "尝试作用于 NPC 时，结果由 NPC 与处境决定：加一条 npc_response",
             )
         for cid in npcs:
-            if cid not in ctx.responses:
+            # 崩溃档里他回应不了；那条 provoke/leave 就是他对这次尝试的反应
+            if cid not in ctx.responses and cid not in ctx.break_actors:
                 ctx.error(
                     "$.operations", "尝试作用于 %s，却没有 %s 的回应" % (ctx.name(cid), ctx.name(cid)),
                     "加一条 npc_response（拒绝/协商/有限配合/表面配合/真诚配合）",
@@ -217,6 +219,26 @@ def _mode_checks(ctx):
         retcons = [a for a in ctx.applied if a["op"] == "add_fact" and a.get("origin") == "retcon"]
         if not retcons and not ctx.op_failed:
             ctx.error("$.operations", "“其实……”回合至少要有一条追溯事实（add_fact，origin: retcon）")
+
+
+def _break_checks(ctx):
+    """Break band: every NPC on stage at the start of the turn lashes out or leaves.
+
+    The band is the one the turn started in, so a commit cannot dodge it by
+    adding a cheerful thought first. A rewrite turn only restates the past.
+    """
+    if ctx.mode == "rewrite":
+        return
+    player = ctx.state["player_id"]
+    if player not in ctx.start_present:
+        return
+    for cid in sorted(ctx.start_present - {player}):
+        if ctx.start_bands.get(cid) == "break" and cid not in ctx.break_actors:
+            ctx.error(
+                "$.operations",
+                "%s 这回合在崩溃档，必须有一条重大的 provoke 或 leave" % ctx.name(cid),
+                "加一条 npc_action：npc_id %s、significant: true、kind: provoke 或 leave（不受冷却限制）" % cid,
+            )
 
 
 def _beat_checks(ctx):
@@ -372,6 +394,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     work["real_at"] = now
     OPS.advance(ctx, span, "$", default=True, to_clock=to_clock)
     preview = _beat_checks(ctx)
+    _break_checks(ctx)
     _mode_checks(ctx)
     _intimacy_checks(ctx)
     for problem in OPS.check_safety_tags(work, commit["content_tags"]):

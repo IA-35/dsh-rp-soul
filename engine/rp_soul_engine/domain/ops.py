@@ -6,10 +6,11 @@ TurnContext holding the bookkeeping nobody should have to remember.
 
 Two things are new for the single-persona scenario:
 
-* ``relationship`` and ``npc_response`` now leave a *mood* mark. The trust
-  ledger answers "how does he judge me long term"; the mood bar answers "how
-  is he right now". A refusal must move both or the engine would predict a
-  character who forgives instantly.
+* ``relationship`` now leaves a *mood* mark. The trust ledger answers "how
+  does he judge me long term"; the mood bar answers "how is he right now".
+  ``npc_response`` does not: his own choice of reply is not something done to
+  him, and letting a refusal sink his own mood made low -> refuse -> lower
+  slide straight into the break band.
 * ``add_thought`` exists at all because the model occasionally knows about a
   sting the engine cannot derive (a name dropped in passing). It must name the
   fact it came from, so the settings page can show where a feeling came from
@@ -22,6 +23,7 @@ rejected commit never leaves half a change behind.
 from .. import schema as S
 from ..errors import INVARIANT_VIOLATION, INVALID_INPUT, NOT_FOUND, SAFETY_BLOCK, detail
 from . import clock as CL
+from . import agency as AG
 from . import facts as FA
 from . import mood as MO
 from . import relationship as REL
@@ -102,6 +104,20 @@ class TurnContext:
         # Characters created by this commit (npc_action/introduce): the result
         # reports them so the caller knows the context must be full.
         self.new_characters = []
+        # 回合开始那一刻的档位、在场名单与自主行动候选：门禁和候选校验都按这一刻判，
+        # 和模型在 brief 里看到的一致，不随本回合中途加减的想法摇摆。
+        npcs = SS.npcs(state)
+        self.start_bands = {cid: MO.evaluate(state, cid)[1] for cid in npcs}
+        self.start_present = set(state["scene"]["present"])
+        self.start_kinds = {cid: [o["kind"] for o in AG.candidates(state, persona, cid, self.turn)] for cid in npcs}
+        # 崩溃档里已经交了 provoke/leave 重大行动的 NPC
+        self.break_actors = set()
+
+    def band(self, cid):
+        """The band this turn is judged by; characters created mid-commit read live."""
+        if cid in self.start_bands:
+            return self.start_bands[cid]
+        return MO.evaluate(self.state, cid)[1]
 
     def fact_coord(self):
         self.fact_index += 1
@@ -314,16 +330,33 @@ def _mood_guard(ctx, npc, op_name, path, errs):
     The band is computed fresh from base + live thoughts, never stored, so
     nothing here can drift out of step with the mood panel.
     """
-    reason = MO.gate(ctx.state, npc, op_name)
+    band = ctx.band(npc)
+    reason = MO.gate(band, op_name)
     if reason:
-        value, band = MO.evaluate(ctx.state, npc)
         errs.append(detail(
             path, reason,
-            "他此刻的心情是 %d（%s 档），换一个这个状态下真的做得到的写法" % (value, band),
+            "他这回合开始时在 %s 档，换一个这个状态下真的做得到的写法" % band,
             INVARIANT_VIOLATION,
         ))
         return False
     return True
+
+
+def _response_guard(ctx, npc, op, path, errs):
+    """Closed band: only cold replies, and short ones (README 心情条档位表)."""
+    band = ctx.band(npc)
+    allowed = ST.MOOD_RESPONSES.get(band)
+    if allowed and op["response"] not in allowed:
+        errs.append(detail(
+            path + ".response", "他这回合在 %s 档，回应不会是 %s" % (band, op["response"]),
+            "改成 %s 之一" % "/".join(allowed), INVARIANT_VIOLATION,
+        ))
+    limit = ST.MOOD_RESPONSE_LIMIT.get(band)
+    if limit is not None and len(op["note"]) > limit:
+        errs.append(detail(
+            path + ".note", "他这回合在 %s 档，回应最多 %d 字（现在 %d 字）" % (band, limit, len(op["note"])),
+            "缩短 note", INVARIANT_VIOLATION,
+        ))
 
 
 @register(
@@ -344,7 +377,8 @@ def op_npc_response(ctx, op, path):
         if not SS.is_present(ctx.state, npc):
             errs.append(detail(path + ".npc_id", "%s 不在场，不能当面回应" % ctx.name(npc), "先 enter_scene", INVARIANT_VIOLATION))
         _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
-        _mood_guard(ctx, npc, "npc_response", path + ".npc_id", errs)
+        if _mood_guard(ctx, npc, "npc_response", path + ".npc_id", errs):
+            _response_guard(ctx, npc, op, path, errs)
     if op["response"] == "surface" and not op["true_intent"]:
         errs.append(detail(path + ".true_intent", "表面配合必须写明真实意图", "true_intent 会记为只有本人知道的事实", INVARIANT_VIOLATION))
     if op["response"] != "surface" and op["true_intent"]:
@@ -371,19 +405,42 @@ def op_npc_response(ctx, op, path):
     ctx.responses.setdefault(npc, []).append(op["response"])
     ctx.actors.add(npc)
     ctx.observable = True
-    fact_id = _note(
+    _note(
         ctx, "%s.response.t%d" % (npc, ctx.turn),
         "%s 对你说：%s（%s）" % (ctx.name(npc), ST.RESPONSE_LABELS[op["response"]], op["note"]),
         [ctx.state["player_id"], npc],
     )
-    thought = MO.thoughts_from_response(ctx.state, npc, op["response"], fact_id, ctx.turn)
-    if thought is not None:
-        ctx.thoughts.append({"npc_id": npc, "thought": thought})
-        entry["thought_id"] = thought["id"]
     responses = ctx.state["scene"]["responses"]
     responses.append({"turn": ctx.turn, "npc_id": npc, "response": op["response"], "note": op["note"]})
     del responses[:-6]
     ctx.applied.append(entry)
+
+
+def _break_action(ctx, npc, op, path, errs):
+    """A significant act in the break band is the outburst: provoke or leave only."""
+    if op["kind"] not in ST.BREAK_ACTION_KINDS:
+        errs.append(detail(
+            path + ".kind", "%s 这回合在崩溃档，重大行动只能是 %s" % (ctx.name(npc), "/".join(ST.BREAK_ACTION_KINDS)),
+            "kind 写 provoke 或 leave", INVARIANT_VIOLATION,
+        ))
+
+
+def _candidate_kind(ctx, npc, op, path, errs):
+    """A significant act must be one the engine proposed at the start of the turn."""
+    kinds = ctx.start_kinds.get(npc)
+    if kinds is None:
+        # created by this commit: no candidates were computed for it
+        return
+    if op["kind"] is None:
+        errs.append(detail(
+            path + ".kind", "重大行动必须写 kind", "取 agency 候选里的种类：%s" % ("/".join(kinds) or "无"),
+            INVALID_INPUT,
+        ))
+    elif kinds and op["kind"] not in kinds:
+        errs.append(detail(
+            path + ".kind", "%s 此刻更可能 %s，不是 %s" % (ctx.name(npc), "/".join(kinds), op["kind"]),
+            "换成候选里的种类，或写成非重大行动（significant: false）", INVARIANT_VIOLATION,
+        ))
 
 
 @register(
@@ -396,7 +453,8 @@ def op_npc_response(ctx, op, path):
         "target_id": F(S.Nullable(S.Id()), required=False, default=None),
         "basis_fact_ids": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[]),
     },
-    "NPC 自主行动。significant: true 的重大行动（主动接近、揭发、交易、离开、表白、挑衅等）受冷却限制；依据事实必须在其信息集中。kind 最好取 agency 候选里的种类",
+    "NPC 自主行动。significant: true 的重大行动（主动接近、揭发、交易、离开、表白、挑衅等）受冷却限制，且必须写 kind、取本回合 agency 候选里的种类；"
+    "崩溃档（break）的在场 NPC 本回合必须有一条 significant 的 provoke/leave（不受冷却限制，也顶替 attempt 所需的 npc_response）；依据事实必须在其信息集中",
 )
 def op_npc_action(ctx, op, path):
     errs = []
@@ -404,8 +462,13 @@ def op_npc_action(ctx, op, path):
     if _need_character(ctx, npc, path + ".npc_id", errs, npc=True):
         _absent_actor_ok(ctx, npc, path, errs)
         _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
+        outburst = op["significant"] and ctx.band(npc) == "break"
+        if outburst:
+            _break_action(ctx, npc, op, path, errs)
+        elif op["significant"]:
+            _candidate_kind(ctx, npc, op, path, errs)
         bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
-        if op["significant"] and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
+        if op["significant"] and not outburst and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
             last = ctx.state["counters"]["major_action_turn"][npc]
             errs.append(
                 detail(
@@ -423,6 +486,8 @@ def op_npc_action(ctx, op, path):
         return
     if op["significant"]:
         ctx.state["counters"]["major_action_turn"][npc] = ctx.turn
+        if ctx.band(npc) == "break":
+            ctx.break_actors.add(npc)
     ctx.actors.add(npc)
     ctx.observable = True
     # The log in the settings page reads this back, so the action text and the
