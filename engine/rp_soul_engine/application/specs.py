@@ -70,10 +70,6 @@ NEW_GAME = _obj(
             required=False,
             default={},
         ),
-        "start_location": F(S.Nullable(S.Id()), required=False, default=None,
-                            desc="开场地点；省略时用人设的 default_location 或第一个地点"),
-        "present": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[],
-                     desc="开场在场的角色 id；省略时取该地点排班里此刻在场的人"),
     },
     "new-game",
 )
@@ -121,7 +117,7 @@ STATUS = _obj(
 DEBUG_MOOD = _obj(
     {
         "session_id": F(SESSION_ID),
-        "npc_id": F(S.Id(), desc="要看谁的心情面板"),
+        "npc_id": F(S.Nullable(S.Id()), required=False, default=None, desc="TA的 id；省略即是TA"),
     },
     "debug-mood",
 )
@@ -145,7 +141,7 @@ DEBUG_ACTIVITY = _obj(
 DEBUG_DELETE_THOUGHT = _obj(
     dict(
         session_write_fields(),
-        npc_id=F(S.Id()),
+        npc_id=F(S.Nullable(S.Id()), required=False, default=None, desc="TA的 id；省略即是TA"),
         thought_id=F(S.Id()),
         reason=F(S.Nullable(S.Str(1, 120)), required=False, default=None,
                  desc="为什么要删（写进审计日志）"),

@@ -1,20 +1,21 @@
 """Operations the model submits, each validated before it can change anything.
 
-The shape is unchanged from the engine this was ported from: one spec table
-for validation and documentation, one handler table, and a per-commit
-TurnContext holding the bookkeeping nobody should have to remember.
+One spec table for validation and documentation, one handler table, and a
+per-commit TurnContext holding the bookkeeping nobody should have to remember.
 
-Two things are new for the single-persona scenario:
+There are two people: the player and her. So no operation names a character:
+`npc_response`, `npc_action`, `npc_state`, `add_thought` and `relationship`
+are all about her, and a fact's `scope` says which of the two knows it.
 
-* ``relationship`` now leaves a *mood* mark. The trust ledger answers "how
-  does he judge me long term"; the mood bar answers "how is he right now".
-  ``npc_response`` does not: his own choice of reply is not something done to
-  him, and letting a refusal sink his own mood made low -> refuse -> lower
+* ``relationship`` leaves a *mood* mark. The trust ledger answers "how does
+  she judge me long term"; the mood bar answers "how is she right now".
+  ``npc_response`` does not: her own choice of reply is not something done to
+  her, and letting a refusal sink her own mood made low -> refuse -> lower
   slide straight into the break band.
-* ``add_thought`` exists at all because the model occasionally knows about a
-  sting the engine cannot derive (a name dropped in passing). It must name the
-  fact it came from, so the settings page can show where a feeling came from
-  and the user can delete it.
+* ``add_thought`` exists because the model occasionally knows about a sting the
+  engine cannot derive (a name dropped in passing). It must name the fact it
+  came from, so the settings page can show where a feeling came from and the
+  user can delete it.
 
 Handlers collect every problem for their operation and only then mutate, so a
 rejected commit never leaves half a change behind.
@@ -22,8 +23,8 @@ rejected commit never leaves half a change behind.
 
 from .. import schema as S
 from ..errors import INVARIANT_VIOLATION, INVALID_INPUT, NOT_FOUND, SAFETY_BLOCK, detail
-from . import clock as CL
 from . import agency as AG
+from . import clock as CL
 from . import facts as FA
 from . import mood as MO
 from . import relationship as REL
@@ -34,7 +35,7 @@ from . import state as SS
 from . import structure as ST
 
 F = S.Field
-FACT_KEY = S.Str(1, 80, r"[a-z0-9_]+(\.[a-z0-9_#]+){0,5}", "点分的 ASCII 小写键，例如 lin_wan.secret.press")
+FACT_KEY = S.Str(1, 80, r"[a-z0-9_]+(\.[a-z0-9_#]+){0,5}", "点分的 ASCII 小写键，例如 her.secret.letter")
 CLOCK = S.Obj({"day": F(S.Int(1, 100000)), "minute": F(S.Int(0, 1439))}, name="游戏时钟")
 CONDITION = S.Obj(
     {
@@ -77,6 +78,7 @@ class TurnContext:
         self.mode = commit["action_mode"]
         self.authorized = commit["player_authorized"]
         self.turn = state["turn"] + 1
+        self.her = SS.companion(state)
         self.errors = []
         self.applied = []
         self.resolved_events = []
@@ -87,10 +89,8 @@ class TurnContext:
         self.observable = False
         self.trust_start = {}
         self.stage_pairs = set()
-        self.player_moved = False
         self.hooks = hooks or {}
         self.in_beat = None
-        self.moved = {}
         self.relationship_reasons = []
         self.fact_index = 0
         self.event_index = 0
@@ -98,23 +98,20 @@ class TurnContext:
         self.beat_npcs = set()
         self.beats_after_time = set()
         self.required_beats = []
-        self.beat_candidates = set(state["requests"].get("offscreen_beat_candidates") or [])
+        self.beat_candidates = set()
         self.thoughts = []
         self.debug_removed = []
-        # Characters created by this commit (npc_action/introduce): the result
-        # reports them so the caller knows the context must be full.
-        self.new_characters = []
         # 回合开始那一刻的档位、在场名单与自主行动候选：门禁和候选校验都按这一刻判，
         # 和模型在 brief 里看到的一致，不随本回合中途加减的想法摇摆。
         npcs = SS.npcs(state)
         self.start_bands = {cid: MO.evaluate(state, cid)[1] for cid in npcs}
         self.start_present = set(state["scene"]["present"])
         self.start_kinds = {cid: [o["kind"] for o in AG.candidates(state, persona, cid, self.turn)] for cid in npcs}
-        # 崩溃档里已经交了 provoke/leave 重大行动的 NPC
+        # 崩溃档里已经交了 provoke/leave 重大行动的人
         self.break_actors = set()
 
     def band(self, cid):
-        """The band this turn is judged by; characters created mid-commit read live."""
+        """The band this turn is judged by."""
         if cid in self.start_bands:
             return self.start_bands[cid]
         return MO.evaluate(self.state, cid)[1]
@@ -138,16 +135,6 @@ class TurnContext:
         return not self.state["preferences"]["offscreen_simulation"]
 
 
-def _need_character(ctx, cid, path, errs, npc=False):
-    if cid not in ctx.state["characters"]:
-        errs.append(detail(path, "角色不存在：%s" % cid, "用上下文里列出的角色 ID", NOT_FOUND))
-        return False
-    if npc and cid == ctx.state["player_id"]:
-        errs.append(detail(path, "这里需要 NPC，不能是玩家角色", None, INVARIANT_VIOLATION))
-        return False
-    return True
-
-
 def _basis(ctx, npc_id, fact_ids, path, errs):
     for index, fid in enumerate(fact_ids):
         if fid not in ctx.state["facts"]:
@@ -157,17 +144,10 @@ def _basis(ctx, npc_id, fact_ids, path, errs):
                 detail(
                     "%s[%d]" % (path, index),
                     "%s 不知道事实 %s，不能以它为依据" % (ctx.name(npc_id), fid),
-                    "NPC 只能依据自己知道或误信的事实行动；先让信息以合理途径传到对方",
+                    "TA只能依据自己知道或误信的事实行动；先让TA以合理途径得知（reveal_fact）",
                     INVARIANT_VIOLATION,
                 )
             )
-
-
-def _absent_actor_ok(ctx, npc_id, path, errs):
-    if not SS.is_present(ctx.state, npc_id) and ctx.frozen() and ctx.in_beat is None:
-        errs.append(detail(path, "离屏推演已冻结，不在场的 %s 不能行动" % ctx.name(npc_id), "等玩家打开离屏推演，或让对方先登场", INVARIANT_VIOLATION))
-        return False
-    return True
 
 
 def _flush(ctx, errs):
@@ -180,7 +160,7 @@ def _flush(ctx, errs):
 def _note(ctx, key, text, known_by, visibility="private", origin=None):
     """Record the fact behind a feeling. Returns the fact id.
 
-    Every memory thought points at one of these, so "why is he upset" is
+    Every memory thought points at one of these, so "why is she upset" is
     answerable from the fact journal and a debug deletion has something to
     suppress.
     """
@@ -238,96 +218,13 @@ def advance(ctx, minutes, path, default=False, to_clock=None):
 
 
 # ---------------------------------------------------------------------------
-# scene
-
-
-@register(
-    "move",
-    {"character_id": F(S.Id()), "location_id": F(S.Id())},
-    "角色移动到地点。玩家移动需要 result/attempt 模式并带 player_authorized；玩家换地点即换场景",
-)
-def op_move(ctx, op, path):
-    errs = []
-    cid, lid = op["character_id"], op["location_id"]
-    if not _need_character(ctx, cid, path + ".character_id", errs):
-        return _flush(ctx, errs)
-    if SS.place(ctx.persona, lid) is None:
-        errs.append(detail(path + ".location_id", "地点不在人设包里：%s" % lid, "用人设 places 里的 ID", NOT_FOUND))
-    is_player = cid == ctx.state["player_id"]
-    if is_player:
-        if ctx.mode not in ("result", "attempt") or not ctx.authorized:
-            errs.append(detail(path, "玩家角色的移动只能出现在 result/attempt 模式并带 player_authorized: true", "继续/等待回合里玩家角色不移动", INVARIANT_VIOLATION))
-        if lid == ctx.state["scene"]["location_id"]:
-            errs.append(detail(path + ".location_id", "玩家已经在这里", None, INVARIANT_VIOLATION))
-    else:
-        _absent_actor_ok(ctx, cid, path, errs)
-    if not _flush(ctx, errs):
-        return
-    char = ctx.state["characters"][cid]
-    char["status"]["location_id"] = lid
-    scene = ctx.state["scene"]
-    if is_player:
-        scene["location_id"] = lid
-        # NPCs who went ahead to the same place earlier in this commit are there.
-        scene["present"] = [ctx.state["player_id"]] + [n for n, where in ctx.moved.items() if where == lid]
-        settlement.new_scene(ctx.state, "location")
-        ctx.player_moved = True
-    else:
-        ctx.moved[cid] = lid
-        ctx.actors.add(cid)
-        ctx.observable = True
-        if lid == scene["location_id"]:
-            if cid not in scene["present"]:
-                scene["present"].append(cid)
-        elif cid in scene["present"]:
-            scene["present"].remove(cid)
-    ctx.applied.append({"op": "move", "character_id": cid, "location_id": lid})
-
-
-@register("enter_scene", {"character_id": F(S.Id())}, "角色登场，加入当前场景")
-def op_enter_scene(ctx, op, path):
-    errs = []
-    cid = op["character_id"]
-    if _need_character(ctx, cid, path + ".character_id", errs, npc=True) and SS.is_present(ctx.state, cid):
-        errs.append(detail(path + ".character_id", "%s 已经在场" % ctx.name(cid), None, INVARIANT_VIOLATION))
-    if not _flush(ctx, errs):
-        return
-    ctx.state["scene"]["present"].append(cid)
-    ctx.state["characters"][cid]["status"]["location_id"] = ctx.state["scene"]["location_id"]
-    ctx.observable = True
-    ctx.applied.append({"op": "enter_scene", "character_id": cid})
-
-
-@register(
-    "exit_scene",
-    {"character_id": F(S.Id()), "to_location_id": F(S.Nullable(S.Id()), required=False, default=None)},
-    "角色离场；可写去向地点。玩家角色用 move",
-)
-def op_exit_scene(ctx, op, path):
-    errs = []
-    cid = op["character_id"]
-    if _need_character(ctx, cid, path + ".character_id", errs, npc=True) and not SS.is_present(ctx.state, cid):
-        errs.append(detail(path + ".character_id", "%s 不在场" % ctx.name(cid), None, INVARIANT_VIOLATION))
-    target = op["to_location_id"]
-    if target is not None and SS.place(ctx.persona, target) is None:
-        errs.append(detail(path + ".to_location_id", "地点不在人设包里：%s" % target, None, NOT_FOUND))
-    if not _flush(ctx, errs):
-        return
-    ctx.state["scene"]["present"].remove(cid)
-    if target is not None:
-        ctx.state["characters"][cid]["status"]["location_id"] = target
-    ctx.observable = True
-    ctx.applied.append({"op": "exit_scene", "character_id": cid, "to_location_id": target})
-
-
-# ---------------------------------------------------------------------------
-# NPC
+# her
 
 
 def _mood_guard(ctx, npc, op_name, path, errs):
-    """The band gate: a shrunken character cannot do what an open one can.
+    """The band gate: a shrunken mood cannot do what an open one can.
 
-    The band is computed fresh from base + live thoughts, never stored, so
+    The band is the one the turn started in (what soul_state showed), so
     nothing here can drift out of step with the mood panel.
     """
     band = ctx.band(npc)
@@ -335,7 +232,7 @@ def _mood_guard(ctx, npc, op_name, path, errs):
     if reason:
         errs.append(detail(
             path, reason,
-            "他这回合开始时在 %s 档，换一个这个状态下真的做得到的写法" % band,
+            "%s这回合开始时在 %s 档，换一个这个状态下真的做得到的写法" % (ctx.name(npc), band),
             INVARIANT_VIOLATION,
         ))
         return False
@@ -348,13 +245,13 @@ def _response_guard(ctx, npc, op, path, errs):
     allowed = ST.MOOD_RESPONSES.get(band)
     if allowed and op["response"] not in allowed:
         errs.append(detail(
-            path + ".response", "他这回合在 %s 档，回应不会是 %s" % (band, op["response"]),
+            path + ".response", "%s这回合在 %s 档，回应不会是 %s" % (ctx.name(npc), band, op["response"]),
             "改成 %s 之一" % "/".join(allowed), INVARIANT_VIOLATION,
         ))
     limit = ST.MOOD_RESPONSE_LIMIT.get(band)
     if limit is not None and len(op["note"]) > limit:
         errs.append(detail(
-            path + ".note", "他这回合在 %s 档，回应最多 %d 字（现在 %d 字）" % (band, limit, len(op["note"])),
+            path + ".note", "%s这回合在 %s 档，回应最多 %d 字（现在 %d 字）" % (ctx.name(npc), band, limit, len(op["note"])),
             "缩短 note", INVARIANT_VIOLATION,
         ))
 
@@ -362,46 +259,33 @@ def _response_guard(ctx, npc, op, path, errs):
 @register(
     "npc_response",
     {
-        "npc_id": F(S.Id()),
         "response": F(S.Enum(*ST.RESPONSES)),
         "note": F(S.Str(1, 80)),
         "basis_fact_ids": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[]),
         "true_intent": F(S.Nullable(S.Str(1, 120)), required=False, default=None),
     },
-    "NPC 对玩家尝试的回应：refuse 拒绝 / negotiate 协商 / partial 有限配合 / surface 表面配合 / genuine 真诚配合。surface 必须写 true_intent（记为只有本人知道的事实）",
+    "TA对你这次尝试的回应：refuse 拒绝 / negotiate 协商 / partial 有限配合 / surface 表面配合 / genuine 真诚配合。surface 必须写 true_intent（记为只有TA知道的事实）",
 )
 def op_npc_response(ctx, op, path):
     errs = []
-    npc = op["npc_id"]
-    if _need_character(ctx, npc, path + ".npc_id", errs, npc=True):
-        if not SS.is_present(ctx.state, npc):
-            errs.append(detail(path + ".npc_id", "%s 不在场，不能当面回应" % ctx.name(npc), "先 enter_scene", INVARIANT_VIOLATION))
-        _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
-        if _mood_guard(ctx, npc, "npc_response", path + ".npc_id", errs):
-            _response_guard(ctx, npc, op, path, errs)
+    npc = ctx.her
+    if not SS.is_present(ctx.state, npc):
+        errs.append(detail(path, "%s 不在你身边，不能当面回应" % ctx.name(npc), None, INVARIANT_VIOLATION))
+    _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
+    if _mood_guard(ctx, npc, "npc_response", path, errs):
+        _response_guard(ctx, npc, op, path, errs)
     if op["response"] == "surface" and not op["true_intent"]:
-        errs.append(detail(path + ".true_intent", "表面配合必须写明真实意图", "true_intent 会记为只有本人知道的事实", INVARIANT_VIOLATION))
+        errs.append(detail(path + ".true_intent", "表面配合必须写明真实意图", "true_intent 会记为只有TA知道的事实", INVARIANT_VIOLATION))
     if op["response"] != "surface" and op["true_intent"]:
         errs.append(detail(path + ".true_intent", "只有 surface 回应需要 true_intent", None, INVARIANT_VIOLATION))
     if not _flush(ctx, errs):
         return
     entry = {"op": "npc_response", "npc_id": npc, "response": op["response"], "note": op["note"]}
     if op["response"] == "surface":
-        fid = SS.next_id(ctx.state, "fact", "f")
-        ctx.state["facts"][fid] = {
-            "id": fid,
-            "key": "%s.intent.t%d" % (npc, ctx.turn),
-            "text": "%s的真实打算：%s" % (ctx.name(npc), op["true_intent"]),
-            "truth": True,
-            "known_by": [npc],
-            "believed_by": [],
-            "visibility": "private",
-            "origin": "offscreen" if ctx.in_beat else "observed",
-            "turn": ctx.turn,
-            "spreading": False,
-            "coord": ctx.fact_coord(),
-        }
-        entry["intent_fact_id"] = fid
+        entry["intent_fact_id"] = _note(
+            ctx, "%s.intent.t%d" % (npc, ctx.turn),
+            "%s的真实打算：%s" % (ctx.name(npc), op["true_intent"]), [npc],
+        )
     ctx.responses.setdefault(npc, []).append(op["response"])
     ctx.actors.add(npc)
     ctx.observable = True
@@ -427,10 +311,7 @@ def _break_action(ctx, npc, op, path, errs):
 
 def _candidate_kind(ctx, npc, op, path, errs):
     """A significant act must be one the engine proposed at the start of the turn."""
-    kinds = ctx.start_kinds.get(npc)
-    if kinds is None:
-        # created by this commit: no candidates were computed for it
-        return
+    kinds = ctx.start_kinds.get(npc) or []
     if op["kind"] is None:
         errs.append(detail(
             path + ".kind", "重大行动必须写 kind", "取 agency 候选里的种类：%s" % ("/".join(kinds) or "无"),
@@ -446,72 +327,61 @@ def _candidate_kind(ctx, npc, op, path, errs):
 @register(
     "npc_action",
     {
-        "npc_id": F(S.Id()),
         "action": F(S.Str(1, 120)),
         "significant": F(S.Bool(), required=False, default=False),
         "kind": F(S.Nullable(S.Enum(*ST.AGENCY_KINDS)), required=False, default=None),
-        "target_id": F(S.Nullable(S.Id()), required=False, default=None),
         "basis_fact_ids": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[]),
     },
-    "NPC 自主行动。significant: true 的重大行动（主动接近、揭发、交易、离开、表白、挑衅等）受冷却限制，且必须写 kind、取本回合 agency 候选里的种类；"
-    "崩溃档（break）的在场 NPC 本回合必须有一条 significant 的 provoke/leave（不受冷却限制，也顶替 attempt 所需的 npc_response）；依据事实必须在其信息集中",
+    "TA自己主动做的事。significant: true 的重大行动（主动找你、揭穿、表白、冷着你、挑衅、走开等）受冷却限制，且必须写 kind、取本回合 agency 候选里的种类；"
+    "崩溃档（break）里TA本回合必须有一条 significant 的 provoke/leave（不受冷却限制，也顶替 attempt 所需的 npc_response）；依据事实必须是TA知道的",
 )
 def op_npc_action(ctx, op, path):
     errs = []
-    npc = op["npc_id"]
-    if _need_character(ctx, npc, path + ".npc_id", errs, npc=True):
-        _absent_actor_ok(ctx, npc, path, errs)
-        _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
-        outburst = op["significant"] and ctx.band(npc) == "break"
-        if outburst:
-            _break_action(ctx, npc, op, path, errs)
-        elif op["significant"]:
-            _candidate_kind(ctx, npc, op, path, errs)
-        bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
-        if op["significant"] and not outburst and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
-            last = ctx.state["counters"]["major_action_turn"][npc]
-            errs.append(
-                detail(
-                    path + ".significant",
-                    "%s 在冷却中：第 %d 回合刚有过重大行动" % (ctx.name(npc), last),
-                    "第 %d 回合起才能再有重大行动；这回合写成非重大行动，或让能行动的人出手" % (last + max(1, ST.COOLDOWN_TURNS - bonus)),
-                    INVARIANT_VIOLATION,
-                )
+    npc = ctx.her
+    _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
+    outburst = op["significant"] and ctx.band(npc) == "break"
+    if outburst:
+        _break_action(ctx, npc, op, path, errs)
+    elif op["significant"]:
+        _candidate_kind(ctx, npc, op, path, errs)
+    bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
+    if op["significant"] and not outburst and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
+        last = ctx.state["counters"]["major_action_turn"][npc]
+        errs.append(
+            detail(
+                path + ".significant",
+                "%s 在冷却中：第 %d 回合刚有过重大行动" % (ctx.name(npc), last),
+                "第 %d 回合起才能再有重大行动；这回合写成非重大行动" % (last + max(1, ST.COOLDOWN_TURNS - bonus)),
+                INVARIANT_VIOLATION,
             )
-        if op["kind"] is not None and op["kind"] not in ST.AGENCY_KINDS:
-            errs.append(detail(path + ".kind", "未知的行动种类：%s" % op["kind"], "用 agency 候选给出的 kind", INVALID_INPUT))
-    if op["target_id"] is not None:
-        _need_character(ctx, op["target_id"], path + ".target_id", errs)
+        )
     if not _flush(ctx, errs):
         return
     if op["significant"]:
         ctx.state["counters"]["major_action_turn"][npc] = ctx.turn
-        if ctx.band(npc) == "break":
+        if outburst:
             ctx.break_actors.add(npc)
     ctx.actors.add(npc)
     ctx.observable = True
-    # The log in the settings page reads this back, so the action text and the
-    # target have to be recorded here: the operation itself is not stored.
+    # The log in the settings page reads this back, so the action text has to
+    # be recorded here: the operation itself is not stored.
     ctx.applied.append({
         "op": "npc_action", "npc_id": npc, "significant": op["significant"],
-        "kind": op["kind"], "action": op["action"], "target_id": op["target_id"],
+        "kind": op["kind"], "action": op["action"],
     })
 
 
 @register(
     "npc_state",
     {
-        "npc_id": F(S.Id()),
         "add_conditions": F(S.List(CONDITION, max_items=4), required=False, default=[]),
         "remove_conditions": F(S.List(S.Enum(*ST.CONDITION_KINDS), max_items=7, unique=True), required=False, default=[]),
     },
-    "更新 NPC 的状况（醉意、睡眠、受伤、外出等）；minutes 表示多久后自动消退。情绪不在这里改：心情由引擎按事实计算，要留下一条情绪用 add_thought",
+    "更新TA的状况（醉意、睡着、受伤、外出、忙等）；minutes 表示多久后自动消退。情绪不在这里改：心情由引擎按事实计算，要留下一条情绪用 add_thought",
 )
 def op_npc_state(ctx, op, path):
     errs = []
-    npc = op["npc_id"]
-    if _need_character(ctx, npc, path + ".npc_id", errs, npc=True):
-        _absent_actor_ok(ctx, npc, path, errs)
+    npc = ctx.her
     if not op["add_conditions"] and not op["remove_conditions"]:
         errs.append(detail(path, "没有任何变化", "至少给 add_conditions 或 remove_conditions 之一", INVARIANT_VIOLATION))
     if not _flush(ctx, errs):
@@ -530,19 +400,17 @@ def op_npc_state(ctx, op, path):
 @register(
     "add_thought",
     {
-        "npc_id": F(S.Id()),
         "label": F(S.Str(1, 20)),
         "delta": F(S.Int(*ST.THOUGHT_DELTA_RANGE)),
         "basis_fact_id": F(S.Id()),
         "minutes": F(S.Nullable(S.Int(1, 30 * ST.MINUTES_PER_DAY)), required=False, default=None),
     },
-    "给 NPC 记一条情绪（引擎算不出来的那种，比如一句随口提到的话扎了他）。必须指明依据的事实；幅度 -30..+15；不写 minutes 用默认时长",
+    "给TA记一条情绪（引擎算不出来的那种，比如你随口一句话扎了TA）。必须指明依据的事实，且是TA知道的；幅度 -30..+15；不写 minutes 用默认时长",
 )
 def op_add_thought(ctx, op, path):
     errs = []
-    npc = op["npc_id"]
-    if _need_character(ctx, npc, path + ".npc_id", errs, npc=True):
-        _basis(ctx, npc, [op["basis_fact_id"]], path + ".basis_fact_id", errs)
+    npc = ctx.her
+    _basis(ctx, npc, [op["basis_fact_id"]], path + ".basis_fact_id", errs)
     if not _flush(ctx, errs):
         return
     minutes = op["minutes"] or ST.THOUGHT_DURATION["tone"]
@@ -562,19 +430,32 @@ def op_add_thought(ctx, op, path):
 # knowledge
 
 
+def _knowers(ctx, scope, truth):
+    """(known_by, believed_by, visibility) for a fact's scope between the two of you."""
+    player, her = ctx.state["player_id"], ctx.her
+    if not truth:
+        # 她信了一件不是真的事：只有她「相信」，没有人「知道」
+        return [], [her], "private"
+    if scope == "shared":
+        return [player, her], [], "public"
+    if scope == "player_only":
+        return [player], [], "private"
+    if scope == "companion_only":
+        return [her], [], "private"
+    return [her], [], "inner"
+
+
 @register(
     "add_fact",
     {
         "key": F(FACT_KEY),
         "text": F(S.Str(1, 120)),
+        "scope": F(S.Enum(*ST.FACT_SCOPES)),
         "truth": F(S.Bool(), required=False, default=True),
-        "known_by": F(S.List(S.Id(), max_items=20, unique=True), required=False, default=[]),
-        "believed_by": F(S.List(S.Id(), max_items=20, unique=True), required=False, default=[]),
-        "visibility": F(S.Enum(*ST.FACT_VISIBILITY)),
         "origin": F(S.Enum(*ST.MODEL_FACT_ORIGINS)),
-        "spread": F(S.Bool(), required=False, default=False),
     },
-    "记录一条事实。public 在场者自动知道；private 只有 known_by；inner 是内心，只属于一个 NPC 且永不传播。误信用 truth: false + believed_by。正文里新写出、之后要继承的细节都要用它记下",
+    "记录一条事实。scope：shared 你们都知道 / player_only 只有你知道 / companion_only 只有TA知道 / inner TA心里的（永不外露）。"
+    "TA信了一件假的事用 truth: false（scope 写 companion_only）。正文里新写出、之后要继承的细节都要用它记下",
 )
 def op_add_fact(ctx, op, path):
     errs = []
@@ -583,16 +464,10 @@ def op_add_fact(ctx, op, path):
         errs.append(detail(path + ".origin", "追溯事实只能在玩家说“其实……”的改写回合登记", "action_mode 用 rewrite，并带 player_authorized", INVARIANT_VIOLATION))
     elif ctx.mode == "rewrite" and ctx.in_beat is None and op["origin"] != "retcon":
         errs.append(detail(path + ".origin", "“其实……”回合里的新事实都是追溯：origin 用 retcon", None, INVARIANT_VIOLATION))
-    if op["truth"] and op["believed_by"]:
-        errs.append(detail(path + ".believed_by", "真事实用 known_by；believed_by 只用于 truth: false 的误信", None, INVARIANT_VIOLATION))
-    if not op["truth"] and not op["believed_by"]:
-        errs.append(detail(path + ".believed_by", "假事实（误信）必须写明谁相信它", None, INVARIANT_VIOLATION))
-    if op["visibility"] == "inner":
-        knowers = op["known_by"]
-        if len(knowers) != 1 or knowers[0] == state["player_id"] or not op["truth"] or op["believed_by"] or op["spread"]:
-            errs.append(detail(path, "内心事实只能属于一个 NPC 本人，必须为真，且永不传播", None, INVARIANT_VIOLATION))
-    elif op["visibility"] == "private" and not op["known_by"] and not op["believed_by"]:
-        errs.append(detail(path + ".known_by", "私密事实至少要有一个知情人", None, INVARIANT_VIOLATION))
+    if not op["truth"] and op["scope"] != "companion_only":
+        errs.append(detail(path + ".scope", "假事实是TA信了的事：scope 写 companion_only", None, INVARIANT_VIOLATION))
+    if ctx.in_beat is not None and op["scope"] in ("shared", "player_only"):
+        errs.append(detail(path + ".scope", "离屏时你不在：这段时间里的事只有TA知道（companion_only / inner）", None, INVARIANT_VIOLATION))
     if op["truth"] and op["origin"] != "retcon":
         existing = next(iter(FA.of(state).by_key(op["key"])), None)
         if existing is not None:
@@ -600,29 +475,24 @@ def op_add_fact(ctx, op, path):
                 detail(
                     path + ".key",
                     "同键的真事实已存在（%s：%s）" % (existing["id"], existing["text"][:30]),
-                    "有人新得知这件事用 reveal_fact；情况有变化就换一个新键",
+                    "对方新得知这件事用 reveal_fact；情况有变化就换一个新键",
                     INVARIANT_VIOLATION,
                 )
             )
     if not _flush(ctx, errs):
         return
-    known = list(op["known_by"])
-    if op["visibility"] == "public":
-        for cid in state["scene"]["present"]:
-            if cid not in known:
-                known.append(cid)
-    fid = _note(ctx, op["key"], op["text"], known, op["visibility"], op["origin"])
-    state["facts"][fid]["believed_by"] = list(op["believed_by"])
+    known, believed, visibility = _knowers(ctx, op["scope"], op["truth"])
+    fid = _note(ctx, op["key"], op["text"], known, visibility, op["origin"])
+    state["facts"][fid]["believed_by"] = believed
     state["facts"][fid]["truth"] = op["truth"]
-    state["facts"][fid]["spreading"] = bool(op["spread"])
     ctx.observable = True
     ctx.applied.append({"op": "add_fact", "fact_id": fid, "key": op["key"], "origin": state["facts"][fid]["origin"], "known_by": known})
 
 
 @register(
     "reveal_fact",
-    {"fact_id": F(S.Id()), "to": F(S.List(S.Id(), 1, 20, unique=True)), "note": F(S.Nullable(S.Str(1, 80)), required=False, default=None)},
-    "让某些人得知已经存在的事实（当面说、被听见、看到证据）。不会改变事实本身",
+    {"fact_id": F(S.Id()), "note": F(S.Nullable(S.Str(1, 80)), required=False, default=None)},
+    "让一件只有一方知道的事变成你们都知道（当面说出来、被看见、发现了证据）。不会改变事实本身；TA心里的事（inner）要说出口就另记一条 add_fact",
 )
 def op_reveal_fact(ctx, op, path):
     errs = []
@@ -630,44 +500,44 @@ def op_reveal_fact(ctx, op, path):
     fact = state["facts"].get(op["fact_id"])
     if fact is None:
         errs.append(detail(path + ".fact_id", "事实不存在：%s" % op["fact_id"], None, NOT_FOUND))
-    for index, cid in enumerate(op["to"]):
-        if _need_character(ctx, cid, "%s.to[%d]" % (path, index), errs):
-            if not SS.is_present(state, cid) and ctx.in_beat is None:
-                errs.append(detail("%s.to[%d]" % (path, index), "%s 不在场，不能在这一幕里得知这件事" % ctx.name(cid), "等离屏推演或以后当面告知", INVARIANT_VIOLATION))
+    elif fact["visibility"] == "inner":
+        errs.append(detail(path + ".fact_id", "这是TA心里的事，不会被直接揭开", "TA说出口的话另记一条 add_fact（scope: shared）", INVARIANT_VIOLATION))
+    elif ctx.in_beat is not None:
+        errs.append(detail(path, "离屏时你不在，不能在这段时间里互通消息", None, INVARIANT_VIOLATION))
     if not _flush(ctx, errs):
         return
+    fact = FA.edit(state, fact["id"])
     added = []
-    for cid in op["to"]:
-        if cid not in fact["known_by"]:
+    for cid in (state["player_id"], ctx.her):
+        if cid not in fact["known_by"] and (fact["truth"] or cid != ctx.her):
             fact["known_by"].append(cid)
             added.append(cid)
+    if fact["truth"]:
+        fact["visibility"] = "public"
     ctx.observable = True
     ctx.applied.append({"op": "reveal_fact", "fact_id": fact["id"], "to": added})
 
 
 # ---------------------------------------------------------------------------
-# relationships
+# relationship
 
 
 @register(
     "relationship",
     {
-        "from": F(S.Id()),
-        "to": F(S.Id()),
         "trust_delta": F(S.Int(-ST.MAX_TRUST_DELTA, ST.MAX_TRUST_DELTA), required=False, default=0),
         "tension_delta": F(S.Int(-5, 5), required=False, default=0),
         "stage_advance": F(S.Bool(), required=False, default=False),
         "stage_retreat_to": F(S.Nullable(S.Enum(*ST.STAGES)), required=False, default=None),
         "reason": F(S.Str(1, 80)),
     },
-    "有向关系变化（from 对 to）：信任 -5..5（一个回合净变化 ≤2）、张力 0..5、亲近进程前进一个阶段（需要同一回合里玩家的行动 + 对方的 partial/genuine 回应）或后退。原因必填",
+    "TA对你的关系变化：信任 -5..5（一个回合净变化 ≤2）、张力 0..5、亲近进程前进一个阶段（需要同一回合里你的行动 + TA的 partial/genuine 回应）或后退。原因必填",
 )
 def op_relationship(ctx, op, path):
     errs = []
-    a, b = op["from"], op["to"]
-    if a == b:
-        errs.append(detail(path, "关系的两端不能是同一个人", None, INVARIANT_VIOLATION))
-    _mood_guard(ctx, b, "stage_advance", path + ".to", errs) if op["stage_advance"] else None
+    a, b = ctx.her, ctx.state["player_id"]
+    if op["stage_advance"]:
+        _mood_guard(ctx, a, "stage_advance", path + ".stage_advance", errs)
     if not _flush(ctx, errs):
         return
     before = SS.edge(ctx.state, a, b) or {}
@@ -679,34 +549,24 @@ def op_relationship(ctx, op, path):
         ctx.errors.extend(problems)
         return
     after = SS.edge(ctx.state, a, b) or {}
-    player = ctx.state["player_id"]
     if op["trust_delta"]:
-        # The edge a>b is *a's* attitude toward b, so the feeling lands on a.
-        # The player card carries ``"mood": None`` on purpose (the player is a
-        # slot, nothing about how they feel is stored), so a move that starts
-        # at the player is recorded in the ledger and felt by nobody.
         fid = _note(
             ctx, "%s.trust.t%d" % (a, ctx.turn),
-            "%s 对 %s 的信任 %+d：%s" % (ctx.name(a), ctx.name(b), op["trust_delta"], op["reason"]),
-            [player, a, b],
+            "%s 对你的信任 %+d：%s" % (ctx.name(a), op["trust_delta"], op["reason"]),
+            [b, a],
         )
-        if a != player:
-            thought = MO.thoughts_from_trust(ctx.state, a, op["trust_delta"], fid, ctx.turn)
-            if thought is not None:
-                ctx.thoughts.append({"npc_id": a, "thought": thought})
+        thought = MO.thoughts_from_trust(ctx.state, a, op["trust_delta"], fid, ctx.turn)
+        if thought is not None:
+            ctx.thoughts.append({"npc_id": a, "thought": thought})
     if op["stage_advance"] and after.get("stage") != before.get("stage"):
         fid = _note(
             ctx, "%s.stage.t%d" % (a, ctx.turn),
-            "%s 与 %s 的关系进入 %s：%s" % (ctx.name(a), ctx.name(b), ST.STAGE_LABELS[after["stage"]], op["reason"]),
-            [player, a, b],
+            "你们的关系进入 %s：%s" % (ST.STAGE_LABELS[after["stage"]], op["reason"]),
+            [b, a],
         )
-        # The stage is the pair's shared history, so both directions moved: the
-        # one NPC in the pair is the one who feels it.
-        felt_by = a if a != player else b
-        if felt_by != player:
-            thought = MO.thoughts_from_stage(ctx.state, felt_by, fid, ctx.turn)
-            if thought is not None:
-                ctx.thoughts.append({"npc_id": felt_by, "thought": thought})
+        thought = MO.thoughts_from_stage(ctx.state, a, fid, ctx.turn)
+        if thought is not None:
+            ctx.thoughts.append({"npc_id": a, "thought": thought})
     ctx.observable = True
     ctx.relationship_reasons.append(op["reason"])
     ctx.applied.append({
@@ -726,20 +586,21 @@ def op_relationship(ctx, op, path):
         "title": F(S.Str(1, 40)),
         "text": F(S.Nullable(S.Str(1, 120)), required=False, default=None),
         "tier": F(S.Nullable(S.Enum(*ST.EVENT_TIERS)), required=False, default=None),
-        "participants": F(S.List(S.Id(), 1, 12, unique=True)),
+        "with_player": F(S.Bool(), required=False, default=True),
         "due": F(CLOCK, required=False),
         "in_minutes": F(S.Int(1, 400 * ST.MINUTES_PER_DAY), required=False),
         "probability": F(S.Nullable(S.Num(0, 1, lo_open=True, hi_open=True)), required=False, default=None),
         "dedupe_key": F(FACT_KEY),
         "repeat": F(S.Bool(), required=False, default=False),
     },
-    "创建事件（约定、截止、风声、机会、伏笔、概率事件）。due 与 in_minutes 二选一且必须晚于现在；chance 必须带 probability，到期由引擎掷骰；涉及玩家的承诺需要 player_authorized；dedupe_key 与未结束事件不能重复",
+    "创建事件（约定、截止、风声、机会、伏笔、概率事件）。with_player：你们之间的事（默认）还是只是TA自己的事。due 与 in_minutes 二选一且必须晚于现在；"
+    "chance 必须带 probability，到期由引擎掷骰；你们之间的约定需要 player_authorized；dedupe_key 与未结束事件不能重复",
 )
 def op_event_create(ctx, op, path):
     errs = []
     state = ctx.state
-    for index, cid in enumerate(op["participants"]):
-        _need_character(ctx, cid, "%s.participants[%d]" % (path, index), errs)
+    player = state["player_id"]
+    participants = [ctx.her] + ([player] if op["with_player"] else [])
     given = [k for k in ("due", "in_minutes") if k in op]
     due = None
     if len(given) != 1:
@@ -752,12 +613,11 @@ def op_event_create(ctx, op, path):
         errs.append(detail(path + ".probability", "概率事件必须带 probability", "结果由引擎在到期时掷骰", INVARIANT_VIOLATION))
     if op["kind"] != "chance" and op["probability"] is not None:
         errs.append(detail(path + ".probability", "只有 chance 事件带 probability", None, INVARIANT_VIOLATION))
-    player = state["player_id"]
-    if op["kind"] == "promise" and player in op["participants"] and ctx.in_beat is None:
+    if op["kind"] == "promise" and op["with_player"] and ctx.in_beat is None:
         if ctx.mode not in ("result", "attempt") or not ctx.authorized:
-            errs.append(detail(path, "涉及玩家角色的承诺只能在玩家本人答应时成立（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
-    if ctx.in_beat is not None and player in op["participants"]:
-        errs.append(detail(path + ".participants", "离屏片段不能创建涉及玩家角色的事件", None, INVARIANT_VIOLATION))
+            errs.append(detail(path, "你们之间的约定只能在玩家本人答应时成立（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
+    if ctx.in_beat is not None and op["with_player"]:
+        errs.append(detail(path + ".with_player", "离屏片段不能创建你们之间的事件", "with_player 写 false", INVARIANT_VIOLATION))
     key = op["dedupe_key"]
     used = state["counters"].setdefault("event_keys", {}).get(key, 0)
     if any(e["state"] == "pending" and e["dedupe_key"].split("#")[0] == key for e in state["events"].values()):
@@ -780,7 +640,7 @@ def op_event_create(ctx, op, path):
         "tier": tier,
         "title": op["title"],
         "text": op["text"],
-        "participants": list(op["participants"]),
+        "participants": participants,
         "due": due,
         "probability": op["probability"],
         "dedupe_key": key,
@@ -819,9 +679,9 @@ def _player_deal_guard(ctx, event, path, errs):
     player = ctx.state["player_id"]
     if event["kind"] == "promise" and player in event["participants"]:
         if ctx.in_beat is not None:
-            errs.append(detail(path, "离屏片段不能兑现或取消涉及玩家角色的事件", None, INVARIANT_VIOLATION))
+            errs.append(detail(path, "离屏片段不能兑现或取消你们之间的约定", None, INVARIANT_VIOLATION))
         elif ctx.mode not in ("result", "attempt") or not ctx.authorized:
-            errs.append(detail(path, "涉及玩家角色的承诺，其兑现与取消要由玩家本人决定（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
+            errs.append(detail(path, "你们之间的约定，其兑现与取消要由玩家本人决定（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
 
 
 @register(
@@ -919,5 +779,5 @@ def catalog():
 
 
 # Offscreen beats register themselves on import (they live in their own module
-# because only a subset of operations is legal for a character acting alone).
+# because only a subset of operations is legal for her while you are apart).
 from . import ops_time  # noqa: E402,F401

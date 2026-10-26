@@ -1,8 +1,8 @@
-"""The generic structure layer (DESIGN_DECISIONS.md D16).
+"""The generic structure layer: stage tables, response spectrum, enums.
 
-Only structure lives here: stage tables, response spectrum, power structures,
-twist categories, enums. No text tied to an era, place, trade or title; every
-display string here must pass every world's forbidden-term scan.
+rp-soul is one companion and the player ("you and me"); the multi-character
+tables of the engine this was ported from (tiers, power structures, places,
+channels, pressures) are gone. No text tied to an era, place, trade or title.
 """
 
 # Relationship stages (NARRATIVE_RULES.md section 6). Worlds may relabel them.
@@ -33,24 +33,17 @@ RESPONSE_LABELS = {
 COOPERATIVE_RESPONSES = ("partial", "genuine")
 
 ACTION_MODES = ("result", "attempt", "rewrite", "continue", "wait")
-POWER_STRUCTURES = ("player_high", "npc_high", "equal", "switchable")
-SOCIAL_POSITIONS = ("low", "equal", "high")
-TWIST_CATEGORIES = ("信息", "人事", "资源", "制度", "时限", "关系", "意外")
-HOOK_KINDS = ("approach", "observe", "request", "accident")
-BACKGROUND_FUNCTIONS = ("witness", "messenger", "obstacle", "rumor_source", "helper")
-CHANNEL_FIDELITY = ("exact", "distorted")
-PRIVACY = ("public", "semi", "private")
-PRESSURE_SOURCES = ("institution", "person", "nature", "money", "rumor", "accident")
-PRESSURE_FLAGS = ("timed", "leverage")
 GENDERS = ("female", "male", "nonbinary")
-TEMPLATE_GENDERS = ("any",) + GENDERS
-NPC_GENDER_PREFERENCES = ("any", "mostly_female", "mostly_male", "female_only", "male_only", "mixed")
 PERSONS = ("second", "first", "third")
-TIERS = ("background", "supporting", "major")
 PACES = ("slow", "standard", "direct")
 EXPLICITNESS = ("subtle", "standard", "explicit")
 
+# 存储层的可见性（事实行里的 visibility 列）
 FACT_VISIBILITY = ("public", "private", "inner")
+# 模型写事实时用的范围：只有你我两个人，谁知道一目了然
+#   shared 你们都知道 / player_only 只有你知道 / companion_only 只有她知道 / inner 她心里的
+FACT_SCOPES = ("shared", "player_only", "companion_only", "inner")
+# rumor 只留给旧存档里已有的事实：单角色没有传话的人
 FACT_ORIGINS = ("setup", "observed", "told", "retcon", "offscreen", "rumor")
 MODEL_FACT_ORIGINS = ("observed", "told", "retcon")  # setup/offscreen/rumor come from the engine or dedicated ops
 
@@ -82,16 +75,11 @@ INCAPACITATING = ("drunk", "asleep", "unconscious")
 # skip to: a gap is however long the user was away, never a chosen span.
 MINUTES_PER_DAY = 1440
 MAX_ADVANCE_MINUTES = 30 * MINUTES_PER_DAY
+# 隔这么久再说话就算新的一段相处（新场景）
 SCENE_BREAK_MINUTES = 60
 
 COOLDOWN_TURNS = 3
 MAX_FIX_ATTEMPTS = 2
-
-# Text ceilings, in characters without IDs and tags: a card or a pressure on
-# stage goes into every full context (20 KB), so a long one squeezes the
-# others (PROGRESS: 全部按建议执行（2026-10-16）).
-TEMPLATE_TEXT_MAX = 1800
-PRESSURE_TEXT_MAX = 450
 
 # ---------------------------------------------------------------------------
 # mood（RimWorld 式心情条：基准值 + 生效想法求和，阈值切 band）
@@ -126,10 +114,10 @@ THOUGHT_DURATION = {
 # 行为门禁：band + op → 拒绝原因（None = 放行）
 # 档位按回合开始时的心情判定：模型在 brief 里看到的是哪一档，本回合就按哪一档管。
 MOOD_GATE = {
-    "closed": {"stage_advance": "他现在的状态不会接受关系推进"},
+    "closed": {"stage_advance": "TA现在的状态不会接受关系推进"},
     "break": {
-        "npc_response": "他现在没法好好回应，只能挑衅或离开",
-        "stage_advance": "他现在的状态不会接受关系推进",
+        "npc_response": "TA现在没法好好回应，只能挑衅或离开",
+        "stage_advance": "TA现在的状态不会接受关系推进",
     },
 }
 # 收缩档下 npc_response 只能取这些回应
@@ -142,7 +130,7 @@ BREAK_ACTION_KINDS = ("provoke", "leave")
 SITUATIONAL_DELTA = {
     "present": 3,
     "absent": -2,
-    "away_long": -5,
+    "away_long": -5,      # 隔了一天以上你才回来
     "event_due": -6,
     "event_overdue": -10,
     "tension": -6,
@@ -177,12 +165,12 @@ MOOD_OPEN_COOLDOWN_BONUS = 1
 AGENCY_MAX_CANDIDATES = 3
 AGENCY_KINDS = ("approach", "observe", "request", "accident", "provoke", "leave")
 AGENCY_GOAL_KINDS = {
-    "approach": "接近玩家",
-    "observe": "观察",
+    "approach": "主动找你",
+    "observe": "在旁观察",
     "request": "提要求",
     "accident": "意外",
-    "provoke": "挑衅",
-    "leave": "离开",
+    "provoke": "刺你一句",
+    "leave": "走开/冷场",
 }
 
 # ---------------------------------------------------------------------------

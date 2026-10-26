@@ -1,9 +1,9 @@
 """Read helpers over the session state dict. No mutation except id allocation.
 
-A session state holds only engine-owned facts about the fiction: characters,
-relationships, facts, events, scene, clock, mood thoughts, memory. Everything
-that used to come from a world pack (locations, cast templates, name pools)
-now comes from the persona pack and is read-only for the engine.
+A session state holds only engine-owned facts about the story: the two
+characters (the player slot and her), the relationship between them, facts,
+events, the current stretch of time together (scene), clock, mood thoughts,
+memory. Who she is comes from the persona and is read-only for the engine.
 """
 
 import hashlib
@@ -101,13 +101,6 @@ def real_span(state, now):
     return minutes, CL.add_minutes(state["clock"], minutes)
 
 
-def place(persona, lid):
-    for item in persona.get("places") or []:
-        if item["id"] == lid:
-            return item
-    return None
-
-
 def can_act(state, cid, turn=None, bonus=0):
     """Whether a significant autonomous action is off cooldown for the next turn."""
     turn = state["turn"] + 1 if turn is None else turn
@@ -121,6 +114,12 @@ def player_involved(state, event):
 
 def npcs(state):
     return sorted(cid for cid in state["characters"] if cid != state["player_id"])
+
+
+def companion(state):
+    """Her id: the one character who is not the player (None before opening)."""
+    others = npcs(state)
+    return others[0] if others else None
 
 
 def mood_of(state, cid):

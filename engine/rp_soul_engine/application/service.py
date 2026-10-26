@@ -164,6 +164,7 @@ def _persona_or_raise(ctx, raw):
 
 def check_persona(ctx, payload):
     payload = validate(specs.CHECK_PERSONA, payload)
+    legacy = PE.is_legacy(payload["persona"]["front"])
     persona, errors = PE.validate(PE.from_markdown(payload["persona"]["front"], payload["persona"]["prose"], payload["persona"]["title"], payload["persona"]["persona_id"]))
     if errors:
         return {
@@ -171,22 +172,30 @@ def check_persona(ctx, payload):
             "count": len(errors),
             "problems": errors,
             "text": PE.problems_text(errors),
+            "legacy": legacy,
         }
     return {
         "ok": True,
         "count": 0,
-        "persona": {
-            "id": persona["id"],
-            "title": persona["title"],
-            "revision": persona["revision"],
-            "places": [{"id": p["id"], "name": p["name"]} for p in persona["places"]],
-            "cast": [
-                {"id": c["id"], "name": c["name"], "tier": c["tier"], "role": c["role"], "age": c["age"], "gender": c["gender"]}
-                for c in persona["cast"]
-            ],
-            "mood_base": persona["mood_base"],
-            "mood_thresholds": persona["mood_thresholds"],
-        },
+        # 旧格式（places + cast）已按第一个主要角色读取；设置页提示保存一次换成新格式
+        "legacy": legacy,
+        "persona": _persona_summary(persona),
+    }
+
+
+def _persona_summary(persona):
+    return {
+        "id": persona["id"],
+        "title": persona["title"],
+        "revision": persona["revision"],
+        "name": persona["name"],
+        "role": persona["role"],
+        "age": persona["age"],
+        "gender": persona["gender"],
+        "start_stage": persona["start_stage"],
+        "routine": [dict(slot) for slot in persona["routine"]],
+        "mood_base": persona["mood_base"],
+        "mood_thresholds": persona["mood_thresholds"],
     }
 
 
@@ -207,31 +216,9 @@ def new_game(ctx, payload):
 
     payload = validate(specs.NEW_GAME, payload)
     persona = _persona_or_raise(ctx, payload["persona"])
-    problems = []
-    if payload["start_location"] is not None and PE.place(persona, payload["start_location"]) is None:
-        problems.append(detail("$.start_location", "地点不存在：%s" % payload["start_location"],
-                               "可用地点：%s" % "、".join(p["id"] for p in persona["places"]), INVALID_INPUT))
-    known = {c["id"] for c in persona["cast"]}
-    for index, cid in enumerate(payload["present"]):
-        if cid not in known:
-            problems.append(detail("$.present[%d]" % index, "角色不存在：%s" % cid,
-                                   "可用角色：%s" % "、".join(sorted(known)), INVALID_INPUT))
-    if problems:
-        raise AppError(problems[0]["code"], problems[0]["reason"], problems)
 
     def handler(conn, now):
         state, warnings = opening.new_session(persona, seed=payload["seed"], now=now)
-        if payload["start_location"] is not None:
-            state["scene"]["location_id"] = payload["start_location"]
-            state["characters"][state["player_id"]]["status"]["location_id"] = payload["start_location"]
-        if payload["present"]:
-            player = state["player_id"]
-            present = sorted(set(payload["present"]) | {player}, key=lambda cid: (cid != player, cid))
-            state["scene"]["present"] = present
-            # 指定在场的人必须真的在那个地点，否则末道不变量检查会判「不在当前地点」。
-            scene_place = state["scene"]["location_id"]
-            for cid in present:
-                state["characters"][cid]["status"]["location_id"] = scene_place
         prefs = payload["preferences"]
         for key in ("offscreen_simulation", "person", "pace", "explicitness"):
             if key in prefs:
@@ -250,8 +237,7 @@ def new_game(ctx, payload):
                 "id": persona["id"],
                 "title": persona["title"],
                 "revision": persona["revision"],
-                "places": len(persona["places"]),
-                "cast": len(persona["cast"]),
+                "name": persona["name"],
             },
             "warnings": warnings,
             "context": CX.full(state, persona, {"current_slot": None, "turns_since_save": 0}),
@@ -329,10 +315,9 @@ DOMAIN_KEYS = (
     "action_mode",
     "player_input",
     "player_authorized",
-    "acts_on",
+    "acts_on_her",
     "operations",
     "content_tags",
-    "intimate_participants",
     "summary",
     "open_action",
     "quotes",
@@ -347,12 +332,12 @@ SESSION_ID_RE = re.compile(r"s_[a-z0-9]{2,38}")
 
 def choose_depth(state, results, failed_before=False):
     """Full after a failed commit, after a record of several turns, on a new
-    place, a new character or a new day, every 5 turns, and when a prologue is
-    due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
+    stretch of time together or a new day, every 5 turns, and when a prologue
+    is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
     if failed_before or len(results) > 1:
         return "full"
     result = results[0]
-    if result["location_changed"] or result["new_characters"] or result["crossed_day"]:
+    if result["scene_changed"] or result["crossed_day"]:
         return "full"
     if state["requests"].get("prologue") or state["turn"] % 5 == 0:
         return "full"
@@ -963,7 +948,6 @@ def status(ctx, payload):
         "revision": state.get("revision", 0),
         "turn": state["turn"],
         "persona_title": state["persona_title"],
-        "place": PE.place_name(persona, state["scene"]["location_id"]),
         "clock_label": CL.label(state["clock"]),
         "paused": state["safety"]["paused"],
         "present": [state["characters"][cid]["name"] for cid in state["scene"]["present"]],
@@ -984,16 +968,15 @@ def status(ctx, payload):
         out["turns_logged"] = repo.count_rows(conn, "turn_log", state["session_id"])
         out["archive"] = repo.count_archive(conn, state["session_id"])
         out["thought_deletions"] = repo.thought_deletions(conn, state["session_id"])
-        out["persona"] = {
-            "id": persona["id"],
-            "title": persona["title"],
-            "revision": persona["revision"],
-            "places": len(persona["places"]),
-            "cast": len(persona["cast"]),
-            "mood_base": persona["mood_base"],
-            "mood_thresholds": persona["mood_thresholds"],
-        }
+        out["persona"] = _persona_summary(persona)
     return out
+
+
+def _her(state, payload):
+    """The npc_id a debug call names, or her when it names none."""
+    from ..domain import state as SS
+
+    return payload["npc_id"] or SS.companion(state)
 
 
 def debug_mood(ctx, payload):
@@ -1003,7 +986,7 @@ def debug_mood(ctx, payload):
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
     state = session["state"]
-    cid = payload["npc_id"]
+    cid = _her(state, payload)
     if cid not in state["characters"] or cid == state["player_id"]:
         known = sorted(k for k in state["characters"] if k != state["player_id"])
         raise AppError(NOT_FOUND, "没有这个角色：%s" % cid,
@@ -1023,7 +1006,7 @@ def debug_delete_thought(ctx, payload):
 
     def handler(conn, session, now):
         state, persona = session["state"], session["persona"]
-        cid = payload["npc_id"]
+        cid = _her(state, payload)
         if cid not in state["characters"] or cid == state["player_id"]:
             known = sorted(k for k in state["characters"] if k != state["player_id"])
             raise AppError(NOT_FOUND, "没有这个角色：%s" % cid,
@@ -1087,7 +1070,6 @@ def _mood_rows(state, persona):
         rows.append({
             "id": cid,
             "name": char["name"],
-            "tier": char.get("tier"),
             "role": char.get("public_role"),
             "present": SS.is_present(state, cid),
             "conditions": [c["kind"] for c in char["status"].get("conditions") or []],
@@ -1118,21 +1100,11 @@ def debug_moods(ctx, payload):
         "turn": state["turn"],
         "persona_title": state["persona_title"],
         "clock_label": CL.label(state["clock"]),
-        "place": state["scene"]["location_id"],
         "deletions": repo.thought_deletions(conn, state["session_id"]),
     }
     out.update(_mood_rows(state, session["persona"]))
     return out
 
-
-_ACTION_LABELS = {
-    "approach": "主动接近",
-    "observe": "在旁观察",
-    "request": "提出要求",
-    "accident": "出了意外",
-    "provoke": "挑起冲突",
-    "leave": "离开",
-}
 
 _RESPONSE_TEXT = {
     "refuse": "拒绝",
@@ -1148,7 +1120,7 @@ def _activity_row(state, row):
     name_of = lambda cid: names.get(cid, str(cid))
     payload = row.get("payload") or {}
     applied = payload.get("applied") or []
-    actions, beats, responses, relations, thoughts, mood_moves = [], [], [], [], [], []
+    actions, beats, responses, relations, thoughts = [], [], [], [], []
     for item in applied:
         if not isinstance(item, dict):
             continue
@@ -1158,10 +1130,9 @@ def _activity_row(state, row):
                 "npc_id": item.get("npc_id"),
                 "name": name_of(item.get("npc_id")),
                 "kind": item.get("kind"),
-                "kind_label": _ACTION_LABELS.get(item.get("kind") or "", item.get("kind") or ""),
+                "kind_label": ST.AGENCY_GOAL_KINDS.get(item.get("kind") or "", item.get("kind") or ""),
                 "significant": bool(item.get("significant")),
                 "text": item.get("action") or "",
-                "target_id": item.get("target_id"),
             })
         elif kind == "offscreen_beat":
             beats.append({
@@ -1195,8 +1166,6 @@ def _activity_row(state, row):
                 "label": item.get("label") or "",
                 "delta": item.get("delta"),
             })
-        elif kind in ("clock", "move", "enter_scene", "exit_scene"):
-            mood_moves.append(kind)
     return {
         "turn": row.get("turn"),
         "revision": row.get("revision"),
@@ -1232,7 +1201,6 @@ def debug_activity(ctx, payload):
         "turn": state["turn"],
         "persona_title": state["persona_title"],
         "clock_label": CL.label(state["clock"]),
-        "place": state["scene"]["location_id"],
         "open_action": state["memory"].get("open_action") or "",
         "counts": {"turns": len(rows), "actions": actions_total, "beats": beats_total},
         "rows": rows,

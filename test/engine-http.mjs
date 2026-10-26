@@ -12,23 +12,16 @@ process.env.DSH_HOME = home;
 mkdirSync(join(home, 'rp-soul', 'parts'), { recursive: true });
 writeFileSync(join(home, 'SOUL.md'), [
   '---',
-  'id: rain_clinic',
+  'id: lin_wan',
   'title: 雨夜诊所',
-  'places:',
-  '  - id: clinic',
-  '    name: 诊所',
-  '    privacy: private',
-  'cast:',
-  '  - id: lin_wan',
-  '    name: 林晚',
-  '    tier: major',
-  '    role: 夜班医生',
-  '    age: 34',
-  '    gender: female',
-  '    adult_context: 独立执业五年的全科医生',
-  '    voices:',
-  '      surface: 说话克制。',
-  '      inner: 一直在等一句道歉。',
+  'name: 林晚',
+  'role: 夜班医生',
+  'age: 34',
+  'gender: female',
+  'adult_context: 独立执业五年的全科医生',
+  'voices:',
+  '  surface: 说话克制。',
+  '  inner: 一直在等一句道歉。',
   'mood_base: 55',
   'mood_thresholds:',
   '  open: 72',
@@ -74,7 +67,7 @@ eq(eng.status, 200, '1. /engine 200');
 ok(eng.body.health !== undefined, '1. 带 health');
 eq(eng.body.health.ready, true, '1. 引擎就绪（' + JSON.stringify(eng.body.health.python) + '）');
 eq(eng.body.persona.title, '雨夜诊所', '1. 人设标题来自前置块');
-eq(eng.body.persona.front.cast.length, 1, '1. 前置块 cast 有一个');
+eq(eng.body.persona.front.name, '林晚', '1. 前置块就是她一个人');
 eq(eng.body.session, null, '1. 还没开局时 session 为 null');
 
 // ---- 2. GET /engine/persona：真引擎校验 ----
@@ -87,7 +80,7 @@ ok(chk.body.build !== undefined && chk.body.build.bytes > 0, '2. 带了人设摘
 const orig = (await j('/rp-soul/file?rel=' + encodeURIComponent('SOUL.md'))).body.text;
 ok(typeof orig === 'string' && orig.length > 100, '2b. 能读回原 SOUL.md');
 const NL = String.fromCharCode(10);
-const BAD = ['---', 'id: broken', 'title: 缺东西的人设', '---', '这里只有散文，没有前置块内容。'].join(NL);
+const BAD = ['---', 'id: broken', 'title: 缺东西的人设', 'bogus: 1', '---', '这里只有散文，没有前置块内容。'].join(NL);
 const putBad = await j('/rp-soul/file', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -99,7 +92,7 @@ eq(bad.status, 200, '2b. 坏人设不吃 500');
 eq(bad.body.ok, false, '2b. 校验没通过');
 ok(Array.isArray(bad.body.details) && bad.body.details.length >= 2, '2b. 带 details 数组（' + JSON.stringify(bad.body.error ?? '') + '）');
 ok(bad.body.details.every((d) => typeof d.path === 'string' && typeof d.reason === 'string' && typeof d.hint === 'string'), '2b. 每条都有 path/reason/hint');
-ok(bad.body.details.some((d) => d.path.includes('places')), '2b. 指出缺 places');
+ok(bad.body.details.some((d) => d.path.includes('name')), '2b. 指出缺 name');
 await j('/rp-soul/file', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -138,8 +131,6 @@ const exec = { signal: undefined, agent: { id: 'conv-http' } };
 const started = await tools.get('soul_admin').execute({
   action: 'start',
   seed: 7,
-  start_location: 'clinic',
-  present: ['lin_wan'],
 }, exec);
 ok(started.ok === true, '7. 开局成功（' + JSON.stringify(started.error ?? '') + '）');
 const sid = started.session_id;
@@ -157,7 +148,7 @@ if (mood.body.thoughts.length === 0) {
     action_mode: 'result',
     player_input: '我把伞靠在门边，说了句今天雨真大。',
     operations: [
-      { op: 'add_fact', key: 'wet_umbrella', text: '门边靠着一把湿伞', visibility: 'public', origin: 'observed' },
+      { op: 'add_fact', key: 'wet_umbrella', text: '门边靠着一把湿伞', scope: 'shared', origin: 'observed' },
     ],
     content_tags: [],
     summary: '玩家进门，把湿伞靠在门边。',
@@ -172,7 +163,7 @@ if (mood.body.thoughts.length === 0) {
     action_mode: 'continue',
     player_input: '',
     operations: [
-      { op: 'add_thought', npc_id: 'lin_wan', label: '雨太大了', delta: -4, basis_fact_id: factOp.fact_id },
+      { op: 'add_thought', label: '雨太大了', delta: -4, basis_fact_id: factOp.fact_id },
     ],
     content_tags: [],
     summary: '林晚看了眼门边的湿伞。',

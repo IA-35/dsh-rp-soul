@@ -1,11 +1,11 @@
 """Settlement of elapsed time, in a fixed order:
 
-1. clock forward to the real moment (a jump of >= 60 minutes starts a new scene)
+1. clock forward to the real moment (a gap of >= 60 minutes starts a new
+   stretch of time together, a new scene)
 2. due events, by (due, id): expire, roll chance events, surface foreshadows
 3. timed conditions expire, then mood thoughts age
-4. offscreen simulation (by span tier)
-5. propagation of spreading facts
-6. context requests for the next commit
+4. offscreen: what the time apart asks of this commit (by span tier)
+5. context requests for the next commit
 
 The span is never authored: it is however much real time passed since the last
 settled moment (`state["real_at"]`). The model cannot skip ahead, because a
@@ -97,8 +97,8 @@ def advance(state, minutes, turn, hooks=None, to_clock=None):
     incremented, so a session left alone for three days lands on the right day
     rather than on "day one, minute 4323".
 
-    `hooks` lets later stages plug offscreen simulation, propagation and
-    request computation into steps 4-6 without changing the order.
+    `hooks` lets later stages plug the offscreen step and request
+    computation into steps 4-5 without changing the order.
     """
     hooks = hooks or {}
     before = dict(state["clock"])
@@ -116,7 +116,6 @@ def advance(state, minutes, turn, hooks=None, to_clock=None):
         "expired_conditions": [],
         "expired_thoughts": [],
         "offscreen": None,
-        "propagation": None,
         "requests": None,
     }
     if minutes >= ST.SCENE_BREAK_MINUTES:
@@ -127,14 +126,11 @@ def advance(state, minutes, turn, hooks=None, to_clock=None):
         report["expired_conditions"] = expire_conditions(state, state["clock"])
         report["expired_thoughts"] = MO.settle(state, turn)
         report["steps"].append("status")
-        MO.refresh_situational(state, turn)
+        MO.refresh_situational(state, turn, gap=minutes)
         report["steps"].append("mood")
     if "offscreen" in hooks:
         report["offscreen"] = hooks["offscreen"](state, report)
     report["steps"].append("offscreen")
-    if "propagation" in hooks:
-        report["propagation"] = hooks["propagation"](state, report)
-    report["steps"].append("propagation")
     if "requests" in hooks:
         report["requests"] = hooks["requests"](state, report)
     report["steps"].append("requests")

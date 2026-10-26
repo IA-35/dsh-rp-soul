@@ -1,17 +1,15 @@
-"""Directed relationship edges: trust, tension, stage.
+"""The relationship between her and the player: trust, tension, stage.
 
-One edge per direction, keyed "%s>%s", because A liking B says nothing about
-B liking A. The *stage* is the exception: it is the pair's shared history, so
-advancing it writes both directions in step and both sides need evidence from
-the same turn.
+Two directed edges, keyed "%s>%s". Only hers toward the player (her>player) is
+written by the model: how the player feels is never stored. The *stage* is the
+pair's shared history, so advancing it writes both directions in step.
 
 Three hard rules, all enforced here rather than trusted to the model:
 
 * trust moves at most MAX_TRUST_DELTA per turn and net (start -> end), so a
   model cannot ramp it by submitting two small operations;
 * a stage advance needs evidence: the player acted this turn (result/attempt)
-  *and* the other side answered partial/genuine; two NPCs need both to have
-  acted;
+  *and* she answered partial/genuine;
 * out-of-range values are reported, never silently clamped - a clamp would
   hide the model's mistake and let the story drift.
 
@@ -42,33 +40,24 @@ def _maybe_create(state, a, b, stage="stranger"):
 def evidence(ctx, a, b, path, errs):
     """What justifies a stage advance this turn. None + an error when absent."""
     player = ctx.state["player_id"]
-    if player in (a, b):
-        npc = b if a == player else a
-        if ctx.mode not in ("result", "attempt"):
-            errs.append(detail(
-                path + ".stage_advance",
-                "亲近进程前进需要玩家本回合的行动（result/attempt）",
-                None, INVARIANT_VIOLATION,
-            ))
-            return None
-        cooperative = [r for r in ctx.responses.get(npc, []) if r in ST.COOPERATIVE_RESPONSES]
-        if not cooperative:
-            errs.append(detail(
-                path + ".stage_advance",
-                "亲近进程前进需要同一回合里 %s 的 partial 或 genuine 回应" % ctx.name(npc),
-                "先写 npc_response；阶段是双方共同经历的历史，不是一方说了算",
-                INVARIANT_VIOLATION,
-            ))
-            return None
-        return {"player_action_turn": ctx.turn, "npc_response": cooperative[-1]}
-    if a not in ctx.actors or b not in ctx.actors:
+    npc = b if a == player else a
+    if ctx.mode not in ("result", "attempt"):
         errs.append(detail(
             path + ".stage_advance",
-            "两名 NPC 之间的阶段前进需要双方本回合都有行动或回应",
+            "亲近进程前进需要玩家本回合的行动（result/attempt）",
             None, INVARIANT_VIOLATION,
         ))
         return None
-    return {"npc_actions_turn": ctx.turn}
+    cooperative = [r for r in ctx.responses.get(npc, []) if r in ST.COOPERATIVE_RESPONSES]
+    if not cooperative:
+        errs.append(detail(
+            path + ".stage_advance",
+            "亲近进程前进需要同一回合里 %s 的 partial 或 genuine 回应" % ctx.name(npc),
+            "先写 npc_response；阶段是两个人共同经历的历史，不是一方说了算",
+            INVARIANT_VIOLATION,
+        ))
+        return None
+    return {"player_action_turn": ctx.turn, "npc_response": cooperative[-1]}
 
 
 def change(ctx, a, b, trust_delta, tension_delta, stage_advance, stage_retreat_to, reason, path):
@@ -84,23 +73,10 @@ def change(ctx, a, b, trust_delta, tension_delta, stage_advance, stage_retreat_t
         return None, errs
     key = SS.edge_key(a, b)
     current = state["relationships"].get(key)
-    # A relationship needs a scene: two people who never met cannot have one.
-    if current is None and not (SS.is_present(state, a) and SS.is_present(state, b)) and ctx.in_beat is None:
-        errs.append(detail(
-            path,
-            "%s 与 %s 还没有实际接触过，关系要在两人同场时建立" % (ctx.name(a), ctx.name(b)),
-            None, INVARIANT_VIOLATION,
-        ))
     if not trust_delta and not tension_delta and not stage_advance and stage_retreat_to is None:
         errs.append(detail(path, "关系没有任何变化", None, INVARIANT_VIOLATION))
     if stage_advance and stage_retreat_to is not None:
         errs.append(detail(path, "不能同时前进与后退", None, INVARIANT_VIOLATION))
-    player = state["player_id"]
-    if a == player and (trust_delta or tension_delta) and ctx.mode not in ("result", "attempt"):
-        errs.append(detail(
-            path, "玩家角色对别人的态度只随玩家自己的行动变化",
-            "不替玩家下情绪结论", INVARIANT_VIOLATION,
-        ))
     trust = current["trust"] if current else 0
     tension = current["tension"] if current else 0
     stage = current["stage"] if current else "stranger"
@@ -184,21 +160,3 @@ def pair_stage(state, a, b):
     edge = SS.edge(state, a, b)
     return edge["stage"] if edge else "stranger"
 
-
-def summary(state, cid, player=None, limit=8):
-    """Who matters to this character right now, strongest bond first."""
-    player = player or state["player_id"]
-    rows = []
-    for key, edge in state["relationships"].items():
-        if edge["from"] != cid:
-            continue
-        rows.append({
-            "character_id": edge["to"],
-            "name": (state["characters"].get(edge["to"]) or {}).get("name", edge["to"]),
-            "trust": edge["trust"],
-            "tension": edge["tension"],
-            "stage": edge["stage"],
-            "stage_label": SS.stage_label(edge["stage"]),
-        })
-    rows.sort(key=lambda row: (-abs(row["trust"]), -row["tension"], row["character_id"]))
-    return rows[:limit]

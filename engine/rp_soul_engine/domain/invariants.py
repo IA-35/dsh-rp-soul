@@ -2,7 +2,7 @@
 
 Operations validate themselves; this pass catches anything an operation
 missed. Any violation rejects the whole commit. It knows nothing about any
-particular world: only the generic structure layer and the state schema.
+particular persona: only the generic structure layer and the state schema.
 """
 
 from ..errors import INVARIANT_VIOLATION, SAFETY_BLOCK, detail
@@ -22,6 +22,8 @@ def check(state, before_clock=None):
     player = state["player_id"]
     if player not in chars:
         bad("$.state.characters", "玩家角色缺失")
+    if len(chars) != 2:
+        bad("$.state.characters", "只能有你和TA两个人（现在 %d 个）" % len(chars))
     for cid, char in chars.items():
         base = "$.state.characters.%s" % cid
         age = char.get("age")
@@ -32,8 +34,6 @@ def check(state, before_clock=None):
                 bad(base + ".age", "角色 %s 年龄 %d 小于 18" % (cid, age), SAFETY_BLOCK)
             # adult_context 只是「一句话交代成年身份」的补充说明，人设里可以不写：
             # 年龄这一关已经在上面把住了，这里不再要求它非空。
-        if char.get("tier") not in ST.TIERS:
-            bad(base + ".tier", "角色层级非法")
         mood = char.get("mood")
         if cid != player:
             if not isinstance(mood, dict):
@@ -62,8 +62,6 @@ def check(state, before_clock=None):
     for cid in scene["present"]:
         if cid not in chars:
             bad("$.state.scene.present", "在场的人不存在：%s" % cid)
-        elif chars[cid]["status"]["location_id"] != scene["location_id"]:
-            bad("$.state.scene.present", "%s 不在当前地点" % cid)
     facts = state["facts"]
     # A commit checks the facts it created or changed; the rest were checked
     # when they were written and have not changed since.

@@ -7,7 +7,7 @@ persona pack (markdown + optional front matter).
 
 ENGINE_VERSION = "0.1.0"
 DB_SCHEMA_VERSION = 1
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2  # 2: one companion (persona flat, no places/cast)
 RNG_VERSION = 1
 SAVE_FORMAT = "rp-soul-save"
 MIN_PYTHON = (3, 10)

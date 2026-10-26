@@ -11,33 +11,18 @@ process.env.DSH_HOME = home;
 mkdirSync(join(home, 'rp-soul', 'parts'), { recursive: true });
 writeFileSync(join(home, 'SOUL.md'), [
   '---',
-  'id: rain_clinic',
+  'id: lin_wan',
   'title: 雨夜诊所',
-  'places:',
-  '  - id: clinic',
-  '    name: 诊所',
-  '    privacy: private',
-  '  - id: hall',
-  '    name: 走廊',
-  '    privacy: semi',
-  'cast:',
-  '  - id: lin_wan',
-  '    name: 林晚',
-  '    tier: major',
-  '    role: 夜班医生',
-  '    age: 34',
-  '    gender: female',
-  '    adult_context: 独立执业五年的全科医生',
-  '    voices:',
-  '      surface: 说话克制，先问诊再答话。',
-  '      inner: 其实一直在等一句道歉。',
-  '  - id: zhou_yi',
-  '    name: 周逸',
-  '    tier: supporting',
-  '    role: 常来的病人',
-  '    age: 29',
-  '    gender: male',
-  '    adult_context: 在城里做木工的自由职业者',
+  'name: 林晚',
+  'role: 夜班医生',
+  'age: 34',
+  'gender: female',
+  'adult_context: 独立执业五年的全科医生',
+  'voices:',
+  '  surface: 说话克制，先问诊再答话。',
+  '  inner: 其实一直在等一句道歉。',
+  'routine:',
+  '  - {from: 0, to: 1439, doing: 在诊所值夜班}',
   'mood_base: 55',
   'mood_thresholds:',
   '  open: 72',
@@ -90,8 +75,6 @@ const call = (name, args) => tools.get(name).execute(args, exec);
 const started = await call('soul_admin', {
   action: 'start',
   seed: 424242,
-  start_location: 'clinic',
-  present: ['lin_wan', 'zhou_yi'],
 });
 if (started.ok !== true) console.log('START FAIL', JSON.stringify(started, null, 2));
 ok(started.ok === true, '2. start 成功（' + JSON.stringify(started.error ?? '') + '）');
@@ -109,7 +92,9 @@ eq(brief.session_id, sessionId, '3. 会话 id 一致');
 ok(brief.context !== undefined && brief.context !== null, '3. 带回 context');
 eq(brief.context.world, undefined, '3. 没有 world 段');
 ok(typeof brief.context.clock?.label === 'string', '3. clock.label 是字符串');
-ok(Array.isArray(brief.context.present_npcs) && brief.context.present_npcs.length >= 1, '3. present_npcs 非空');
+eq(brief.context.companion?.name, '林晚', '3. companion 就是她');
+eq(brief.context.companion?.routine_now, '在诊所值夜班', '3. 带上作息里她这会儿在做什么');
+eq(brief.context.present_npcs, undefined, '3. 没有多角色的 present_npcs');
 ok(Array.isArray(brief.context.agency), '3. agency 是数组');
 has(JSON.stringify(brief.context), 'mood', '3. 角色带 mood');
 
@@ -130,12 +115,12 @@ const committed = await call('soul_commit', {
   action_mode: 'result',
   player_input: '我把伞靠在门边，问她今晚忙不忙。',
   operations: [
-    { op: 'npc_response', npc_id: 'zhou_yi', response: 'partial', note: '还行，就是雨大。' },
-    // 回应本身不进他自己的心情；信任变化才会留下一条记忆，供第 8–9 步删
-    { op: 'relationship', from: 'zhou_yi', to: 'player', trust_delta: 1, reason: '你问起他的近况' },
+    { op: 'npc_response', response: 'partial', note: '还行，就是雨大。' },
+    // 回应本身不进 TA 自己的心情；信任变化才会留下一条记忆，供第 8–9 步删
+    { op: 'relationship', trust_delta: 1, reason: '你问起 TA 今晚忙不忙' },
   ],
   content_tags: [],
-  summary: '玩家进门，和周逸搭了两句。',
+  summary: '玩家进门，和林晚搭了两句。',
   open_action: '林晚从里屋走出来了吗',
 });
 ok(committed.committed === true, '6. commit 成功（' + JSON.stringify(committed.error ?? '') + '）');
@@ -153,7 +138,8 @@ const stale = await staleClient.execute({ action_mode: 'continue', summary: '假
 eq(stale.committed, false, '7. 再次空转仍被拒');
 
 // ---- 8. mood_panel：心情面板有 thresholds 与 thoughts ----
-const panel = await call('soul_admin', { action: 'mood_panel', npc_id: 'zhou_yi' });
+// 只有她一个人：npc_id 可以省略
+const panel = await call('soul_admin', { action: 'mood_panel' });
 ok(panel.ok === true, '8. mood_panel 成功（' + JSON.stringify(panel.error ?? '') + '）');
 ok(typeof panel.value === 'number' && panel.value >= 0 && panel.value <= 100, '8. value 在 0..100');
 ok(['open', 'normal', 'closed', 'break'].includes(panel.band), '8. band 合法');
@@ -165,12 +151,11 @@ if (panel.thoughts.length > 0) {
   const victim = panel.thoughts[0];
   const dropped = await call('soul_admin', {
     action: 'drop_thought',
-    npc_id: 'zhou_yi',
     thought_id: victim.id,
     reason: '测试手动删除',
   });
   ok(dropped.ok === true, '9. drop_thought 成功（' + JSON.stringify(dropped.error ?? '') + '）');
-  const after = await call('soul_admin', { action: 'mood_panel', npc_id: 'zhou_yi' });
+  const after = await call('soul_admin', { action: 'mood_panel', npc_id: 'lin_wan' });
   ok(!after.thoughts.some((t) => t.id === victim.id), '9. 该条已消失');
   ok(Array.isArray(after.deletions) && after.deletions.length >= 1, '9. 留下删除审计');
 } else {

@@ -259,12 +259,17 @@ def settle(state, turn):
 # situational thoughts: computed by the engine, never written by the model
 
 
-def refresh_situational(state, turn):
+def refresh_situational(state, turn, gap=0):
     """Recompute the engine-owned thoughts. Idempotent.
 
-    Called after the clock moved. Each situational thought is derived from
-    state (presence, absence, pending events, tension, conditions, hour), so
-    a thought that no longer applies simply disappears.
+    Called after the clock moved; `gap` is how many real minutes passed since
+    the last turn. Each situational thought is derived from state (presence,
+    how long you were away, pending events, tension, conditions, hour).
+
+    An untimed one that no longer applies simply disappears. A timed one
+    ("很久没见你" for a day, "大半夜被打扰" for six hours) is a mood that
+    lingers: it stays until it expires even after its cause is gone, and a
+    cause that is still there refreshes it.
     """
     now = CL.to_abs(state["clock"])
     player = state["player_id"]
@@ -278,8 +283,7 @@ def refresh_situational(state, turn):
             rows.append(("在场", ST.SITUATIONAL_DELTA["present"], None))
         elif not player_present:
             rows.append(("你不在", ST.SITUATIONAL_DELTA["absent"], None))
-        missed = CL.minutes_between(state["scene"]["since"], state["clock"])
-        if not present and missed >= ST.DAY:
+        if player_present and gap >= ST.DAY:
             rows.append(("很久没见你", ST.SITUATIONAL_DELTA["away_long"], ST.SITUATIONAL_EXPIRES["away_long"]))
         due = [e for e in state["events"].values() if e["state"] == "pending" and cid in e["participants"]]
         if due:
@@ -301,7 +305,10 @@ def refresh_situational(state, turn):
         planned[cid] = rows
     for cid, rows in planned.items():
         mood = state["characters"][cid]["mood"]
-        mood["thoughts"] = [t for t in mood.get("thoughts") or [] if t["kind"] != "situational"]
+        mood["thoughts"] = [
+            t for t in mood.get("thoughts") or []
+            if t["kind"] != "situational" or (t.get("expires_at") is not None and t["expires_at"] > now)
+        ]
         for label, delta, minutes in rows:
             add_thought(state, cid, label, delta, "situational", minutes=minutes, turn=turn)
     return planned

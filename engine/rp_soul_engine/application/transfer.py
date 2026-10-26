@@ -216,7 +216,7 @@ def _persona_problems(persona):
         return problems
     # The persona travels with the save so a file can be read on a machine that
     # never saw the markdown: everything the engine reads back must be present.
-    for key in ("id", "title", "revision", "cast", "places", "prose", "mood_thresholds"):
+    for key in ("id", "title", "revision", "name", "prose", "mood_thresholds"):
         if key not in persona:
             problems.append(detail("$.session.persona.%s" % key, "缺少字段", None, CONTENT_ERROR))
     return problems

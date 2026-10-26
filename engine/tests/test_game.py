@@ -1,11 +1,14 @@
 """One whole game through the sidecar: open it, play turns, look around,
-undo, save, load, export, import, and the mood panel with a debug delete."""
+undo, save, load, export, import, and the mood panel with a debug delete.
+
+There are two people: the player and 林晚. No operation names a character."""
 
 import copy
 import json
 import os
 
 import e2e
+import fixture
 from harness import check, run
 from stdio import Sidecar
 
@@ -20,20 +23,23 @@ def with_sc(fn):
     return inner
 
 
-def npc_action(npc="zhou_yi", kind="observe", text="他把病历合上，没抬头。", significant=True):
-    return {"op": "npc_action", "npc_id": npc, "kind": kind, "action": text, "significant": significant}
+def npc_action(kind="observe", text="她把病历合上，没抬头。", significant=True):
+    return {"op": "npc_action", "kind": kind, "action": text, "significant": significant}
 
 
-def scene_in(s, sid):
-    """Bring the major on stage: the opening scene is the corridor, not the clinic."""
-    return {"op": "enter_scene", "character_id": "lin_wan"}
+def her_fact(key, text, scope="companion_only"):
+    return {"op": "add_fact", "key": key, "text": text, "scope": scope, "origin": "observed"}
 
 
-def play(sidecar, sid, rev, ops=None, mode="continue", tags=None, acts_on=None):
-    body = e2e.commit({"session_id": sid, "revision": rev}, ops=ops or [npc_action()], mode=mode, tags=tags,
-                      **({"acts_on": acts_on} if acts_on else {}))
+def play(sidecar, sid, rev, ops=None, mode="continue", tags=None, on_her=None):
+    extra = {} if on_her is None else {"acts_on_her": on_her}
+    body = e2e.commit({"session_id": sid, "revision": rev}, ops=ops or [npc_action()], mode=mode, tags=tags, **extra)
     data = sidecar.ok("commit-turn", body)
     return data["revision"], data
+
+
+def brief_of(s, sid):
+    return s.ok("get-context", {"session_id": sid, "depth": "brief"})["context"]
 
 
 def a_quiet_turn(s):
@@ -61,39 +67,56 @@ def stale_revision_is_refused(s):
     assert err["current_revision"] == rev2, err
 
 
-def brief_context_is_small(s):
+def brief_context_is_about_her(s):
     sid, rev, _ = e2e.start(s)
-    ctx = s.ok("get-context", {"session_id": sid, "depth": "brief"})
-    assert ctx["context"]["depth"] == "brief", ctx
-    assert ctx["context"]["size_bytes"] <= 6 * 1024, ctx["context"]["size_bytes"]
+    ctx = brief_of(s, sid)
+    assert ctx["depth"] == "brief", ctx
+    assert ctx["size_bytes"] <= 6 * 1024, ctx["size_bytes"]
+    her = ctx["companion"]
+    assert her["id"] == "lin_wan" and her["name"] == "林晚", her
+    assert her["present"] is True, her
+    assert her["routine_now"] == "在诊所值夜班", her
+    for gone in ("present_npcs", "nearby"):
+        assert gone not in ctx, gone
+    assert "location_id" not in ctx["scene"], ctx["scene"]
 
 
-def full_context_has_the_cast(s):
+def full_context_has_her_card(s):
     sid, rev, _ = e2e.start(s)
     context = s.ok("get-context", {"session_id": sid, "depth": "full"})["context"]
     assert context["depth"] == "full", context
-    for key in ("characters", "persona", "agency"):
+    for key in ("card", "relationship", "persona", "agency"):
         assert key in context, sorted(context)
-    assert "world" not in context, "a persona-driven game has no world section"
+    for gone in ("characters", "locations", "background", "relationships", "world"):
+        assert gone not in context, gone
+    assert context["card"]["voices"]["surface"] == "话少，句子短", context["card"]
     assert context["size_bytes"] <= 20 * 1024, context["size_bytes"]
 
 
 def agency_offers_candidates(s):
     sid, rev, _ = e2e.start(s)
-    agency = s.ok("get-context", {"session_id": sid, "depth": "brief"})["context"]["agency"]
-    assert isinstance(agency, list), agency
-    assert len(agency) <= 3, agency
-    for row in agency:
-        assert row["character_id"], row
-        assert row["name"], row
-        for option in row["options"]:
-            assert option["kind"] in ("approach", "observe", "request", "accident", "provoke", "leave"), option
-            assert option["text"], option
-            # 每个候选都得说清「为什么」，否则模型只看到结论、理由全靠自己编。
-            assert isinstance(option["reasons"], list), option
-            assert option["reasons"], option
-            assert option["because"].startswith("因为"), option
-            assert len(option["because"]) <= 90, option
+    agency = brief_of(s, sid)["agency"]
+    assert isinstance(agency, list) and len(agency) == 1, agency
+    row = agency[0]
+    assert row["character_id"] == "lin_wan", row
+    for option in row["options"]:
+        assert option["kind"] in ("approach", "observe", "request", "accident", "provoke", "leave"), option
+        assert option["text"].startswith("林晚"), option
+        # 每个候选都得说清「为什么」，否则模型只看到结论、理由全靠自己编。
+        assert option["reasons"], option
+        assert option["because"].startswith("因为"), option
+        assert len(option["because"]) <= 90, option
+
+
+def ops_no_longer_name_a_character(s):
+    sid, rev, _ = e2e.start(s)
+    for op in (
+        {"op": "npc_action", "npc_id": "lin_wan", "action": "她抬头。"},
+        {"op": "enter_scene", "character_id": "lin_wan"},
+        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 1, "reason": "x"},
+    ):
+        err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[op]))
+        assert err["code"] == "INVALID_INPUT", (op, err)
 
 
 def a_refusal_leaves_her_own_mood_alone(s):
@@ -101,12 +124,8 @@ def a_refusal_leaves_her_own_mood_alone(s):
     sid, rev, _ = e2e.start(s)
     before = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     assert before["base"] == 55, before
-    ops = [
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "refuse", "note": "她把椅子往后推了半步。"},
-        npc_action(),
-    ]
-    play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
+    ops = [{"op": "npc_response", "response": "refuse", "note": "她把椅子往后推了半步。"}, npc_action()]
+    play(s, sid, rev, ops=ops, mode="attempt", on_her=True)
     after = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     memories = [t for t in after["thoughts"] if t["kind"] == "memory"]
     assert memories == [], memories
@@ -115,10 +134,8 @@ def a_refusal_leaves_her_own_mood_alone(s):
 def mood_panel_has_thresholds_and_decay(s):
     sid, rev, _ = e2e.start(s)
     play(s, sid, rev, ops=[
-        {"op": "add_fact", "key": "late", "text": "你迟到了一个钟头", "visibility": "private",
-         "known_by": ["lin_wan"], "origin": "observed"},
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "add_thought", "npc_id": "lin_wan", "label": "等了很久", "delta": -6, "basis_fact_id": "f1"},
+        her_fact("late", "你迟到了一个钟头", scope="shared"),
+        {"op": "add_thought", "label": "等了很久", "delta": -6, "basis_fact_id": "f1"},
         npc_action(),
     ])
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
@@ -135,13 +152,19 @@ def mood_panel_has_thresholds_and_decay(s):
             assert thought["remaining_minutes"] is None, thought
 
 
+def a_thought_needs_a_fact_she_knows(s):
+    sid, rev, _ = e2e.start(s)
+    ops = [her_fact("secret", "你偷偷看了她的病历", scope="player_only"),
+           {"op": "add_thought", "label": "被偷看", "delta": -8, "basis_fact_id": "f1"}]
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=ops))
+    assert "不知道事实 f1" in json.dumps(err, ensure_ascii=False), err
+
+
 def debug_delete_removes_one_thought(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
-        {"op": "add_fact", "key": "stare", "text": "她注意到你一直盯着她看", "visibility": "private",
-         "known_by": ["lin_wan"], "origin": "observed"},
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "add_thought", "npc_id": "lin_wan", "label": "被人盯着看", "delta": -8, "basis_fact_id": "f1"},
+        her_fact("stare", "她注意到你一直盯着她看"),
+        {"op": "add_thought", "label": "被人盯着看", "delta": -8, "basis_fact_id": "f1"},
         npc_action(),
     ])
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
@@ -159,15 +182,80 @@ def debug_delete_removes_one_thought(s):
 
 def thought_cap_is_enforced(s):
     sid, rev, _ = e2e.start(s)
-    ops = [{"op": "add_fact", "key": "pile", "text": "一晚上出了很多事", "visibility": "private",
-            "known_by": ["lin_wan"], "origin": "observed"},
-           {"op": "enter_scene", "character_id": "lin_wan"}]
-    ops += [{"op": "add_thought", "npc_id": "lin_wan", "label": "第%d件事" % i, "delta": -2, "basis_fact_id": "f1"}
-            for i in range(14)]
+    ops = [her_fact("pile", "一晚上出了很多事")]
+    ops += [{"op": "add_thought", "label": "第%d件事" % i, "delta": -2, "basis_fact_id": "f1"} for i in range(14)]
     ops.append(npc_action())
     play(s, sid, rev, ops=ops)
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     assert len(panel["thoughts"]) <= 12, len(panel["thoughts"])
+
+
+def fact_scopes_decide_who_knows(s):
+    """shared 和 player_only 进你的已知；companion_only / inner 只有她知道。"""
+    sid, rev, _ = e2e.start(s)
+    play(s, sid, rev, ops=[
+        her_fact("umbrella", "伞落在了门口", scope="shared"),
+        her_fact("plan", "你打算明天辞职", scope="player_only"),
+        her_fact("letter", "她抽屉里压着一封信", scope="companion_only"),
+        her_fact("wait", "她其实在等你开口", scope="inner"),
+    ])
+    known = [f["text"] for f in brief_of(s, sid)["known_facts"]]
+    assert "伞落在了门口" in known and "你打算明天辞职" in known, known
+    assert "她抽屉里压着一封信" not in known and "她其实在等你开口" not in known, known
+
+
+def reveal_makes_her_secret_shared(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("letter", "她抽屉里压着一封信")])
+    play(s, sid, rev, ops=[{"op": "reveal_fact", "fact_id": "f1", "note": "她把信推了过来"}])
+    known = [f["text"] for f in brief_of(s, sid)["known_facts"]]
+    assert "她抽屉里压着一封信" in known, known
+
+
+def her_inner_fact_cannot_be_revealed(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("wait", "她其实在等你开口", scope="inner")])
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev},
+                                           ops=[{"op": "reveal_fact", "fact_id": "f1"}]))
+    assert "心里的事" in json.dumps(err, ensure_ascii=False), err
+
+
+def a_false_fact_is_hers(s):
+    sid, rev, _ = e2e.start(s)
+    bad = dict(her_fact("lie", "你说你在加班", scope="shared"), truth=False)
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[bad]))
+    assert "scope 写 companion_only" in json.dumps(err, ensure_ascii=False), err
+    play(s, sid, rev, ops=[dict(bad, scope="companion_only")])
+
+
+def a_promise_with_her_is_yours(s):
+    """你们之间的约定默认带上玩家，所以要玩家本人答应。"""
+    sid, rev, _ = e2e.start(s)
+    promise = {"op": "event_create", "kind": "promise", "title": "周末去看海", "in_minutes": 3000,
+               "dedupe_key": "sea"}
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[promise]))
+    assert "玩家本人答应" in json.dumps(err, ensure_ascii=False), err
+    body = e2e.commit({"session_id": sid, "revision": rev}, ops=[promise], mode="result", player_authorized=True,
+                      player_input="好，周末去看海")
+    s.ok("commit-turn", body)
+    due = brief_of(s, sid)["due_soon"]
+    assert due and due[0]["involves_player"] is True, due
+
+
+def her_own_deadline_needs_no_consent(s):
+    sid, rev, _ = e2e.start(s)
+    own = {"op": "event_create", "kind": "deadline", "title": "交夜班报告", "in_minutes": 600,
+           "dedupe_key": "report", "with_player": False}
+    play(s, sid, rev, ops=[own])
+    due = brief_of(s, sid)["due_soon"]
+    assert due and "involves_player" not in due[0], due
+
+
+def an_offscreen_beat_needs_time_apart(s):
+    sid, rev, _ = e2e.start(s)
+    beat = {"op": "offscreen_beat", "summary": "她去楼下买了杯咖啡。"}
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[beat]))
+    assert "刚刚还在说话" in json.dumps(err, ensure_ascii=False), err
 
 
 def undo_takes_the_turn_back(s):
@@ -256,8 +344,6 @@ def import_rejects_a_damaged_file(s):
     path = os.path.join(DATA, "damaged-%s.json" % os.getpid())
     s.ok("export-save", {"session_id": sid, "path": path, "overwrite": True})
     text = open(path, encoding="utf-8").read()
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text.replace('"turn": 1', '"turn": 2', 1))
     doc = json.loads(text)
     doc["session"]["state"]["turn"] = 5
     err = s.fail("import-save", {"request_id": e2e.rid("r_imp"), "data": doc})
@@ -265,65 +351,74 @@ def import_rejects_a_damaged_file(s):
     assert "校验" in err["message"] or "不一致" in err["message"], err
 
 
+def legacy_persona_still_opens(s):
+    """The old places + cast file opens as one companion: her, not the supporting nurse."""
+    payload = {"front": copy.deepcopy(fixture.LEGACY_PERSONA), "prose": fixture.LEGACY_PERSONA["prose"],
+               "title": fixture.LEGACY_PERSONA["title"], "persona_id": fixture.LEGACY_PERSONA["id"]}
+    data = s.ok("new-game", {"request_id": e2e.rid("r_new"), "persona": payload, "seed": 7})
+    assert data["persona"]["name"] == "林晚", data["persona"]
+    her = data["context"]["companion"]
+    assert her["id"] == "lin_wan", her
+    assert her["stage"] == "熟络", her
+    checked = s.ok("check-persona", {"persona": payload})
+    assert checked["ok"] is True and checked["legacy"] is True, checked
+
+
 def persona_refresh_moves_static_facts(s):
-    """Edit persona.md mid-story: names and the mood baseline follow, the story does not."""
+    """Edit persona.md mid-story: her name and the mood baseline follow, the story does not."""
     sid, rev, _ = e2e.start(s)
     payload = copy.deepcopy(e2e.persona_payload())
     front = payload["front"]
     front["title"] = "雨夜诊所·续"
     front["mood_base"] = 88
-    for place in front["places"]:
-        if place["id"] == "hall":
-            place["name"] = "值班室"
-    for member in front["cast"]:
-        if member["id"] == "lin_wan":
-            member["name"] = "林晚晚"
-            member["age"] = 32
+    front["name"] = "林晚晚"
+    front["age"] = 32
+    front["routine"] = [{"from": 0, "to": 1439, "doing": "在家补觉"}]
     out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
     report = out["persona"]
     assert report["ok"] is True, report
     assert report["changed"] is True, report
     assert "lin_wan" in report["updated"], report
-    context = out["context"]
-    assert context["scene"]["location_id"] == "hall", context["scene"]
-    assert context["scene"]["location"] == "值班室", context["scene"]
-    npc = [row for row in context["present_npcs"] if row["id"] == "lin_wan"]
-    if npc:
-        assert npc[0]["name"] == "林晚晚", npc[0]
+    her = out["context"]["companion"]
+    assert her["name"] == "林晚晚", her
+    assert her["routine_now"] == "在家补觉", her
     # The story itself does not move: no time passes and no turn is added.
     assert out["revision"] == rev, (out["revision"], rev)
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     assert panel["base"] == 88, panel
 
 
+def persona_refresh_follows_a_renamed_id(s):
+    """She is "the one who is not the player": a new persona id does not cut her off."""
+    sid, rev, _ = e2e.start(s)
+    payload = copy.deepcopy(e2e.persona_payload())
+    payload["front"]["id"] = "wan"
+    payload["front"]["name"] = "阿晚"
+    out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
+    assert out["persona"]["ok"] is True, out["persona"]
+    assert out["context"]["companion"]["name"] == "阿晚", out["context"]["companion"]
+
+
 def persona_refresh_leaves_a_started_relationship_alone(s):
     """start_stage is the opening of a bond; once trust moved, the file has no say."""
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她把灯往他那边挪了挪。"},
-        {"op": "relationship", "from": "player", "to": "lin_wan", "trust_delta": 1,
-         "reason": "他把伞留在了门口"},
+        {"op": "npc_response", "response": "partial", "note": "她把灯往你那边挪了挪。"},
+        {"op": "relationship", "trust_delta": 1, "reason": "你把伞留在了门口"},
         npc_action(),
-    ], mode="attempt", acts_on=["lin_wan"])
+    ], mode="attempt", on_her=True)
     payload = copy.deepcopy(e2e.persona_payload())
-    for member in payload["front"]["cast"]:
-        if member["id"] == "lin_wan":
-            member["start_stage"] = "intimate"
+    payload["front"]["start_stage"] = "intimate"
     out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
-    report = out["persona"]
-    assert report["ok"] is True, report
-    npc = [row for row in out["context"]["present_npcs"] if row["id"] == "lin_wan"]
-    assert npc, out["context"]["present_npcs"]
-    assert npc[0]["stage"] != "亲密", npc[0]
+    assert out["persona"]["ok"] is True, out["persona"]
+    assert out["context"]["companion"]["stage"] != "亲密", out["context"]["companion"]
 
 
 def persona_refresh_does_not_break_a_broken_persona(s):
     """A half-written file must not take a running story down with it."""
     sid, rev, _ = e2e.start(s)
     payload = copy.deepcopy(e2e.persona_payload())
-    payload["front"]["places"] = []
-    payload["front"]["cast"] = []
+    del payload["front"]["age"]
     out = s.ok("get-context", {"session_id": sid, "depth": "brief", "persona": payload})
     report = out["persona"]
     assert report["ok"] is False, report
@@ -339,11 +434,13 @@ def status_levels(s):
     brief = s.ok("status", {"session_id": sid, "level": "brief"})
     detail = s.ok("status", {"session_id": sid, "level": "detail"})
     debug = s.ok("status", {"session_id": sid, "level": "debug"})
-    for key in ("place", "clock_label", "paused", "present", "mood"):
+    for key in ("clock_label", "paused", "present", "mood"):
         assert key in brief, sorted(brief)
+    assert "place" not in brief, sorted(brief)
     assert "open_action" in detail and "requests" in detail, sorted(detail)
     for key in ("facts", "undo_points", "turns_logged", "persona", "thought_deletions"):
         assert key in debug, sorted(debug)
+    assert debug["persona"]["name"] == "林晚", debug["persona"]
     assert "open_action" not in brief, sorted(brief)
 
 
@@ -369,11 +466,19 @@ def check_persona_reports_problems(s):
     assert "break < closed < open" in out["text"], out["text"]
 
 
+def check_persona_summarises_her(s):
+    out = s.ok("check-persona", {"persona": e2e.persona_payload()})
+    assert out["ok"] is True and out["legacy"] is False, out
+    summary = out["persona"]
+    assert summary["name"] == "林晚" and summary["routine"], summary
+    assert "cast" not in summary and "places" not in summary, summary
+
+
 def preview_persona_does_not_write(s):
     before = len(s.ok("list-sessions")["sessions"])
     out = s.ok("preview-persona", {"persona": e2e.persona_payload(), "seed": 42})
     assert out["seed"] == 42, out
-    assert out["place"] and out["present"], out
+    assert out["name"] == "林晚" and out["doing"] == "在诊所值夜班", out
     after = len(s.ok("list-sessions")["sessions"])
     assert after == before, (before, after)
 
@@ -402,28 +507,18 @@ def idempotency_returns_the_same_turn(s):
     assert first["turn"] == second["turn"] == 1, (first, second)
 
 
-def a_relationship_toward_the_player_keeps_playing(s):
-    """An NPC growing toward the player must not need a mood bar on the player.
-
-    Regression: the player card carries ``"mood": None`` on purpose (the player
-    is a slot, nothing about how they feel is stored). A relation whose ``to``
-    is the player used to plant a thought on that side and crashed with
-    ``'NoneType' object has no attribute 'get'``.
-    """
+def a_relationship_move_is_felt_by_her(s):
+    """Her trust toward you moving leaves a thought on her; the player has no mood bar."""
     sid, rev, _ = e2e.start(s)
     ops = [
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她把灯往他那边挪了挪。"},
-        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 1, "reason": "他记得她怕黑"},
+        {"op": "npc_response", "response": "partial", "note": "她把灯往你那边挪了挪。"},
+        {"op": "relationship", "trust_delta": 1, "reason": "你记得她怕黑"},
         npc_action(),
     ]
-    rev, data = play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
+    rev, data = play(s, sid, rev, ops=ops, mode="attempt", on_her=True)
     turn_result = data["turns"][0]
-    assert turn_result["turn"] == 1, turn_result
     row = [a for a in turn_result["applied"] if a["op"] == "relationship"][0]
-    assert row["trust"] == 1, row
-    # The edge a>b is a's attitude toward b, so lin_wan is the one who feels it
-    # even though the other end is the player (who has no mood blob at all).
+    assert row["trust"] == 1 and row["from"] == "lin_wan" and row["to"] == "player", row
     panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
     labels = [t["label"] for t in panel["thoughts"]]
     assert any("信任" in label for label in labels), labels
@@ -431,56 +526,21 @@ def a_relationship_toward_the_player_keeps_playing(s):
     assert s.fail("debug-mood", {"session_id": sid, "npc_id": "player"})["code"] == "NOT_FOUND"
 
 
-def a_relation_from_the_player_is_recorded_but_not_felt(s):
-    """A move starting at the player writes the ledger and no mood anywhere."""
-    sid, rev, _ = e2e.start(s)
-    ops = [
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她嗯了一声。"},
-        {"op": "relationship", "from": "player", "to": "lin_wan", "trust_delta": 1, "reason": "他把自己那杯让给她"},
-        npc_action(),
-    ]
-    _rev, data = play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
-    row = [a for a in data["turns"][0]["applied"] if a["op"] == "relationship"][0]
-    assert row["trust"] == 1, row
-    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
-    labels = [t["label"] for t in panel["thoughts"]]
-    assert not any("信任" in label for label in labels), labels
-
-
-def an_an_npc_relation_still_plants_a_thought(s):
-    """The guard must not silence the ordinary NPC-to-NPC case."""
-    sid, rev, _ = e2e.start(s)
-    ops = [
-        {"op": "enter_scene", "character_id": "lin_wan"},
-        {"op": "npc_response", "npc_id": "lin_wan", "response": "partial", "note": "她点了点头。"},
-        {"op": "relationship", "from": "zhou_yi", "to": "lin_wan", "trust_delta": 1, "reason": "他把值班表改了"},
-        npc_action(),
-    ]
-    play(s, sid, rev, ops=ops, mode="attempt", acts_on=["lin_wan"])
-    # zhou_yi is the one whose attitude moved, so the trace is on him.
-    panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "zhou_yi"})
-    labels = [t["label"] for t in panel["thoughts"]]
-    assert any("信任" in label for label in labels), labels
-    other = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
-    assert not any("信任" in t["label"] for t in other["thoughts"]), other["thoughts"]
-
-
-def settings_moods_page_lists_every_npc(s):
+def settings_moods_page_lists_her(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
-        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 2, "reason": "你把伞留给了她"},
+        {"op": "relationship", "trust_delta": 2, "reason": "你把伞留给了她"},
         npc_action(),
     ])
     data = s.ok("debug-moods", {"session_id": sid})
     assert data["session_id"] == sid, data
     assert data["revision"] == rev, data
     assert data["persona_title"], data
-    assert data["thresholds"] == {"open": 75, "closed": 55, "break": 30} or isinstance(data["thresholds"], dict), data
+    assert isinstance(data["thresholds"], dict), data
     ids = [row["id"] for row in data["npcs"]]
-    assert ids == ["lin_wan", "zhou_yi"], ids
+    assert ids == ["lin_wan"], ids
     wan = data["npcs"][0]
-    # the edge lin_wan > player is lin_wan's attitude; the panel mirrors it
+    # the edge lin_wan > player is her attitude; the panel mirrors it
     assert wan["trust"] == 2, wan
     assert wan["stage"] == "stranger", wan
     assert wan["stage_label"] == "陌生", wan
@@ -503,8 +563,8 @@ def settings_moods_page_is_read_only(s):
 def settings_activity_page_reads_the_turn_log(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
-        {"op": "relationship", "from": "lin_wan", "to": "player", "trust_delta": 2, "reason": "你把伞留给了她"},
-        npc_action(npc="lin_wan", kind="observe", text="她把病历本抱到胸前。"),
+        {"op": "relationship", "trust_delta": 2, "reason": "你把伞留给了她"},
+        npc_action(kind="observe", text="她把病历本抱到胸前。"),
     ])
     data = s.ok("debug-activity", {"session_id": sid, "limit": 10})
     assert data["counts"]["turns"] >= 2, data["counts"]
@@ -530,7 +590,7 @@ def settings_activity_page_reads_the_turn_log(s):
 def settings_activity_respects_the_limit(s):
     sid, rev, _ = e2e.start(s)
     for _ in range(3):
-        # a quiet turn: the major NPC is on cooldown after a significant action
+        # a quiet turn: she is on cooldown after a significant action
         rev, _ = play(s, sid, rev, ops=[npc_action(significant=False)])
     data = s.ok("debug-activity", {"session_id": sid, "limit": 2})
     assert len(data["rows"]) == 2, data["rows"]
@@ -544,19 +604,25 @@ def settings_activity_default_limit_is_twenty(s):
     assert len(data["rows"]) <= 20, len(data["rows"])
 
 
-check("a relation toward the player still plays", with_sc(a_relationship_toward_the_player_keeps_playing))
-check("a relation from the player is recorded, not felt", with_sc(a_relation_from_the_player_is_recorded_but_not_felt))
-check("an NPC-to-NPC relation still leaves a trace", with_sc(an_an_npc_relation_still_plants_a_thought))
 check("a quiet turn advances the clock", with_sc(a_quiet_turn))
 check("a turn needs an observable change", with_sc(turn_is_not_observable_without_ops))
 check("a stale revision is refused with the current one", with_sc(stale_revision_is_refused))
-check("brief context stays under 6 KB", with_sc(brief_context_is_small))
-check("full context carries the cast but no world", with_sc(full_context_has_the_cast))
-check("agency offers candidates", with_sc(agency_offers_candidates))
+check("brief context is about her", with_sc(brief_context_is_about_her))
+check("full context carries her card, no cast or map", with_sc(full_context_has_her_card))
+check("agency offers her candidates", with_sc(agency_offers_candidates))
+check("ops no longer name a character", with_sc(ops_no_longer_name_a_character))
 check("a refusal leaves her own mood alone", with_sc(a_refusal_leaves_her_own_mood_alone))
 check("the mood panel shows thresholds and decay", with_sc(mood_panel_has_thresholds_and_decay))
+check("a thought needs a fact she knows", with_sc(a_thought_needs_a_fact_she_knows))
 check("debug delete removes exactly one thought", with_sc(debug_delete_removes_one_thought))
 check("at most twelve memory thoughts are kept", with_sc(thought_cap_is_enforced))
+check("a fact's scope decides who knows it", with_sc(fact_scopes_decide_who_knows))
+check("reveal makes her secret shared", with_sc(reveal_makes_her_secret_shared))
+check("her inner fact cannot be revealed", with_sc(her_inner_fact_cannot_be_revealed))
+check("a false fact is one she believes", with_sc(a_false_fact_is_hers))
+check("a promise with her needs the player's consent", with_sc(a_promise_with_her_is_yours))
+check("her own deadline needs no consent", with_sc(her_own_deadline_needs_no_consent))
+check("an offscreen beat needs time apart", with_sc(an_offscreen_beat_needs_time_apart))
 check("undo takes the turn back", with_sc(undo_takes_the_turn_back))
 check("undo cannot go below the opening", with_sc(undo_floor_is_the_opening))
 check("save then load resumes the same place", with_sc(save_and_load_round_trip))
@@ -565,20 +631,23 @@ check("deleting a slot needs confirmation", with_sc(delete_slot_needs_confirmati
 check("slot names are sanitised", with_sc(slot_names_are_sanitised))
 check("export then import round-trips", with_sc(export_and_import))
 check("a damaged export is refused", with_sc(import_rejects_a_damaged_file))
+check("the old cast file still opens as her", with_sc(legacy_persona_still_opens))
 check("status grows from brief to debug", with_sc(status_levels))
 check("boundaries and pause round-trip", with_sc(boundaries_and_pause))
 check("check-persona reports the broken threshold", with_sc(check_persona_reports_problems))
+check("check-persona summarises her", with_sc(check_persona_summarises_her))
 check("preview-persona writes nothing", with_sc(preview_persona_does_not_write))
 check("list-sessions shows the new game", with_sc(list_sessions_after_a_game))
 check("an unknown session is NOT_FOUND", with_sc(missing_session_is_not_found))
 check("the same request_id replays instead of writing twice", with_sc(idempotency_returns_the_same_turn))
-
-check("the mood page lists every NPC", with_sc(settings_moods_page_lists_every_npc))
+check("a relationship move is felt by her", with_sc(a_relationship_move_is_felt_by_her))
+check("the mood page lists her", with_sc(settings_moods_page_lists_her))
 check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))
 check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
+check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))
 check("a broken persona does not take the story down", with_sc(persona_refresh_does_not_break_a_broken_persona))
 

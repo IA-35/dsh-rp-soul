@@ -1,8 +1,8 @@
-"""Deterministic candidate actions for an autonomous NPC.
+"""Deterministic candidate actions for her, on her own initiative.
 
-The original engine left "what does he do on his own" entirely to the model:
-`npc_action` was free text plus a cooldown. For a single-character story that
-is the weakest link - the character only ever reacts to the player.
+The original engine left "what does she do on her own" entirely to the model:
+`npc_action` was free text plus a cooldown. For a companion that is the
+weakest link - she only ever reacts to the player.
 
 Here the engine proposes two or three concrete candidates, each with a reason
 drawn from state it can see (mood band, tension, pending events, what he
@@ -26,8 +26,8 @@ from . import rng
 from . import state as SS
 from . import structure as ST
 
-# Reasons, not story: the label is rendered from the persona's own places and
-# cast, so no text lives here.
+# Reasons, not story: the text names her and the pending business, nothing
+# else is invented here.
 RECENT_TURNS = 3
 NUDGE = 1.0
 
@@ -123,8 +123,8 @@ def score(state, cid, turn):
     if trust >= 2 and stage >= 2:
         add("approach", 2.0, reason="已经熟了（信任 %d），敢自己凑过来" % trust)
     if trust <= -2:
-        add("leave", 1.0, reason="信不过他（信任 %d）" % trust)
-        add("provoke", 1.0, reason="信不过他（信任 %d）" % trust)
+        add("leave", 1.0, reason="信不过你（信任 %d）" % trust)
+        add("provoke", 1.0, reason="信不过你（信任 %d）" % trust)
     # something he just learned is worth acting on
     if recent:
         add("observe", 2.0, basis=recent, reason="刚知道点事，正琢磨")
@@ -155,30 +155,21 @@ def score(state, cid, turn):
 
 
 def _text(state, persona, cid, kind, events):
-    """One short line, built from persona places and the current scene."""
+    """One short line: her name and, when there is one, the pending business."""
     name = (state["characters"].get(cid) or {}).get("name") or cid
-    places = persona.get("places") or []
-    here = state["scene"]["location_id"]
-    place = SS.place(persona, here) or {}
-    place_name = place.get("name") or here
-    other = None
-    for item in places:
-        if item["id"] != here:
-            other = item.get("name") or item["id"]
-            break
     titles = {e["title"] for e in state["events"].values() if e["id"] in events}
     topic = next(iter(sorted(titles))) if titles else None
     if kind == "approach":
-        return "%s 主动走近，提起%s" % (name, topic) if topic else "%s 主动来找你" % name
+        return "%s 主动凑过来，提起%s" % (name, topic) if topic else "%s 主动来找你" % name
     if kind == "observe":
-        return "%s 没出声，只是看着" % name
+        return "%s 没出声，只是看着你" % name
     if kind == "request":
         return "%s 开口要一个答复：%s" % (name, topic) if topic else "%s 开口要一个答复" % name
     if kind == "provoke":
         return "%s 用一句话刺过来" % name
     if kind == "leave":
-        return "%s 转身走了%s" % (name, "，往%s去" % other if other else "")
-    return "%s 在%s遇到点意外" % (name, place_name)
+        return "%s 不想再说了，转身走开" % name
+    return "%s 遇到点意外" % name
 
 
 def candidates(state, persona, cid, turn=None, limit=None):
@@ -233,7 +224,7 @@ def _because(reasons):
 
 
 def brief(state, persona, turn=None):
-    """What the prompt shows: the strongest candidate per NPC, no walls of text."""
+    """What the prompt shows: her strongest candidates, no walls of text."""
     turn = state["turn"] + 1 if turn is None else turn
     rows = []
     for cid in SS.npcs(state):
@@ -247,18 +238,3 @@ def brief(state, persona, turn=None):
         })
     return rows
 
-
-def allowed(state, persona, cid, kind, basis_fact_ids=None, turn=None):
-    """Whether a proposed action is one of today's candidates. (ok, reason)."""
-    options = candidates(state, persona, cid, turn)
-    if not options:
-        return False, "他现在不该有自主行动（冷却中，或不是 NPC）"
-    picked = next((o for o in options if o["kind"] == kind), None)
-    if picked is None:
-        kinds = "/".join(o["kind"] for o in options)
-        return False, "此刻他更可能 %s；换个方向，或写成非重大行动" % kinds
-    allowed_ids = set(picked["basis_fact_ids"])
-    for fid in basis_fact_ids or []:
-        if fid not in allowed_ids:
-            return False, "这条行动的依据只能是它自己看到/听到的事：%s" % ("、".join(sorted(allowed_ids)) or "无")
-    return True, None

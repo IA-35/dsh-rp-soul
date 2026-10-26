@@ -30,7 +30,7 @@ def version_shape(s):
     data = s.ok("version")
     assert data["engine"] == "0.1.0", data
     assert data["save_format"] == "rp-soul-save", data
-    assert data["schema_version"] == 1, data
+    assert data["schema_version"] == 2, data
     assert data["python"]["ok"] is True, data
     assert data["sqlite"]["ok"] is True, data
 
