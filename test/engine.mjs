@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, ok, has, done } from './_check.mjs';
+import { markWakeTurn, clearWakeTurn } from '../lib/wake.js';
 
 const home = mkdtempSync(join(tmpdir(), 'souleng-'));
 process.env.DSH_HOME = home;
@@ -201,6 +202,36 @@ eq(otherState.session_id, loaded.session_id, '13. 全局作用域下两个会话
 const scopeStatus = await call('soul_admin', { action: 'status' });
 eq(scopeStatus.scope, 'global', '13. status 报全局作用域');
 
+async function checkWakeReveal(exec, scope) {
+  const args = { action_mode: 'continue', player_input: '', content_tags: [], summary: '她整理抽屉。', open_action: '那封信还没给你看。' };
+  const secret = await tools.get('soul_commit').execute({ ...args, operations: [
+    { op: 'add_fact', key: 'wake.letter', text: '抽屉里有一封未寄出的信', scope: 'companion_only', origin: 'observed' },
+  ] }, exec);
+  ok(secret.committed, scope + '. 先记下她自己的秘密');
+  const fid = secret.turns[0].applied.find((item) => item.op === 'add_fact').fact_id;
+  const reveal = { ...args, operations: [{ op: 'reveal_fact', fact_id: fid }] };
+  markWakeTurn(exec.agent.id);
+  try {
+    for (const extra of [{}, { together: true }]) {
+      const rejected = await tools.get('soul_commit').execute({ ...reveal, ...extra }, exec);
+      eq(rejected.committed, false, scope + '. 唤醒回合不能直接互通秘密');
+      has(rejected.error, '你不在场', scope + '. 唤醒标记按 DSH 会话生效');
+      const response = await tools.get('soul_commit').execute({ ...args, ...extra, operations: [
+        { op: 'npc_response', response: 'genuine', note: '她轻声说晚安。' },
+      ] }, exec);
+      eq(response.committed, false, scope + '. 唤醒回合不能把自己的消息当成双方回应');
+      has(response.error, '你不在场', scope + '. 模型也不能覆盖唤醒回合的在场判定');
+    }
+    const fresh = await tools.get('soul_state').execute({}, exec);
+    ok(!(fresh.context.known_facts ?? fresh.context.player_facts ?? []).some((f) => f.id === fid), scope + '. 驳回后玩家仍不知道秘密');
+  } finally {
+    clearWakeTurn(exec.agent.id);
+  }
+  const accepted = await tools.get('soul_commit').execute(reveal, exec);
+  ok(accepted.committed, scope + '. 玩家回来后可以正常告知');
+}
+await checkWakeReveal(exec, '13b. 全局作用域');
+
 // ---- 14. 自动开局：没有局时 soul_state 自己开一局 ----
 await call('soul_admin', { action: 'reset_mapping' });
 const born = await call('soul_state', {});
@@ -208,6 +239,30 @@ eq(born.started, true, '14. 解绑后 soul_state 自动开局');
 eq(born.autoStarted, true, '14. 标了 autoStarted');
 ok(typeof born.session_id === 'string' && born.session_id.startsWith('s'), '14. 自动开局拿到会话 id');
 ok(born.context !== undefined && born.context !== null, '14. 自动开局直接带回 context');
+
+// 低心情的行动要能从宿主工具提交，并能在下一回合继续表达。
+const hurt = await call('soul_commit', {
+  action_mode: 'continue', player_input: '', operations: [
+    { op: 'add_fact', key: 'hurt.first', text: '一件让她难过的事', scope: 'companion_only', origin: 'observed' },
+    { op: 'add_fact', key: 'hurt.second', text: '另一件让她难过的事', scope: 'companion_only', origin: 'observed' },
+  ], content_tags: [], summary: '她想起了两件事。', open_action: '她低下头。',
+});
+ok(hurt.committed, '14b. 记录情绪的事实依据');
+const causes = hurt.turns[0].applied.filter((a) => a.op === 'add_fact').map((a) => a.fact_id);
+const low = await call('soul_commit', {
+  action_mode: 'continue', player_input: '', operations: causes.map((id, i) => ({ op: 'add_thought', label: '难过' + i, delta: -30, basis_fact_id: id })),
+  content_tags: [], summary: '那些事让她很难过。', open_action: '她安静下来。',
+});
+ok(low.committed && low.context.companion.mood.band === 'break', '14b. 她进入难过档');
+for (const kind of ['silence', 'seek_comfort', 'change_topic', 'withdraw']) {
+  has(tools.get('soul_commit').description, kind, '14b. 工具说明告诉模型怎样提交 ' + kind);
+  const expression = await call('soul_commit', {
+    action_mode: 'continue', player_input: '', operations: [{ op: 'npc_action', kind, action: '她按自己的习惯表达难过。' }],
+    content_tags: [], summary: '她表达了当下的感受。', open_action: '她还没有缓过来。',
+  });
+  ok(expression.committed, '14b. 允许轻微表达 ' + kind + '：' + String(expression.error ?? ''));
+  eq(expression.context.companion.mood.band, 'break', '14b. 表达情绪不会自动把她变开心');
+}
 
 // ---- 15. 切回按会话作用域：两个会话各开各的局 ----
 writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'session' }), 'utf8');
@@ -218,6 +273,7 @@ eq(convB.autoStarted, true, '15. 切到按会话后 conv-2 自动开新局');
 ok(convA.session_id !== convB.session_id, '15. 两个会话拿到不同的局');
 const scopeStatus2 = await call('soul_admin', { action: 'status' });
 eq(scopeStatus2.scope, 'session', '15. status 报按会话作用域');
+await checkWakeReveal(exec, '15b. 按会话作用域');
 
 // ---- 16. 人设为空时 start 明确报错（不静默开局） ----
 writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'global' }), 'utf8');

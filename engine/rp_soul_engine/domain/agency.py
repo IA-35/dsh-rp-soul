@@ -106,8 +106,14 @@ def score(state, cid, turn):
     add("approach", 2.0 if band == "open" else 0.0, reason=band_reason)
     add("request", 1.0 if band == "open" else 0.0, reason=band_reason)
     add("observe", 1.0 if band in ("normal", "closed") else 0.0, reason=band_reason)
-    add("provoke", 3.0 if band == "break" else (1.0 if band == "closed" else 0.0), reason=band_reason)
-    add("leave", 3.0 if band == "break" else (0.5 if band == "closed" else 0.0), reason=band_reason)
+    low = band in ("closed", "break")
+    add("silence", 2.0 if low else 0.0, reason=band_reason)
+    add("change_topic", 2.0 if low else 0.0, reason=band_reason)
+    add("withdraw", 2.0 if low else 0.0, reason=band_reason)
+    if low and trust >= 1:
+        add("seek_comfort", 3.0, reason="虽然难过，还是信任你（信任 %d），想有人陪一会儿" % trust)
+    if low and trust < 0:
+        add("withdraw", 3.0, reason="心里难受又不太信任你，想自己缓一会儿")
 
     # unfinished business pulls him towards the player - he wants an answer
     if pending:
@@ -169,6 +175,14 @@ def _text(state, persona, cid, kind, events):
         return "%s 用一句话刺过来" % name
     if kind == "leave":
         return "%s 不想再说了，转身走开" % name
+    if kind == "silence":
+        return "%s 安静下来，暂时没有开口" % name
+    if kind == "seek_comfort":
+        return "%s 试着告诉你自己的难过，想有人陪一会儿" % name
+    if kind == "change_topic":
+        return "%s 暂时放下这个话题，转而说起别的事" % name
+    if kind == "withdraw":
+        return "%s 想自己待一会儿，慢慢缓过来" % name
     return "%s 遇到点意外" % name
 
 
@@ -176,11 +190,14 @@ def candidates(state, persona, cid, turn=None, limit=None):
     """Up to AGENCY_MAX_CANDIDATES proposals, strongest first. Pure."""
     turn = state["turn"] + 1 if turn is None else turn
     limit = limit or ST.AGENCY_MAX_CANDIDATES
-    if not SS.can_act(state, cid, turn, MO.open_bonus(state, cid)):
+    broken = MO.evaluate(state, cid)[1] == "break"
+    if not broken and not SS.can_act(state, cid, turn, MO.open_bonus(state, cid)):
         return []
     if not SS.is_npc(state, cid):
         return []
     rows = score(state, cid, turn)
+    if broken:
+        rows = [row for row in rows if row[1] in ST.MOOD_REACTION_KINDS]
     rows.sort(key=lambda row: (-row[0], ST.AGENCY_KINDS.index(row[1])))
     # Whichever row wins a kind, every reason that pushed that kind belongs on
     # it: a candidate with "心情压得低" alone hides the event that is due.

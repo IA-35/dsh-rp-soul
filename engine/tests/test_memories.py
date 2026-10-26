@@ -356,6 +356,21 @@ def a_cue_brings_back_an_old_memory():
     assert quiet[0]["id"] != sea["id"], "without the cue the two tie and nothing pulls the sea forward"
 
 
+def a_cue_recalls_the_other_recent_rounds():
+    state, persona = start()
+    sea = MEM.add(state, "now", "conversation", "一起看海捡到了蓝色贝壳", 0.5)
+    for text in ("买菜", "散步", "听歌", "吃饭", "下雨"):
+        MEM.add(state, "now", "conversation", text, 0.5)
+    MEM.maintain(state)
+    rounds, picked = MEM.select(state, "还记得蓝色贝壳吗")
+    assert [e["content"] for e in rounds] == ["下雨", "吃饭", "听歌"]
+    assert picked and picked[0]["id"] == sea["id"], [e["content"] for e in picked]
+    ids = [e["id"] for e in rounds + picked]
+    assert len(ids) == len(set(ids)) and len(ids) <= MEM.TOTAL_BRIEF
+    rows = MEM.inject(state, "还记得蓝色贝壳吗")
+    assert any("蓝色贝壳" in r["text"] for r in rows), rows
+
+
 def the_threshold_drops_the_faint():
     state, persona = start()
     faint = MEM.add(state, "years", "chapter", "很久以前的一件小事", 0.0, at={"day": 1, "minute": 0})
@@ -532,6 +547,7 @@ check("half a month asks for an archive", half_a_month_asks_for_an_archive)
 check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
 check("the recent rounds come first, newest first", rounds_come_first_newest_first)
 check("a cue brings back an old memory", a_cue_brings_back_an_old_memory)
+check("a cue recalls the other recent rounds", a_cue_recalls_the_other_recent_rounds)
 check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_faint)
 check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)

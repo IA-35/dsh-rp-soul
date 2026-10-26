@@ -35,4 +35,5 @@ packages = [
     "rp_soul_engine.domain",
     "rp_soul_engine.persistence",
     "rp_soul_engine.projections",
+    "rp_soul_engine.modules",
 ]

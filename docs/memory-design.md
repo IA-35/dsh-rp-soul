@@ -87,7 +87,7 @@ RimTalk 从对话轮（RoundMemory）、工作、战斗里采集。我们对应�
 **先放最近几轮对话，再按分数补满。**
 
 1. 「刚刚」里最近 3 轮（`maxABMInjectionRounds = 3`）原样放：你说的话（截短）+ 她的原话。
-2. 剩余配额 = 10（`maxInjectedMemories`）− 已放条数，从其余三层打分取前 N，低于 0.15（`memoryScoreThreshold`）不要：
+2. 剩余配额 = 10（`maxInjectedMemories`）− 已放条数，从所有层尚未注入的经历打分取前 N，低于 0.15（`memoryScoreThreshold`）不要。「刚刚」里最近三轮之外的经历也参与检索，动作类仍不参与：
 
 ```
 score = 时间分 + importance × 场景重要度权重 + 关键词分 × 场景关键词权重

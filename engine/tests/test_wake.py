@@ -5,6 +5,7 @@
 """
 
 import os
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -112,6 +113,46 @@ def miss_you_off_when_zero():
     state["last_player_at"] = state["real_at"]
     pick, rows = wake_of(state, miss_you_hours=0, routine=False)
     assert pick is None and rows == []
+
+
+def unanswered_wakes_wait_from_the_last_delivery():
+    state = fresh()
+    state["last_player_at"] = NOW
+    delivered = CL.parse_iso("2026-10-28T13:00:00+08:00")
+    pick, _ = wake_of(state, streak=3, routine=False, quiet_text="", now=delivered + timedelta(minutes=2),
+                      last_wake_at=delivered)
+    assert CL.parse_iso(pick["at_real"]) == delivered + timedelta(hours=24), pick
+    pick2, _ = wake_of(state, streak=1, routine=False, quiet_text="", now=delivered + timedelta(minutes=3),
+                       last_wake_at=delivered)
+    assert CL.parse_iso(pick2["at_real"]) == delivered + timedelta(hours=12), pick2
+    assert pick2["hours"] == 12
+
+
+def a_player_reply_restarts_the_wait():
+    state = fresh()
+    state["last_player_at"] = "2026-10-28T14:00:00+08:00"
+    delivered = CL.parse_iso("2026-10-28T13:00:00+08:00")
+    pick, _ = wake_of(state, streak=0, routine=False, quiet_text="", now=CL.parse_iso(state["last_player_at"]),
+                      last_wake_at=delivered)
+    assert CL.parse_iso(pick["at_real"]) == CL.parse_iso(state["last_player_at"]) + timedelta(hours=6), pick
+
+
+def miss_you_quiet_shift_changes_the_delivery_time():
+    state = fresh()
+    state["last_player_at"] = NOW
+    pick, _ = wake_of(state, routine=False, now=CL.parse_iso(NOW), quiet_text="00:00-08:00")
+    assert pick["at"] == {"day": 2, "minute": 480}
+    assert CL.parse_iso(pick["at_real"]) == CL.parse_iso("2026-10-27T08:00:00+08:00"), pick
+
+
+def last_delivery_crosses_the_sidecar_boundary(s):
+    sid, _, _ = e2e.start(s)
+    out = s.ok("next-wake", {"session_id": sid, "routine": False, "quiet": "", "streak": 3,
+                             "now": "2030-01-02T05:02:00Z", "last_wake_at": "2030-01-02T05:00:00Z"})
+    assert CL.parse_iso(out["next"]["at_real"]) == CL.parse_iso("2030-01-03T05:00:00+00:00"), out
+    for bad in ("not-a-time", "2030-01-02T05:00:00"):
+        err = s.fail("next-wake", {"session_id": sid, "last_wake_at": bad})
+        assert err["code"] == "INVALID_INPUT" and err["details"][0]["path"] == "$.last_wake_at", err
 
 
 def promise_wakes_half_an_hour_early():
@@ -270,6 +311,32 @@ def together_false_blocks_player_side_ops(s):
     assert "等你回来" in err["details"][0]["hint"], err
 
 
+def together_false_cannot_reveal_secrets(s):
+    for scope in ("companion_only", "player_only"):
+        sid, rev, _ = e2e.start(s)
+        row = s.ok("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[
+            {"op": "add_fact", "key": "private.letter", "text": "抽屉里压着一封信", "scope": scope, "origin": "observed"},
+        ]))
+        rev = row["revision"]
+        before = s.ok("export-save", {"session_id": sid})
+        with open(before["path"], encoding="utf-8") as handle:
+            original = json.load(handle)["session"]["state"]
+        err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, together=False, ops=[
+            {"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "整理抽屉"}]},
+            {"op": "reveal_fact", "fact_id": "f1"},
+        ]))
+        assert err["code"] == "INVARIANT_VIOLATION" and "你不在场" in err["message"], err
+        after = s.ok("export-save", {"session_id": sid})
+        with open(after["path"], encoding="utf-8") as handle:
+            unchanged = json.load(handle)["session"]["state"]
+        assert unchanged == original, "a rejected reveal must roll back knowledge and earlier operations"
+        accepted = s.ok("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[
+            {"op": "reveal_fact", "fact_id": "f1"},
+        ]))
+        assert accepted["revision"] == rev + 1
+        assert any(f["id"] == "f1" for f in accepted["context"].get("known_facts", accepted["context"].get("player_facts", [])))
+
+
 def together_false_rejects_player_modes(s):
     sid, rev, _ = e2e.start(s)
     body = e2e.commit({"session_id": sid, "revision": rev},
@@ -312,14 +379,14 @@ def old_state_without_real_at_still_wakes():
     for key in ("real_at", "real_start"):
         state.pop(key, None)
     now = datetime(2026, 10, 26, 21, 0, tzinfo=TZ)
-    pick, rows = WK.next_wake(state, None, 6, 0, True, ST.WAKE_QUIET, now)
+    pick, rows = WK.next_wake(state, None, 6, 0, True, "", now)
     miss = [row for row in rows if row["reason"] == "miss_you"]
     assert miss, rows
     at = CL.parse_iso(miss[0]["at_real"])
     assert at == now + timedelta(hours=6), miss[0]
     # 没有 real_at 时，别的候选（比如她自己的安排）也要照样有真实时刻
     state["plan"] = {"note": "去洗澡", "until": CL.add_minutes(state["clock"], 20), "set_turn": 1}
-    pick, rows = WK.next_wake(state, None, 6, 0, True, ST.WAKE_QUIET, now)
+    pick, rows = WK.next_wake(state, None, 6, 0, True, "", now)
     assert pick["reason"] == "plan", pick
     assert CL.parse_iso(pick["at_real"]) == now + timedelta(minutes=20), pick
 
@@ -340,6 +407,24 @@ def a_quiet_commit(ops):
         "replaces_turn": None,
         "together": True,
     }
+
+
+def repeated_wakes_without_a_reply_do_not_create_response_thoughts():
+    from rp_soul_engine.domain import turn as TN
+
+    state = fresh()
+    state["last_player_at"] = NOW
+    persona, _ = PE.validate(dict(fixture.PERSONA))
+    for minute in (5, 10, 15):
+        commit = a_quiet_commit([her_action("她发出一句晚安，继续等你回复。")])
+        commit["together"] = False
+        state, _ = TN.commit_turn(state, persona, commit,
+                                  now="2026-10-26T21:%02d:00+08:00" % minute)
+        assert state["last_player_at"] == NOW, state["last_player_at"]
+        thoughts = state["characters"]["lin_wan"]["mood"]["thoughts"]
+        assert not [t for t in thoughts if t["kind"] == "memory"], thoughts
+        assert "你不在" in [t["label"] for t in thoughts], thoughts
+        assert "在场" not in [t["label"] for t in thoughts], thoughts
 
 
 def plan_is_dropped_once_it_is_done():
@@ -374,6 +459,10 @@ CASES = [
     ("plan 置空就没有候选", plan_is_cleared_by_null),
     ("想你了按 6/12/24 拉长", miss_you_grows_with_streak),
     ("想你了可以关掉", miss_you_off_when_zero),
+    ("未回复从上次送达继续等待", unanswered_wakes_wait_from_the_last_delivery),
+    ("你回复后重新等第一段间隔", a_player_reply_restarts_the_wait),
+    ("安静时段也推迟真实送达时刻", miss_you_quiet_shift_changes_the_delivery_time),
+    ("上次送达时刻经过侧车协议", with_sc(last_delivery_crosses_the_sidecar_boundary)),
     ("约定提前半小时叫", promise_wakes_half_an_hour_early),
     ("她自己的事到点叫", own_business_wakes_on_time),
     ("作息换段叫", routine_wakes_at_next_segment),
@@ -387,9 +476,11 @@ CASES = [
     ("next-wake 把安排排第一", with_sc(next_wake_lists_the_plan_first)),
     ("next-wake 只读", with_sc(next_wake_is_read_only)),
     ("together 关掉时不能给回应", with_sc(together_false_blocks_player_side_ops)),
+    ("together 关掉时不能互通秘密，驳回整回合", with_sc(together_false_cannot_reveal_secrets)),
     ("together 关掉时不能是玩家的回合", with_sc(together_false_rejects_player_modes)),
     ("together 关掉时她过自己的时间", with_sc(together_false_allows_her_own_time)),
     ("你说过话的时刻被记下", with_sc(player_input_records_the_last_word)),
+    ("连续唤醒而你未回复不会生成回应想法", repeated_wakes_without_a_reply_do_not_create_response_thoughts),
     ("旧存档没有 plan 也能读", with_sc(old_state_without_plan_still_reads)),
     ("迁移来的存档没有 real_at 也能算", old_state_without_real_at_still_wakes),
     ("安排做完了就清掉", plan_is_dropped_once_it_is_done),

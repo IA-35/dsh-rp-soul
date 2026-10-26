@@ -21,9 +21,9 @@ an offscreen beat leaves an "experience", a minor action leaves an "action".
 """
 
 import math
-import re
 
 from . import clock as CL
+from .text import keywords, cue_keywords, KEYWORDS_MAX, KEYWORD_LEN
 
 LAYERS = ("now", "days", "events", "years")
 LAYER_LABELS = {"now": "刚刚", "days": "这几天", "events": "那些事", "years": "那些年"}
@@ -35,12 +35,7 @@ TYPES = ("conversation", "experience", "action", "summary", "chapter")
 # 留在「刚刚」里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
 CONTENT_MAX = 300
-KEYWORDS_MAX = 32
-KEYWORD_LEN = 20                # 英文长词（网址片段之类）截到这么长，设置页才存得回去
 YOU_MAX = 60
-
-CJK_RUN = re.compile(r"[一-鿿]+")
-ASCII_WORD = re.compile(r"[A-Za-z0-9]{2,}")
 
 
 def entries(state):
@@ -50,18 +45,6 @@ def entries(state):
 
 def of_layer(state, layer):
     return [e for e in entries(state) if e["layer"] == layer]
-
-
-def keywords(*texts):
-    """Two-character pieces of the Chinese runs plus ASCII words; no tokenizer needed."""
-    out = []
-    for text in texts:
-        for run in CJK_RUN.findall(text or ""):
-            if len(run) == 1:
-                out.append(run)
-            out.extend(run[i:i + 2] for i in range(len(run) - 1))
-        out.extend(word.lower()[:KEYWORD_LEN] for word in ASCII_WORD.findall(text or ""))
-    return list(dict.fromkeys(out))[:KEYWORDS_MAX]
 
 
 def activity(entry, now):
@@ -458,19 +441,6 @@ SCENES = {
 }
 
 
-def cue_keywords(state, cue=""):
-    """What can remind her: your words, what she is usually doing now, what is due, what weighs on her."""
-    from .. import persona as PE
-    from . import mood as MO
-    from . import state as SS
-
-    her = SS.companion(state)
-    texts = [cue or ""]
-    if her:
-        texts.append(PE.doing_at(state["characters"][her], state["clock"]["minute"]) or "")
-        texts.extend(row["label"] for row in MO.brief(state, her).get("top") or [])
-    texts.extend(e["title"] for e in state["events"].values() if e["state"] == "pending")
-    return keywords(*texts)
 
 
 def _time_score(entry, now, scene):
@@ -519,7 +489,7 @@ def select(state, cue="", total=TOTAL_BRIEF):
     cue_keys = cue_keywords(state, cue)
     scored = []
     for entry in entries(state):
-        if entry["id"] in taken or entry["layer"] == "now" or entry["type"] == "action":
+        if entry["id"] in taken or entry["type"] == "action":
             continue
         value = score(entry, now, cue_keys, scene)
         if value >= THRESHOLD:

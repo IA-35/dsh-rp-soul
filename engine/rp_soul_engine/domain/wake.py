@@ -133,16 +133,21 @@ def _event_candidates(state):
     return out
 
 
-def _miss_you_candidates(state, hours, streak=0, now=None):
+def _miss_you_candidates(state, hours, streak=0, now=None, last_wake_at=None):
     if not hours:
         return []
-    base = CL.parse_iso(state.get("last_player_at")) or _base(state, now)
+    player_at = CL.parse_iso(state.get("last_player_at"))
+    base = player_at or _base(state, now)
     if base is None:
         return []
+    if last_wake_at is not None and player_at is not None and player_at > last_wake_at:
+        streak = 0
     span = ST.WAKE_MISS_YOU_NEXT
     gap = hours
     for index in range(max(0, int(streak))):
         gap = span[min(index + 1, len(span) - 1)]
+    if streak and last_wake_at is not None and last_wake_at > base:
+        base = last_wake_at
     at = base + timedelta(hours=gap)
     if now is not None and at <= now:
         at = now + timedelta(minutes=1)
@@ -152,7 +157,7 @@ def _miss_you_candidates(state, hours, streak=0, now=None):
     player = (state["characters"].get(state["player_id"]) or {}).get("name") or "你"
     return [_candidate(
         "miss_you", clock,
-        "%s 已经 %d 小时没说话了" % (player, gap),
+        "%s 已经 %d 小时没说话了" % (player, int((at - (player_at or base)).total_seconds() // 3600)),
         player_name=player, hours=gap, at_real=at.isoformat(timespec="seconds"),
     )]
 
@@ -186,7 +191,7 @@ def _routine_candidates(state, persona):
     )]
 
 
-def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quiet=None, now=None):
+def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quiet=None, now=None, last_wake_at=None):
     """Every wake candidate in clock order. Pure."""
     if (state.get("safety") or {}).get("paused"):
         return []
@@ -194,7 +199,7 @@ def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quie
     rows = []
     rows.extend(_plan_candidates(state))
     rows.extend(_event_candidates(state))
-    rows.extend(_miss_you_candidates(state, hours, streak, now))
+    rows.extend(_miss_you_candidates(state, hours, streak, now, last_wake_at))
     if routine:
         rows.extend(_routine_candidates(state, persona))
     out = []
@@ -210,6 +215,8 @@ def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quie
                 if row["reason"] == "routine":
                     # 换段被安静时段推到早上：理由里的时刻也要跟着改，否则说的是 00:00
                     row["why"] = "到 %s 了，按平常该「%s」了" % (CL.hm(clock["minute"]), row["doing"])
+        if clock != row["at"]:
+            row["at_real"] = to_real(state, clock, now)
         row["at"] = clock
         row["clock_label"] = CL.label(clock)
         row["at_real"] = row.get("at_real") or to_real(state, clock, now)
@@ -218,10 +225,10 @@ def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quie
     return out
 
 
-def next_wake(state, persona, miss_you_hours=None, streak=0, routine=True, quiet_text=None, now=None):
+def next_wake(state, persona, miss_you_hours=None, streak=0, routine=True, quiet_text=None, now=None, last_wake_at=None):
     """The earliest candidate plus the whole list, or (None, []) when she stays asleep."""
     quiet = parse_quiet(quiet_text if quiet_text is not None else ST.WAKE_QUIET)
-    rows = candidates(state, persona, miss_you_hours, streak, routine, quiet, now)
+    rows = candidates(state, persona, miss_you_hours, streak, routine, quiet, now, last_wake_at)
     if not rows:
         return None, []
     return rows[0], rows

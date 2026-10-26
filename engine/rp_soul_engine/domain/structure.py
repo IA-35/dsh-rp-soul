@@ -112,19 +112,15 @@ THOUGHT_DURATION = {
 }
 
 # 行为门禁：band + op → 拒绝原因（None = 放行）
-# 档位按回合开始时的心情判定：模型在 brief 里看到的是哪一档，本回合就按哪一档管。
+# 档位在真实时间结算后、回合操作前冻结，与 brief 的时间预览一致。
 MOOD_GATE = {
     "closed": {"stage_advance": "TA现在的状态不会接受关系推进"},
     "break": {
-        "npc_response": "TA现在没法好好回应，只能挑衅或离开",
         "stage_advance": "TA现在的状态不会接受关系推进",
     },
 }
-# 收缩档下 npc_response 只能取这些回应
-MOOD_RESPONSES = {"closed": ("refuse", "negotiate", "surface")}
-# 崩溃档：在场的他本回合必须有一条这些种类的重大 npc_action（不受冷却限制），
-# 它同时顶替玩家 attempt 所需的 npc_response
-BREAK_ACTION_KINDS = ("provoke", "leave")
+# 低心情时这些行动也能表达对尝试的反应，但不构成亲密同意。
+MOOD_REACTION_KINDS = ("provoke", "leave", "silence", "seek_comfort", "change_topic", "withdraw")
 
 # 情境类想法的来源与幅度（引擎自己算，模型一个字都不写）
 SITUATIONAL_DELTA = {
@@ -163,7 +159,8 @@ MOOD_OPEN_COOLDOWN_BONUS = 1
 # 自主行动（agency）：候选由引擎确定性生成，模型只能从列表里挑
 
 AGENCY_MAX_CANDIDATES = 3
-AGENCY_KINDS = ("approach", "observe", "request", "accident", "provoke", "leave")
+AGENCY_KINDS = ("approach", "observe", "request", "accident", "provoke", "leave",
+                "silence", "seek_comfort", "change_topic", "withdraw")
 AGENCY_GOAL_KINDS = {
     "approach": "主动找你",
     "observe": "在旁观察",
@@ -171,6 +168,10 @@ AGENCY_GOAL_KINDS = {
     "accident": "意外",
     "provoke": "刺你一句",
     "leave": "走开/冷场",
+    "silence": "沉默",
+    "seek_comfort": "寻求安慰",
+    "change_topic": "转移话题",
+    "withdraw": "独处",
 }
 
 # ---------------------------------------------------------------------------

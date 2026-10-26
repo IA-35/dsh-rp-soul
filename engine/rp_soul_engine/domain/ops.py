@@ -103,14 +103,15 @@ class TurnContext:
         self.beat_candidates = set()
         self.thoughts = []
         self.debug_removed = []
-        # 回合开始那一刻的档位、在场名单与自主行动候选：门禁和候选校验都按这一刻判，
-        # 和模型在 brief 里看到的一致，不随本回合中途加减的想法摇摆。
+        self.mood_reactions = set()
+
+    def capture_start(self):
+        # 时间先自然结算，门禁再冻结；本回合主动添加的想法仍不能绕过门禁。
+        state, persona = self.state, self.persona
         npcs = SS.npcs(state)
         self.start_bands = {cid: MO.evaluate(state, cid)[1] for cid in npcs}
         self.start_present = set(state["scene"]["present"])
         self.start_kinds = {cid: [o["kind"] for o in AG.candidates(state, persona, cid, self.turn)] for cid in npcs}
-        # 崩溃档里已经交了 provoke/leave 重大行动的人
-        self.break_actors = set()
 
     def band(self, cid):
         """The band this turn is judged by."""
@@ -255,14 +256,8 @@ def _mood_guard(ctx, npc, op_name, path, errs):
 
 
 def _response_guard(ctx, npc, op, path, errs):
-    """Closed band: only cold replies, and short ones (README 心情条档位表)."""
+    """Low mood keeps the ledger's reply short; sincerity follows the persona."""
     band = ctx.band(npc)
-    allowed = ST.MOOD_RESPONSES.get(band)
-    if allowed and op["response"] not in allowed:
-        errs.append(detail(
-            path + ".response", "%s这回合在 %s 档，回应不会是 %s" % (ctx.name(npc), band, op["response"]),
-            "改成 %s 之一" % "/".join(allowed), INVARIANT_VIOLATION,
-        ))
     limit = ST.MOOD_RESPONSE_LIMIT.get(band)
     if limit is not None and len(op["note"]) > limit:
         errs.append(detail(
@@ -319,11 +314,11 @@ def op_npc_response(ctx, op, path):
 
 
 def _break_action(ctx, npc, op, path, errs):
-    """A significant act in the break band is the outburst: provoke or leave only."""
-    if op["kind"] not in ST.BREAK_ACTION_KINDS:
+    """A major act in the break band expresses the feeling, without forcing anger."""
+    if op["kind"] not in ST.MOOD_REACTION_KINDS:
         errs.append(detail(
-            path + ".kind", "%s 这回合在崩溃档，重大行动只能是 %s" % (ctx.name(npc), "/".join(ST.BREAK_ACTION_KINDS)),
-            "kind 写 provoke 或 leave", INVARIANT_VIOLATION,
+            path + ".kind", "%s 这回合在崩溃档，重大行动只能是 %s" % (ctx.name(npc), "/".join(ST.MOOD_REACTION_KINDS)),
+            "按人设、想法原因和你们的关系选择表达，不必挑衅或离开", INVARIANT_VIOLATION,
         ))
 
 
@@ -351,19 +346,20 @@ def _candidate_kind(ctx, npc, op, path, errs):
         "basis_fact_ids": F(S.List(S.Id(), max_items=8, unique=True), required=False, default=[]),
     },
     "TA自己主动做的事。significant: true 的重大行动（主动找你、揭穿、表白、冷着你、挑衅、走开等）受冷却限制，且必须写 kind、取本回合 agency 候选里的种类；"
-    "崩溃档（break）里TA本回合必须有一条 significant 的 provoke/leave（不受冷却限制，也顶替 attempt 所需的 npc_response）；依据事实必须是TA知道的",
+    "低心情可用 silence 沉默、seek_comfort 寻求安慰、change_topic 转移话题、withdraw 独处（也可 provoke/leave），轻微表达用 significant: false；"
+    "这些表达可顶替 attempt 所需的回应，但不表示同意亲密。break 档的重大情绪表达不受冷却限制；依据事实必须是TA知道的",
 )
 def op_npc_action(ctx, op, path):
     errs = []
     npc = ctx.her
     _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
-    outburst = op["significant"] and ctx.band(npc) == "break"
-    if outburst:
+    break_band = ctx.band(npc) == "break"
+    if op["significant"] and break_band:
         _break_action(ctx, npc, op, path, errs)
     elif op["significant"]:
         _candidate_kind(ctx, npc, op, path, errs)
     bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
-    if op["significant"] and not outburst and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
+    if op["significant"] and not break_band and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
         last = ctx.state["counters"]["major_action_turn"][npc]
         errs.append(
             detail(
@@ -377,8 +373,8 @@ def op_npc_action(ctx, op, path):
         return
     if op["significant"]:
         ctx.state["counters"]["major_action_turn"][npc] = ctx.turn
-        if outburst:
-            ctx.break_actors.add(npc)
+    if ctx.band(npc) in ("closed", "break") and op["kind"] in ST.MOOD_REACTION_KINDS:
+        ctx.mood_reactions.add(npc)
     ctx.actors.add(npc)
     ctx.observable = True
     # The log in the settings page reads this back, so the action text has to
@@ -512,10 +508,13 @@ def op_add_fact(ctx, op, path):
 @register(
     "reveal_fact",
     {"fact_id": F(S.Id()), "note": F(S.Nullable(S.Str(1, 80)), required=False, default=None)},
-    "让一件只有一方知道的事变成你们都知道（当面说出来、被看见、发现了证据）。不会改变事实本身；TA心里的事（inner）要说出口就另记一条 add_fact",
+    "你们在一起时，让一件只有一方知道的事变成你们都知道（当面说出来、被看见、发现了证据）。不会改变事实本身；TA心里的事（inner）要说出口就另记一条 add_fact",
 )
 def op_reveal_fact(ctx, op, path):
     errs = []
+    if _apart(ctx, path, "不能互通消息", errs):
+        _flush(ctx, errs)
+        return
     state = ctx.state
     fact = state["facts"].get(op["fact_id"])
     if fact is None:

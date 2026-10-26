@@ -88,8 +88,8 @@ def new_session(persona, seed=None, player=None, now=None):
         "turn": 0,
         "clock": clock,
         # `real_start` is the moment the session opened (diagnostics only);
-        # `real_at` is the moment the last turn settled, which is what the next
-        # turn measures real time against. Both come from the wall clock.
+        # `real_at` is the whole-minute settlement anchor. Partial minutes
+        # remain after it until a future turn; `last_player_at` uses actual now.
         "real_start": now,
         "real_at": now,
         "characters": cards,
@@ -129,11 +129,12 @@ def check_persona(persona):
 def preview(persona, seed=None):
     state, warnings = new_session(persona, seed=seed)
     cid = persona["id"]
-    return {
+    out = {
         "seed": state["seed"],
         "clock": CL.label(state["clock"]),
         "name": persona["name"],
         "doing": PE.doing_at(persona, state["clock"]["minute"]),
-        "mood": {cid: MO.brief(state, cid)},
         "warnings": warnings,
     }
+    out["mood"] = {cid: MO.brief(state, cid)}
+    return out

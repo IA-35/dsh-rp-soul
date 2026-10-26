@@ -18,9 +18,11 @@ linear-decayed thought is a function of the clock - if two code paths both
 """
 
 from . import clock as CL
-from . import mood as MO
+from . import facts as FA
 from . import rng
+from . import state as SS
 from . import structure as ST
+from .. import modules as MODULES
 
 
 def tier_for(minutes, crossed_day=False):
@@ -29,6 +31,15 @@ def tier_for(minutes, crossed_day=False):
     if minutes >= 16:
         return "brief"
     return "routine"
+
+
+def preview(state, now):
+    """Project elapsed time without consuming the stored turn's absence."""
+    work = FA.working_copy(state)
+    minutes, clock, settled_at = SS.real_span(work, now)
+    work["real_at"] = settled_at
+    advance(work, minutes, work["turn"] + 1, to_clock=clock)
+    return work
 
 
 def new_scene(state, reason):
@@ -126,10 +137,8 @@ def advance(state, minutes, turn, hooks=None, to_clock=None, player_absent=False
         report["resolved_events"] = settle_events(state, state["clock"], turn)
         report["steps"].append("events")
         report["expired_conditions"] = expire_conditions(state, state["clock"])
-        report["expired_thoughts"] = MO.settle(state, turn)
         report["steps"].append("status")
-        MO.refresh_situational(state, turn, gap=minutes, player_absent=player_absent)
-        report["steps"].append("mood")
+    MODULES.run(state, "settle", report, turn, player_absent)
     if "offscreen" in hooks:
         report["offscreen"] = hooks["offscreen"](state, report)
     report["steps"].append("offscreen")

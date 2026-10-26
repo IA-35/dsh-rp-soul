@@ -13,9 +13,9 @@ from .. import persona as PE
 from . import agency as AG
 from . import clock as CL
 from . import facts as FA
-from . import memories as MEM
 from . import state as SS
 from . import structure as ST
+from .. import modules as MODULES
 
 # 回看作息时的采样步长（分钟）：一天最多 96 个点，够分辨每一段
 ROUTINE_STEP = 15
@@ -79,10 +79,8 @@ def finalize_requests(state, crossed_day):
     Her daily memory summary (the oldest finished day that is not summarised
     yet) and, every fifteen days, the archive of 那些事 into 那些年.
     """
-    requests = state["requests"]
-    requests["memory_summary"] = MEM.summary_request(state)
-    requests["memory_archive"] = MEM.archive_request(state)
-    return requests
+    MODULES.run(state, "close_record")
+    return state["requests"]
 
 
 def preview_npc(state, cid, report, persona=None):

@@ -113,3 +113,37 @@ def split_name(pools, name):
         return None, name
     family = next((f for f in sorted(pools["family"], key=len, reverse=True) if name.startswith(f)), None)
     return family, name[len(family) :] if family else name
+
+
+# Shared fact/memory cue extraction, independent of memory storage.
+KEYWORDS_MAX = 32
+KEYWORD_LEN = 20
+CJK_RUN = re.compile(r"[一-鿿]+")
+ASCII_WORD = re.compile(r"[A-Za-z0-9]{2,}")
+
+
+def keywords(*texts):
+    """Two-character pieces of the Chinese runs plus ASCII words; no tokenizer needed."""
+    out = []
+    for text in texts:
+        for run in CJK_RUN.findall(text or ""):
+            if len(run) == 1:
+                out.append(run)
+            out.extend(run[i:i + 2] for i in range(len(run) - 1))
+        out.extend(word.lower()[:KEYWORD_LEN] for word in ASCII_WORD.findall(text or ""))
+    return list(dict.fromkeys(out))[:KEYWORDS_MAX]
+
+
+def cue_keywords(state, cue=""):
+    """What can remind her: your words, what she is usually doing now, what is due, what weighs on her."""
+    from .. import persona as PE
+    from . import mood as MO
+    from . import state as SS
+
+    her = SS.companion(state)
+    texts = [cue or ""]
+    if her:
+        texts.append(PE.doing_at(state["characters"][her], state["clock"]["minute"]) or "")
+        texts.extend(row["label"] for row in MO.brief(state, her).get("top") or [])
+    texts.extend(e["title"] for e in state["events"].values() if e["state"] == "pending")
+    return keywords(*texts)

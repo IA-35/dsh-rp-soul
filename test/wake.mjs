@@ -82,6 +82,7 @@ let resolveReturn = {
 let askReply = { next: { at_real: new Date(Date.now() + 3600_000).toISOString(), reason: 'plan', why: 'qu xizao' } };
 let askCalls = 0;
 let askError = null;
+let askedPayload = null;
 
 const storeObj = {
   wakeEnabled: true,
@@ -94,7 +95,8 @@ const storeObj = {
 const bridge = {
   scopeOf: () => 'global',
   mappingOf: (key) => (key === 'shared' ? { session_id: 's_ab12', revision: 3, turn: 1 } : null),
-  call: async () => {
+  call: async (_command, payload) => {
+    askedPayload = payload;
     askCalls += 1;
     if (askError !== null) throw new Error(askError);
     return askReply;
@@ -150,6 +152,12 @@ eq(isWakeTurn('s_ab12'), true, '6. 送达后该会话进入唤醒回合');
 eq(flushed.length, 1, '6. 送达后 flush 了一次会话');
 eq(wake.snapshot().state.count, 1, '6. 计入今天的次数');
 eq(wake.snapshot().state.at, null, '6. 送达后清空待唤醒时刻');
+await wake.reschedule();
+eq(askedPayload.last_wake_at, wake.snapshot().state.lastDeliveredAt, '6. 重算时带上真实送达时刻');
+eq(askedPayload.streak, 1, '6. 一次送达后按第二段间隔等待');
+const afterDelivery = { ...askedPayload };
+await wake.reschedule();
+eq(askedPayload.last_wake_at, afterDelivery.last_wake_at, '6. 重复重算不会重新开始等待');
 
 const second = await wake.fireNow();
 eq(second.ok, true, '6. 第二次仍然可以');
@@ -160,7 +168,10 @@ eq(steered.length, 2, '6. 被拒的那次没有送达');
 eq(wake.snapshot().state.count, 2, '6. 被拒的这次不计数');
 
 storeObj.wakeDailyLimit = 0;
+handlers['session/event']({ id: 'another-conversation' }, { type: 'user/message', data: { source: { kind: 'user' } } });
+eq(wake.snapshot().state.streak, 2, '6. 其它会话说话不算回复她');
 handlers['session/event']({ id: 's_ab12' }, { type: 'user/message', data: { source: { kind: 'user' } } });
+eq(wake.snapshot().state.streak, 0, '6. 指定会话里回复她就重置连续未回复次数');
 const talking = await wake.fireNow();
 eq(talking.ok, false, '6. 你刚说过话时叫不醒');
 has(talking.error, '你刚说过话', '6. 说明是在等你这句话结束');
@@ -207,6 +218,21 @@ storeObj.wakeEnabled = false;
 const before = askCalls;
 await wake.reschedule();
 eq(askCalls, before, '6. 关掉之后不再问引擎');
+
+// 重启后的长时间未回复：保留送达锚点，协议计数不超过引擎上限。
+const longRoot = mkdtempSync(join(tmpdir(), 'soulwake-long-'));
+mkdirSync(join(longRoot, 'rp-soul'));
+const deliveredAt = '2026-10-25T05:00:00Z';
+writeFileSync(join(longRoot, 'rp-soul', 'wake.json'), JSON.stringify({ streak: 50, lastDeliveredAt: deliveredAt }));
+const longWake = mountWake(ctx, { root: longRoot, store: () => ({ wakeEnabled: true, wakeSessionId: 's_long' }), bridge, log: () => {} });
+longWake.start();
+await longWake.reschedule();
+eq(askedPayload.streak, 20, '6. 长期未回复仍在协议允许的计数范围内');
+eq(askedPayload.last_wake_at, deliveredAt, '6. 重启后仍从已送达时刻等待');
+handlers['session/event']({ id: 's_long' }, { type: 'user/message', data: { source: { kind: WAKE_SOURCE } } });
+eq(longWake.snapshot().state.streak, 50, '6. 唤醒消息本身不算玩家回复');
+handlers['session/event']({ id: 's_long' }, { type: 'user/message', data: { source: { kind: 'user' } } });
+eq(JSON.parse(readFileSync(join(longRoot, 'rp-soul', 'wake.json'), 'utf8')).streak, 0, '6. 玩家回复后的重置也写入磁盘');
 
 // 卸载
 storeObj.wakeEnabled = true;

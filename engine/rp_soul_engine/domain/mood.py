@@ -180,6 +180,7 @@ def add_thought(state, cid, label, delta, kind, source_fact_id=None, minutes=Non
     now = CL.to_abs(state["clock"])
     existing = _find(mood, label=label if kind == "situational" else None, source_fact_id=source_fact_id)
     if existing is not None:
+        existing["label"] = label
         existing["delta"] = delta
         existing["since_abs"] = now
         existing["since_turn"] = turn if turn is not None else state["turn"] + 1

@@ -102,7 +102,8 @@ def agency_offers_candidates(s):
     row = agency[0]
     assert row["character_id"] == "lin_wan", row
     for option in row["options"]:
-        assert option["kind"] in ("approach", "observe", "request", "accident", "provoke", "leave"), option
+        assert option["kind"] in ("approach", "observe", "request", "accident", "provoke", "leave",
+                                  "silence", "seek_comfort", "change_topic", "withdraw"), option
         assert option["text"].startswith("林晚"), option
         # 每个候选都得说清「为什么」，否则模型只看到结论、理由全靠自己编。
         assert option["reasons"], option
@@ -133,6 +134,17 @@ def a_refusal_leaves_her_own_mood_alone(s):
     assert memories == [], memories
 
 
+def genuine_responses_do_not_reward_her_own_mood(s):
+    sid, rev, _ = e2e.start(s)
+    for _ in range(3):
+        rev, _ = play(s, sid, rev, ops=[
+            {"op": "npc_response", "response": "genuine", "note": "她轻声说晚安。"},
+        ])
+        panel = s.ok("debug-mood", {"session_id": sid})
+        memories = [t for t in panel["thoughts"] if t["kind"] == "memory"]
+        assert memories == [], memories
+
+
 def mood_panel_has_thresholds_and_decay(s):
     sid, rev, _ = e2e.start(s)
     play(s, sid, rev, ops=[
@@ -160,6 +172,25 @@ def a_thought_needs_a_fact_she_knows(s):
            {"op": "add_thought", "label": "被偷看", "delta": -8, "basis_fact_id": "f1"}]
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=ops))
     assert "不知道事实 f1" in json.dumps(err, ensure_ascii=False), err
+
+
+def refreshing_a_thought_updates_its_label(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        her_fact("misunderstanding", "她误会了你迟到的原因", scope="shared"),
+        {"op": "add_thought", "label": "误会让她难过", "delta": -8, "basis_fact_id": "f1"},
+    ])
+    original = next(t for t in s.ok("debug-mood", {"session_id": sid})["thoughts"] if t["kind"] == "memory")
+    rev, data = play(s, sid, rev, ops=[
+        {"op": "add_thought", "label": "误会解开，她释然了", "delta": 10, "basis_fact_id": "f1", "minutes": 120},
+    ])
+    memories = [t for t in s.ok("debug-mood", {"session_id": sid})["thoughts"] if t["kind"] == "memory"]
+    assert len(memories) == 1 and memories[0]["id"] == original["id"], memories
+    assert memories[0]["label"] == "误会解开，她释然了" and memories[0]["delta"] == 10, memories
+    assert {"label": "误会解开，她释然了", "delta": 10} in data["context"]["companion"]["mood"]["weighing"]
+    s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})
+    restored = next(t for t in s.ok("debug-mood", {"session_id": sid})["thoughts"] if t["id"] == original["id"])
+    assert restored["label"] == "误会让她难过" and restored["delta"] == -8, restored
 
 
 def debug_delete_removes_one_thought(s):
@@ -677,8 +708,10 @@ check("full context carries her card, no cast or map", with_sc(full_context_has_
 check("agency offers her candidates", with_sc(agency_offers_candidates))
 check("ops no longer name a character", with_sc(ops_no_longer_name_a_character))
 check("a refusal leaves her own mood alone", with_sc(a_refusal_leaves_her_own_mood_alone))
+check("genuine responses do not reward her own mood", with_sc(genuine_responses_do_not_reward_her_own_mood))
 check("the mood panel shows thresholds and decay", with_sc(mood_panel_has_thresholds_and_decay))
 check("a thought needs a fact she knows", with_sc(a_thought_needs_a_fact_she_knows))
+check("a refreshed thought updates its label and undo restores it", with_sc(refreshing_a_thought_updates_its_label))
 check("debug delete removes exactly one thought", with_sc(debug_delete_removes_one_thought))
 check("at most twelve memory thoughts are kept", with_sc(thought_cap_is_enforced))
 check("a fact's scope decides who knows it", with_sc(fact_scopes_decide_who_knows))

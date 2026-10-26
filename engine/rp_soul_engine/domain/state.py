@@ -7,6 +7,7 @@ memory. Who she is comes from the persona and is read-only for the engine.
 """
 
 import hashlib
+from datetime import timedelta
 
 from ..jsonio import canonical
 from . import clock as CL
@@ -80,10 +81,10 @@ def clock_label(state):
 
 
 def real_span(state, now):
-    """(minutes, clock) for a turn happening at the real moment `now`.
+    """(minutes, clock, settled_at) without consuming a partial minute.
 
-    `real_at` is when the last turn settled, so the span is the real time
-    between then and now and the clock moves that many minutes on. Counting
+    `real_at` is the wall-clock anchor settled through whole minutes. Time
+    left between that anchor and now is carried into the next turn. Counting
     minutes instead of re-deriving the time of day keeps day one anchored to
     where the story actually is: a session left alone over midnight, or for a
     few days, lands exactly where real time says it is.
@@ -91,14 +92,12 @@ def real_span(state, now):
     Time only goes forward: a wall clock that was adjusted backwards settles as
     zero rather than rewinding the story.
     """
-    if CL.parse_iso(now) is None:
-        return 0, dict(state["clock"])
-    minutes = CL.real_minutes_between(state.get("real_at"), now)
-    if minutes <= 0:
-        # A wall clock set back, or two turns inside the same minute: the story
-        # never rewinds, so this settles as no time at all.
-        return 0, dict(state["clock"])
-    return minutes, CL.add_minutes(state["clock"], minutes)
+    anchor = CL.parse_iso(state.get("real_at"))
+    if CL.parse_iso(now) is None or anchor is None:
+        return 0, dict(state["clock"]), state.get("real_at") or now
+    minutes = max(0, CL.real_minutes_between(state["real_at"], now))
+    settled_at = (anchor + timedelta(minutes=minutes)).isoformat()
+    return minutes, CL.add_minutes(state["clock"], minutes), settled_at
 
 
 def can_act(state, cid, turn=None, bonus=0):

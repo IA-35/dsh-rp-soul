@@ -1,0 +1,124 @@
+"""Real-time minute settlement keeps short-turn seconds across every write path."""
+
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import e2e
+from harness import check, run
+from rp_soul_engine.application import service
+from rp_soul_engine.application.context import Context
+from rp_soul_engine.persistence import repo
+
+T0 = "2026-10-26T12:00:00+08:00"
+
+
+@contextmanager
+def game():
+    ctx = Context(str(Path(__file__).resolve().parents[1]), data_dir_arg=e2e.temp_dir())
+    try:
+        with patch.object(service, "now_iso", return_value=T0) as clock:
+            opened = service.new_game(ctx, {"request_id": e2e.rid(), "persona": e2e.persona_payload(), "seed": 7})
+            yield ctx, clock, opened
+    finally:
+        ctx.close()
+
+
+def play(ctx, clock, row, at, player_input=""):
+    clock.return_value = "2026-10-26T" + at + "+08:00"
+    response = service.commit_turn(ctx, e2e.commit(row, mode="result", player_input=player_input))
+    return dict(response, session_id=row["session_id"])
+
+
+def consecutive_short_turns_accumulate():
+    with game() as (ctx, clock, row):
+        minutes = []
+        for at in ("12:00:30", "12:01:00", "12:01:30", "12:02:00"):
+            row = play(ctx, clock, row, at)
+            minutes.append(row["clock"]["minute"])
+        assert minutes == [720, 721, 721, 722], minutes
+
+
+def previews_do_not_consume_remainder():
+    with game() as (ctx, clock, row):
+        row = play(ctx, clock, row, "12:00:30")
+        clock.return_value = "2026-10-26T12:01:15+08:00"
+        for _ in range(2):
+            preview = service.get_context(ctx, {"session_id": row["session_id"]})
+            assert preview["context"]["clock"]["minute"] == 721
+        stored = repo.load_session(ctx.db(), row["session_id"])["state"]
+        assert stored["clock"]["minute"] == 720 and stored["real_at"] == T0, stored["real_at"]
+        row = play(ctx, clock, row, "12:01:30")
+        assert row["clock"]["minute"] == 721
+        row = play(ctx, clock, row, "12:02:00")
+        assert row["clock"]["minute"] == 722
+
+
+def saves_loads_and_undo_keep_the_anchor():
+    with game() as (ctx, clock, row):
+        row = play(ctx, clock, row, "12:00:30")
+        service.save_slot(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
+                                "expected_revision": row["revision"], "name": "seconds"})
+        loaded = service.load_slot(ctx, {"request_id": e2e.rid(), "name": "seconds"})
+        row = play(ctx, clock, loaded, "12:01:00")
+        assert row["clock"]["minute"] == 721
+        undone = service.undo_turn(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
+                                        "expected_revision": row["revision"]})
+        row = play(ctx, clock, dict(undone, session_id=row["session_id"]), "12:01:30", player_input="我回来了")
+        stored = repo.load_session(ctx.db(), row["session_id"])["state"]
+        assert row["clock"]["minute"] == 721, row["clock"]
+        assert stored["real_at"] == "2026-10-26T12:01:00+08:00"
+        assert stored["last_player_at"] == "2026-10-26T12:01:30+08:00", stored["last_player_at"]
+
+
+def clock_rollback_does_not_count_the_same_time_twice():
+    with game() as (ctx, clock, row):
+        row = play(ctx, clock, row, "12:02:00")
+        row = play(ctx, clock, row, "12:01:30")
+        assert row["clock"]["minute"] == 722
+        row = play(ctx, clock, row, "12:02:30")
+        assert row["clock"]["minute"] == 722, row["clock"]
+        row = play(ctx, clock, row, "12:03:00")
+        assert row["clock"]["minute"] == 723
+
+
+def replay_does_not_advance_or_consume_time():
+    with game() as (ctx, clock, row):
+        clock.return_value = "2026-10-26T12:00:30+08:00"
+        request = e2e.commit(row, mode="result")
+        committed = service.commit_turn(ctx, request)
+        clock.return_value = "2026-10-26T12:00:50+08:00"
+        replay = service.commit_turn(ctx, request)
+        assert replay["replayed"] and replay["revision"] == committed["revision"]
+        row = play(ctx, clock, dict(committed, session_id=row["session_id"]), "12:01:00")
+        assert row["clock"]["minute"] == 721
+
+
+def short_turns_expire_thoughts_and_due_events():
+    with game() as (ctx, clock, row):
+        response = service.commit_turn(ctx, e2e.commit(row, mode="result", ops=[
+            {"op": "add_fact", "key": "her.worry", "text": "她有一点担心。", "scope": "companion_only", "origin": "observed"},
+            {"op": "add_thought", "label": "一时担心", "delta": -10, "basis_fact_id": "f1", "minutes": 1},
+            {"op": "event_create", "kind": "deadline", "title": "烧水", "with_player": False,
+             "in_minutes": 1, "dedupe_key": "her.water"},
+        ]))
+        row = dict(response, session_id=row["session_id"])
+        row = play(ctx, clock, row, "12:00:30")
+        assert not row["turns"][0]["resolved_events"]
+        row = play(ctx, clock, row, "12:01:00")
+        assert row["turns"][0]["resolved_events"][0]["event_id"] == "e1"
+        thoughts = service.debug_mood(ctx, {"session_id": row["session_id"]})["thoughts"]
+        assert not any(t["label"] == "一时担心" for t in thoughts), thoughts
+
+
+check("four 30-second turns advance two minutes", consecutive_short_turns_accumulate)
+check("read previews never consume the remaining seconds", previews_do_not_consume_remainder)
+check("save/load/undo retain seconds and actual player time", saves_loads_and_undo_keep_the_anchor)
+check("wall-clock rollback never double-counts", clock_rollback_does_not_count_the_same_time_twice)
+check("idempotent replay does not consume seconds", replay_does_not_advance_or_consume_time)
+check("short turns settle expired thoughts and due events", short_turns_expire_thoughts_and_due_events)
+run("clock")

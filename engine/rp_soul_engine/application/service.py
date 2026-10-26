@@ -39,6 +39,7 @@ from ..errors import (
 )
 from ..jsonio import canonical
 from ..domain import structure as ST
+from ..domain import settlement as SETTLE
 from ..persistence import db, repo
 from ..projections import context as CX
 from . import specs
@@ -295,6 +296,7 @@ def get_context(ctx, payload):
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
+    state = SETTLE.preview(state, now_iso())
     project = CX.full if payload["depth"] == "full" else CX.brief
     context = project(state, persona, save_info(session), payload["cue"])
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
@@ -342,7 +344,8 @@ def choose_depth(state, results, failed_before=False):
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
-    if state["requests"].get("memory_summary") or state["requests"].get("memory_archive") or state["turn"] % 5 == 0:
+    requests = dict(state["requests"])
+    if requests.get("memory_summary") or requests.get("memory_archive") or state["turn"] % 5 == 0:
         return "full"
     return "brief"
 
@@ -950,6 +953,7 @@ def status(ctx, payload):
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
     state, persona = session["state"], session["persona"]
+    state = SETTLE.preview(state, now_iso())
     level = payload["level"]
     out = {
         "session_id": state["session_id"],
@@ -959,10 +963,10 @@ def status(ctx, payload):
         "clock_label": CL.label(state["clock"]),
         "paused": state["safety"]["paused"],
         "present": [state["characters"][cid]["name"] for cid in state["scene"]["present"]],
-        "mood": {cid: MO.brief(state, cid) for cid in SS.npcs(state)},
         "current_slot": session["current_slot"],
         "turns_since_save": session["turns_since_save"],
     }
+    out["mood"] = {cid: MO.brief(state, cid) for cid in SS.npcs(state)}
     if level in ("detail", "debug"):
         out["open_action"] = state["memory"].get("open_action") or ""
         out["recent"] = [t["summary"] for t in state["memory"]["turns"][-3:]]
@@ -992,6 +996,13 @@ def next_wake(ctx, payload):
     # The story clock stands on the last settled turn; a save without one (an
     # older build, or one migrated from the old engine) stands on right now.
     now = CL.parse_iso(payload["now"]) if payload["now"] else CL.parse_iso(now_iso())
+    try:
+        last_wake = CL.parse_iso(payload["last_wake_at"])
+        if last_wake is not None and last_wake.utcoffset() is None:
+            raise ValueError("timezone required")
+    except ValueError:
+        raise AppError(INVALID_INPUT, "上次唤醒时刻必须是带时区的 ISO 时间",
+                       [detail("$.last_wake_at", "时间格式不合法或缺少时区", "例如 2026-10-26T13:00:00Z", INVALID_INPUT)])
     pick, rows = WK.next_wake(
         state,
         persona,
@@ -1000,6 +1011,7 @@ def next_wake(ctx, payload):
         routine=payload["routine"],
         quiet_text=payload["quiet"],
         now=now,
+        last_wake_at=last_wake,
     )
     out = {
         "session_id": state["session_id"],
@@ -1039,7 +1051,7 @@ def debug_mood(ctx, payload):
     payload = validate(specs.DEBUG_MOOD, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
-    state = session["state"]
+    state = SETTLE.preview(session["state"], now_iso())
     cid = _her(state, payload)
     if cid not in state["characters"] or cid == state["player_id"]:
         known = sorted(k for k in state["characters"] if k != state["player_id"])
@@ -1232,7 +1244,7 @@ def _mood_rows(state, persona):
             "tension": edge.get("tension"),
             "stage": edge.get("stage"),
             "stage_label": SS.stage_label(edge["stage"]) if edge.get("stage") else "",
-            "can_act": SS.can_act(state, cid),
+            "can_act": panel["band"] == "break" or SS.can_act(state, cid),
         })
     return {"thresholds": thresholds, "npcs": rows}
 
@@ -1243,7 +1255,7 @@ def debug_moods(ctx, payload):
     payload = validate(specs.DEBUG_MOODS, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
-    state = session["state"]
+    state = SETTLE.preview(session["state"], now_iso())
     out = {
         "session_id": state["session_id"],
         "revision": state.get("revision", 0),

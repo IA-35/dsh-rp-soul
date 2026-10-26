@@ -13,7 +13,7 @@ Order inside a commit:
      thought or event written now starts at now. No operation moves the
      clock: the span is real time, not authored
   4. operations in order
-  5. required offscreen beats, the break-band outburst, action mode, intimacy
+  5. required offscreen beats, the break-band expression, action mode, intimacy
      and safety checks
   6. invariants, then bookkeeping: the turn log, her memory (summary and
      archive paid by this turn, this turn's entries, ageing)
@@ -34,6 +34,7 @@ from . import ops as OPS
 from . import simulation
 from . import state as SS
 from . import structure as ST
+from .. import modules as MODULES
 
 F = S.Field
 MAX_MEMORY_TURNS = 40          # the rolling turn log; her memory lives in memories.py
@@ -145,29 +146,6 @@ def _replace_base(current, turn, snapshot):
 # checks
 
 
-def _request_checks(ctx):
-    commit = ctx.commit
-    requests = ctx.state["requests"]
-    if requests.get("memory_summary"):
-        if not commit["memory_summary"]:
-            ctx.error(
-                "$.memory_summary",
-                "新的一天了，引擎要求这次记录的第一个回合把那一天记成一条「那些事」",
-                "读上下文的 memory_summary_sources，用第一人称写成 ≤80 字放进 memory_summary",
-            )
-    elif commit["memory_summary"]:
-        ctx.error("$.memory_summary", "引擎没有要求每日总结", "去掉 memory_summary；跨天后引擎会在记录结束时要求", INVALID_INPUT)
-    if requests.get("memory_archive"):
-        if not commit["memory_archive"]:
-            ctx.error(
-                "$.memory_archive",
-                "又过了半个月，引擎要求把这些日子归成一段「那些年」",
-                "读上下文的 memory_archive_sources，合并成 ≤60 字放进 memory_archive",
-            )
-    elif commit["memory_archive"]:
-        ctx.error("$.memory_archive", "引擎没有要求归档", "去掉 memory_archive", INVALID_INPUT)
-
-
 def _mode_checks(ctx):
     commit = ctx.commit
     mode = commit["action_mode"]
@@ -198,11 +176,11 @@ def _mode_checks(ctx):
                 "尝试档要么附TA的回应，要么用 acts_on_her: false 声明这次尝试不冲着TA",
                 "冲着TA的尝试，结果由TA和处境决定：加一条 npc_response",
             )
-        # 崩溃档里她回应不了；那条 provoke/leave 就是她对这次尝试的反应
-        if on_her and her not in ctx.responses and her not in ctx.break_actors:
+        # 低心情时沉默或独处也可以是反应，不必为了过账强迫她说话。
+        if on_her and her not in ctx.responses and her not in ctx.mood_reactions:
             ctx.error(
                 "$.operations", "尝试冲着 %s，却没有TA的回应" % ctx.name(her),
-                "加一条 npc_response（拒绝/协商/有限配合/表面配合/真诚配合）",
+                "加一条 npc_response；低心情也可用 silence、seek_comfort、change_topic、withdraw 等行动表达反应",
             )
     if mode in ("continue", "wait"):
         if commit["player_authorized"]:
@@ -220,26 +198,6 @@ def _mode_checks(ctx):
         retcons = [a for a in ctx.applied if a["op"] == "add_fact" and a.get("origin") == "retcon"]
         if not retcons and not ctx.op_failed:
             ctx.error("$.operations", "“其实……”回合至少要有一条追溯事实（add_fact，origin: retcon）")
-
-
-def _break_checks(ctx):
-    """Break band: if she was with you at the start of the turn, she lashes out or leaves.
-
-    The band is the one the turn started in, so a commit cannot dodge it by
-    adding a cheerful thought first. A rewrite turn only restates the past.
-    """
-    if ctx.mode == "rewrite" or not ctx.together:
-        return
-    player = ctx.state["player_id"]
-    if player not in ctx.start_present:
-        return
-    for cid in sorted(ctx.start_present - {player}):
-        if ctx.start_bands.get(cid) == "break" and cid not in ctx.break_actors:
-            ctx.error(
-                "$.operations",
-                "%s 这回合在崩溃档，必须有一条重大的 provoke 或 leave" % ctx.name(cid),
-                "加一条 npc_action：npc_id %s、significant: true、kind: provoke 或 leave（不受冷却限制）" % cid,
-            )
 
 
 def _beat_checks(ctx):
@@ -296,22 +254,6 @@ def _archive_ended_events(state, turn):
     return rows
 
 
-def _pay_memory_requests(work, commit, turn):
-    """(summary entry, archive entry, archive rows) for what the record's first turn paid."""
-    requests = work["requests"]
-    summary = archived = None
-    rows = []
-    if commit["memory_summary"]:
-        summary = MEM.apply_summary(work, requests.get("memory_summary"), commit["memory_summary"], turn)
-        requests["memory_summary"] = None
-        # 跨天总结时顺手收掉已经结束的约定和事件（原来跟着章节一起收）
-        rows.extend(_archive_ended_events(work, turn))
-    if commit["memory_archive"]:
-        archived = MEM.apply_archive(work, requests.get("memory_archive"), commit["memory_archive"], turn)
-        requests["memory_archive"] = None
-    return summary, archived, rows
-
-
 def _simulation_result(ctx):
     report = ctx.settlements[0]
     preview = report["preview"]
@@ -346,12 +288,14 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     base = _replace_base(state, replaced, undo_snapshot) if replaced is not None else state
     work = FA.working_copy(base)
     ctx = OPS.TurnContext(work, persona, commit, simulation.hooks(work["turn"] + 1))
-    ctx.significant_actors = lambda: {a["npc_id"] for a in ctx.applied if a["op"] == "npc_action"}
+    ctx.significant_actors = lambda: {a["npc_id"] for a in ctx.applied
+                                     if a["op"] == "npc_action" and a["kind"] not in ST.MOOD_REACTION_KINDS}
     before_clock = dict(work["clock"])
-    _request_checks(ctx)
-    span, to_clock = SS.real_span(work, now)
-    work["real_at"] = now
+    MODULES.run(work, "before_turn", ctx)
+    span, to_clock, settled_at = SS.real_span(work, now)
+    work["real_at"] = settled_at
     OPS.advance(ctx, span, "$", default=True, to_clock=to_clock, player_absent=not ctx.together)
+    ctx.capture_start()
     for index, op in enumerate(commit["operations"]):
         path = "$.operations[%d]" % index
         if ctx.mode == "rewrite" and op["op"] not in REWRITE_OPS:
@@ -364,7 +308,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         OPS.apply_op(ctx, op, path)
     ctx.op_failed = bool(ctx.errors)
     preview = _beat_checks(ctx)
-    _break_checks(ctx)
+    MODULES.run(work, "validate_turn", ctx)
     _mode_checks(ctx)
     _intimacy_checks(ctx)
     for problem in OPS.check_safety_tags(work, commit["content_tags"]):
@@ -390,7 +334,9 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     }
     if ctx.beats:
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
-    summarized, archived, archive = _pay_memory_requests(work, commit, ctx.turn)
+    payment = MODULES.run(work, "pay_requests", commit, ctx.turn).get("memory", {})
+    summarized, archived = payment.get("summarized"), payment.get("archived")
+    archive = _archive_ended_events(work, ctx.turn) if summarized else []
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
     if overflow:
@@ -398,20 +344,14 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         del memory["turns"][:-MAX_MEMORY_TURNS]
     # 你说过话的那一刻：唤醒线的「想你了」以它为基准。
     if commit["player_input"].strip():
-        work["last_player_at"] = work["real_at"]
+        work["last_player_at"] = now
     # 说好做到的时间已经过了：这条安排就算兑现完了，不能拿它反复把她叫醒。
     plan = OPS.current_plan(work)
     if plan is not None and CL.to_abs(plan["until"]) <= CL.to_abs(work["clock"]):
         OPS.clear_plan(work)
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
-    # 她的记忆：你这句话勾起来的那几条算「被想起」，变牢一点（和 soul_state 注入时同一套挑法）
-    # 只有真被你的话碰到的才算想起：否则排在前面的几条每回合都被续命，永远不会淡
-    _rounds, recalled = MEM.select(base, commit["player_input"], MEM.TOTAL_BRIEF)
-    MEM.reinforce(work, [e["id"] for e in recalled if MEM.cued_by_words(e, commit["player_input"])])
-    # 这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
-    remembered = MEM.capture(work, ctx, commit)
-    forgetting = MEM.maintain(work)
+    memory_result = MODULES.run(work, "after_turn", ctx, commit, base).get("memory", {})
     crossed_day = work["clock"]["day"] > before_clock["day"]
     work["facts"] = work["facts"].settle()
     scene_changed = any(s["scene"] for s in ctx.settlements)
@@ -427,8 +367,8 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "crossed_day": crossed_day,
         "summarized": summarized["id"] if summarized else None,
         "archived": archived["id"] if archived else None,
-        "remembered": [e["id"] for e in remembered],
-        "forgetting": forgetting,
+        "remembered": memory_result.get("remembered", []),
+        "forgetting": memory_result.get("forgetting", {}),
         "replaced_turn": replaced,
         "mood": {
             cid: MO.brief(work, cid)

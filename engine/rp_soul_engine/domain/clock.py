@@ -21,7 +21,7 @@ def parse_iso(text):
     """Parse one of the engine's stored ISO timestamps (None stays None)."""
     if not text:
         return None
-    return datetime.fromisoformat(text)
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def real_minutes_between(earlier, later):

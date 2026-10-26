@@ -51,7 +51,14 @@ const React = {
     const changed = !prev || !deps || deps.length !== prev.length || deps.some((d, k) => d !== prev[k]);
     if (changed) { store[i] = deps; pendingEffects.push(fn); }
   },
-  useCallback(fn) { const box = ownerSlot(); if (box === null) hookIndex++; else box.idx++; return fn; },
+  useCallback(fn, deps) {
+    const box = ownerSlot();
+    const i = box === null ? hookIndex++ : box.idx++;
+    const store = box === null ? hookState : box.state;
+    const prev = store[i];
+    if (!prev || !deps || deps.length !== prev.deps.length || deps.some((d, k) => d !== prev.deps[k])) store[i] = { fn, deps };
+    return store[i].fn;
+  },
   useMemo(fn) { const box = ownerSlot(); if (box === null) hookIndex++; else box.idx++; return fn(); },
   useRef(init) {
     const box = ownerSlot();
@@ -196,7 +203,7 @@ function findRow(tree, label) {
 // ---- 4. loading 态（state 请求挂起）----
 let resolveState = null;
 responses.set('GET /rp-soul/state', () => new Promise((res) => {
-  resolveState = () => res(jsonResponse({
+  resolveState = () => res(jsonResponse(statePayload || {
     config: { files: [], separator: '\n\n', annotate: false, enabled: true, maxBytes: 65536 },
     files: [], library: [], composed: null, storePath: 'rp-soul/config.json',
   }));
@@ -218,7 +225,7 @@ statePayload = {
   storePath: 'rp-soul/config.json',
 };
 responses.delete('GET /rp-soul/state');
-calls.length = 0;
+resolveState();
 const readyTree = await renderUntil((t) => t.props['data-render-state'] === 'ready');
 eq(readyTree.props['data-render-state'], 'ready', '5. 拿到 state 后进入 ready 态');
 const readyText = textOf(readyTree);
@@ -744,5 +751,8 @@ const bareTree = await renderUntil((t) => t.props['data-tab'] === 'wake' && text
 has(textOf(bareTree), '缺桌面宿主', '13. 没挂载时标出缺宿主');
 has(textOf(bareTree), '上次没叫成：会话不在了', '13. 显示上次失败原因');
 has(textOf(bareTree), '唤醒线关着', '13. 关着时给出提示');
+
+hasNot(clientSrc, '"/modules"', '代码模块化不增加运行时模块 API 请求');
+hasNot(clientSrc, 'data-module', '代码模块化不增加功能模块开关');
 
 done('client-bundle');

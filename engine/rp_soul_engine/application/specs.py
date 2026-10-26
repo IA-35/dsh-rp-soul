@@ -123,6 +123,8 @@ NEXT_WAKE = _obj(
                             desc="你多久没说话算「想你了」（0 = 关；省略用默认 6 小时）"),
         "streak": F(S.Int(0, 20), required=False, default=0,
                     desc="已经连着几次叫醒她没得到回话（每多一次，想你了的间隔按 6/12/24 小时拉长）"),
+        "last_wake_at": F(S.Nullable(S.Str(1, 40)), required=False, default=None,
+                          desc="上次成功送达唤醒的 ISO 时刻，带时区；连续未回复时从这里计算下一段等待"),
         "routine": F(S.Bool(), required=False, default=True, desc="作息换段也算一个唤醒来源"),
         "quiet": F(S.Nullable(S.Str(0, 11)), required=False, default=None,
                    desc="安静时段，形如 00:00-08:00；空字符串表示没有安静时段"),
