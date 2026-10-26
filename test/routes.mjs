@@ -32,7 +32,11 @@ const ctx = {
     cb(mkctx());
   },
   systemPrompt: {
-    getSectionOrder(name) { return name === 'DEPLOYMENT_PERSONA_PREFIX' ? 100 : 0; },
+    getSectionOrder(name) {
+      if (name === 'DEPLOYMENT_PERSONA_PREFIX') return 100;
+      if (name === 'DEPLOYMENT_PERSONA_SUFFIX') return 10300;
+      return 0;
+    },
     section(def) { sectionDefs.set(def.name, def); return () => {}; },
   },
 };
@@ -41,8 +45,8 @@ mod.apply(ctx, { files: ['SOUL.md', 'STYLE.md'], maxBytes: 65536 });
 // ---- 1. section ----
 ok(sectionDefs.has('soul-persona'), '1. soul-persona section 已注册');
 ok(sectionDefs.has('soul-engine'), '1. soul-engine section 已注册');
-eq(sectionDefs.get('soul-persona').order, 100, '1. section order 跟随 DEPLOYMENT_PERSONA_PREFIX');
-eq(sectionDefs.get('soul-engine').order, 101, '1. soul-engine 紧跟人设');
+eq(sectionDefs.get('soul-persona').order, 10301, '1. 人设排在 persona-suffix 之后，在最末');
+eq(sectionDefs.get('soul-engine').order, 10302, '1. soul-engine 紧跟人设');
 eq(tools.length, 3, '1. 注册了 3 个工具');
 eq(tools.map((t) => t.name).sort().join(','), 'soul_admin,soul_commit,soul_state', '1. 三个工具名');
 const text = sectionDefs.get('soul-persona').text();

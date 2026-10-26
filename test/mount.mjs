@@ -42,7 +42,12 @@ const app = new Context();
 const sections = new Map();
 const routes = [];
 app.provide('systemPrompt', {
-  getSectionOrder(name) { return name === 'DEPLOYMENT_PERSONA_PREFIX' ? 120 : 0; },
+  // 与宿主 SECTION_ORDERS 对齐：persona-prefix 在最前，persona-suffix 在最后。
+  getSectionOrder(name) {
+    if (name === 'DEPLOYMENT_PERSONA_PREFIX') return 120;
+    if (name === 'DEPLOYMENT_PERSONA_SUFFIX') return 10320;
+    return 0;
+  },
   section(def) { sections.set(def.name, def); return () => { sections.delete(def.name); }; },
 });
 app.provide('webServer', {
@@ -55,8 +60,9 @@ await fiber;
 
 ok(sections.has('soul-persona'), '3. 挂载后 soul-persona section 已注册');
 ok(sections.has('soul-engine'), '3. 挂载后 soul-engine section 已注册');
-eq(sections.get('soul-persona').order, 120, '3. soul-persona order 取自 DEPLOYMENT_PERSONA_PREFIX');
-eq(sections.get('soul-engine').order, 121, '3. soul-engine 紧跟在人设后面');
+eq(sections.get('soul-persona').order, 10321, '3. soul-persona 排在系统提示最末（persona-suffix 之后）');
+eq(sections.get('soul-engine').order, 10322, '3. soul-engine 紧跟人设，仍在最末');
+ok(sections.get('soul-engine').order > 9900, '3. 账本快照排在结构化输出之后，不拖累前面的缓存');
 eq(routes.length, 1, '3. 注册了 1 条路由');
 eq(routes[0].kind, 'prefix', '3. 路由 kind=prefix');
 eq(routes[0].path, '/rp-soul', '3. 路由 path');
