@@ -306,6 +306,20 @@ def _migrate_to_3(conn):
     from .. import migrate
     from . import repo
 
+    # 设置页手动删记忆的审计（和删情绪的 thought_debug 一样）
+    _exec_script(conn, """
+        CREATE TABLE memory_debug (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            turn INTEGER NOT NULL,
+            memory_id TEXT NOT NULL,
+            layer TEXT NOT NULL,
+            content TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX memory_debug_session ON memory_debug(session_id, id)
+    """)
     for sid, blob in conn.execute("SELECT session_id, state FROM sessions").fetchall():
         state = repo.unpack(blob)
         if state.get("schema") == migrate.TO_SCHEMA:

@@ -1099,6 +1099,100 @@ def debug_delete_thought(ctx, payload):
 
 
 # ---------------------------------------------------------------------------
+# settings page: her memory (RimTalk's workbench, simplified)
+
+
+def debug_memories(ctx, payload):
+    from ..domain import clock as CL
+    from ..domain import memories as MEM
+
+    payload = validate(specs.DEBUG_MEMORIES, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state = session["state"]
+    out = {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "clock_label": CL.label(state["clock"]),
+        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_summary", "memory_archive")},
+        "deletions": repo.memory_deletions(conn, state["session_id"]),
+    }
+    out.update(MEM.panel(state))
+    return out
+
+
+def _memory_write(ctx, command, spec, payload, change):
+    """A settings-page write on her memory: change(state, now) -> (receipt, extra)."""
+    from ..domain import memories as MEM
+
+    payload = validate(spec, payload)
+
+    def handler(conn, session, now):
+        state = session["state"]
+        receipt, extra = change(conn, state, payload, now)
+        state["revision"] = state.get("revision", 0) + 1
+        repo.update_session(conn, state, now)
+        out = {"revision": state["revision"], "turn": state["turn"], "receipt": receipt}
+        out.update(extra)
+        out["memories"] = MEM.panel(state)
+        return out
+
+    return session_write(ctx, command, payload, handler)
+
+
+def _missing_memory(memory_id):
+    return AppError(NOT_FOUND, "没有这条记忆：%s" % memory_id,
+                    [detail("$.memory_id", "记忆不存在", "用 debug-memories 看当前条目", NOT_FOUND)])
+
+
+def edit_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        keys = ("content", "importance", "activity", "keywords", "note", "pinned")
+        entry = MEM.edit(state, payload["memory_id"], {k: payload[k] for k in keys})
+        if entry is None:
+            raise _missing_memory(payload["memory_id"])
+        return "已改「%s」" % entry["content"][:20], {"memory": MEM.row(state, entry)}
+
+    return _memory_write(ctx, "edit-memory", specs.EDIT_MEMORY, payload, change)
+
+
+def delete_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        entry = MEM.remove(state, payload["memory_id"])
+        if entry is None:
+            raise _missing_memory(payload["memory_id"])
+        repo.log_memory_delete(conn, state["session_id"], state["turn"], entry["id"], entry["layer"],
+                               entry["content"], payload["reason"], now)
+        return "已删除「%s」" % entry["content"][:20], {"removed": {"id": entry["id"], "layer": entry["layer"], "content": entry["content"]}}
+
+    return _memory_write(ctx, "delete-memory", specs.DELETE_MEMORY, payload, change)
+
+
+def request_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        if payload["kind"] == "summary":
+            request = MEM.manual_summary_request(state)
+            key, what = "memory_summary", "总结"
+        else:
+            request = MEM.manual_archive_request(state)
+            key, what = "memory_archive", "归档"
+        if request is None:
+            raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
+                           [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])
+        state["requests"][key] = request
+        return "下一次提交会先做%s（%d 条）" % (what, len(request["ids"])), {"request": MEM.request_view(state, request)}
+
+    return _memory_write(ctx, "request-memory", specs.REQUEST_MEMORY, payload, change)
+
+
+# ---------------------------------------------------------------------------
 # settings page: the whole ledger at a glance
 #
 # The settings page has three tabs (persona / mood / activity). Both of these

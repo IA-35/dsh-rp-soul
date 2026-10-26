@@ -64,6 +64,10 @@ _register("next-wake", APP + "service", "next_wake", "required", "read", "她下
 _register("debug-mood", APP + "service", "debug_mood", "required", "read", "某个角色的心情面板（每个 thought 一条）", "DEBUG_MOOD")
 _register("debug-delete-thought", APP + "service", "debug_delete_thought", "required", "session_write", "设置页调试：手动删掉一条 thought", "DEBUG_DELETE_THOUGHT")
 _register("debug-moods", APP + "service", "debug_moods", "required", "read", "设置页情绪页：所有 NPC 的心情面板与对玩家的关系", "DEBUG_MOODS")
+_register("debug-memories", APP + "service", "debug_memories", "required", "read", "设置页记忆页：四层记忆、待交的总结 / 归档、删除审计", "DEBUG_MEMORIES")
+_register("edit-memory", APP + "service", "edit_memory", "required", "session_write", "设置页记忆页：改一条记忆（内容 / 重要度 / 活跃度 / 关键词 / 备注 / Pin）", "EDIT_MEMORY")
+_register("delete-memory", APP + "service", "delete_memory", "required", "session_write", "设置页记忆页：删一条记忆（留审计）", "DELETE_MEMORY")
+_register("request-memory", APP + "service", "request_memory", "required", "session_write", "设置页记忆页：立即总结 / 立即归档（下一次提交执行）", "REQUEST_MEMORY")
 _register("debug-activity", APP + "service", "debug_activity", "required", "read", "设置页自主行动页：最近若干回合的行动、离屏片段与关系变化", "DEBUG_ACTIVITY")
 
 

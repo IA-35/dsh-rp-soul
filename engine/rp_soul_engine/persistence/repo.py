@@ -448,6 +448,23 @@ def thought_deletions(conn, session_id, limit=20):
     return [dict(zip(keys, row)) for row in rows]
 
 
+def log_memory_delete(conn, session_id, turn, memory_id, layer, content, reason, now):
+    conn.execute(
+        "INSERT INTO memory_debug(session_id, turn, memory_id, layer, content, reason, created_at) VALUES(?,?,?,?,?,?,?)",
+        (session_id, turn, memory_id, layer, content, reason, now),
+    )
+
+
+def memory_deletions(conn, session_id, limit=20):
+    rows = conn.execute(
+        "SELECT turn, memory_id, layer, content, reason, created_at FROM memory_debug "
+        "WHERE session_id=? ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
+    keys = ("turn", "memory_id", "layer", "content", "reason", "created_at")
+    return [dict(zip(keys, row)) for row in rows]
+
+
 def clear_thought_deletions(conn, session_id):
     conn.execute("DELETE FROM thought_debug WHERE session_id=?", (session_id,))
 

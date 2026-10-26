@@ -319,6 +319,63 @@ def apply_archive(state, request, text, turn):
     return entry
 
 
+def manual_summary_request(state):
+    """「立即总结」: everything not yet summarised in 刚刚 / 这几天, today included."""
+    ids = [e["id"] for e in entries(state)
+           if e["layer"] in ("now", "days") and e["type"] in KEEPS and not e.get("summarized")]
+    return {"day": state["clock"]["day"], "ids": ids} if ids else None
+
+
+def manual_archive_request(state):
+    """「立即归档」: all unpinned 那些事, without waiting for fifteen days."""
+    ids = [e["id"] for e in entries(state) if e["layer"] == "events" and not e.get("pinned")]
+    return {"ids": ids} if ids else None
+
+
+def find(state, memory_id):
+    return next((e for e in entries(state) if e["id"] == memory_id), None)
+
+
+def edit(state, memory_id, changes):
+    """The settings page's edits, in place. Returns the entry or None.
+
+    Changing what she remembers (content, importance, keywords) marks it as
+    edited by you, which RimTalk scores higher; activity restarts its decay
+    from the value you set; pinning freezes it where it is.
+    """
+    entry = find(state, memory_id)
+    if entry is None:
+        return None
+    now = CL.to_abs(state["clock"])
+    if changes.get("pinned") is not None and changes["pinned"] != entry.get("pinned"):
+        # 取消 Pin 时从当前值接着衰减，钉上时把当前值冻住
+        touch(entry, now, activity(entry, now))
+        entry["pinned"] = changes["pinned"]
+    if changes.get("content") is not None:
+        entry["content"] = changes["content"].strip()[:CONTENT_MAX]
+        if changes.get("keywords") is None:
+            entry["keywords"] = keywords(entry["content"])
+        entry["edited"] = True
+    if changes.get("importance") is not None:
+        entry["importance"] = round(max(0.0, min(1.0, changes["importance"])), 3)
+        entry["edited"] = True
+    if changes.get("keywords") is not None:
+        entry["keywords"] = list(dict.fromkeys(k.strip() for k in changes["keywords"] if k.strip()))[:KEYWORDS_MAX]
+        entry["edited"] = True
+    if changes.get("activity") is not None:
+        touch(entry, now, max(0.0, min(1.0, changes["activity"])))
+    if changes.get("note") is not None:
+        entry["note"] = changes["note"]
+    return entry
+
+
+def remove(state, memory_id):
+    entry = find(state, memory_id)
+    if entry is not None:
+        entries(state).remove(entry)
+    return entry
+
+
 def request_view(state, request):
     """What the model reads to write a summary or archive: the sources, in order."""
     if not request:

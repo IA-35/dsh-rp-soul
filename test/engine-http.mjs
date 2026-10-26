@@ -200,6 +200,42 @@ if (mood2.body.thoughts.length > 0) {
   ok(false, '7. 开局居然没有情绪条目');
 }
 
+// ---- 7b. 记忆页：真引擎读 / 改 / 删 / 立即总结 ----
+const mem400 = await j('/rp-soul/engine/memories');
+eq(mem400.status, 400, '7b. /engine/memories 缺 session_id 400');
+const mems = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
+eq(mems.status, 200, '7b. /engine/memories 200');
+ok(mems.body.ok === true && Array.isArray(mems.body.entries) && mems.body.entries.length >= 1, '7b. 有记忆条目（' + JSON.stringify(mems.body.error ?? '') + '）');
+eq(mems.body.layers.now, '刚刚', '7b. 带四层名字');
+const target = mems.body.entries.find((e) => e.type === 'conversation') ?? mems.body.entries[0];
+const pinned = await j('/rp-soul/engine/memory', {
+  method: 'PUT',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ session_id: sid, memory_id: target.id, revision: mems.body.revision, pinned: true, note: '设置页钉住' }),
+});
+eq(pinned.body.ok, true, '7b. 改记忆成功（' + JSON.stringify(pinned.body.error ?? '') + '）');
+eq(pinned.body.memory.pinned, true, '7b. 钉住了');
+const noId = await j('/rp-soul/engine/memory', { method: 'PUT', body: JSON.stringify({ session_id: sid }) });
+eq(noId.status, 400, '7b. 缺 memory_id 400');
+const mapAfterPin = JSON.parse(readFileSync(join(home, 'rp-soul', 'engine-sessions.json'), 'utf8'));
+eq(mapAfterPin.shared.revision, pinned.body.revision, '7b. 改完同步了会话映射的 revision');
+const asked = await j('/rp-soul/engine/memory/request', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ session_id: sid, revision: pinned.body.revision, kind: 'summary' }),
+});
+eq(asked.body.ok, true, '7b. 立即总结成功（' + JSON.stringify(asked.body.error ?? '') + '）');
+ok(asked.body.request.sources.length >= 1, '7b. 列出要总结的那几条');
+const gone = await j('/rp-soul/engine/memory', {
+  method: 'DELETE',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ session_id: sid, memory_id: target.id, revision: asked.body.revision, reason: '测试删除' }),
+});
+eq(gone.body.ok, true, '7b. 删记忆成功（' + JSON.stringify(gone.body.error ?? '') + '）');
+const memsAfter = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
+ok(!memsAfter.body.entries.some((e) => e.id === target.id), '7b. 那条真的没了');
+eq(memsAfter.body.deletions[0].memory_id, target.id, '7b. 留了审计');
+
 // ---- 8. GET /engine/session 能读上下文 ----
 const ctxr = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(sid));
 eq(ctxr.status, 200, '8. /engine/session 200');

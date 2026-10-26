@@ -156,6 +156,36 @@ DEBUG_ACTIVITY = _obj(
     "debug-activity",
 )
 
+DEBUG_MEMORIES = _obj({"session_id": F(SESSION_ID)}, "debug-memories")
+
+EDIT_MEMORY = _obj(
+    dict(
+        session_write_fields(),
+        memory_id=F(S.Id()),
+        content=F(S.Nullable(S.Str(1, 300)), required=False, default=None),
+        importance=F(S.Nullable(S.Num(0, 1)), required=False, default=None),
+        activity=F(S.Nullable(S.Num(0, 1)), required=False, default=None),
+        keywords=F(S.Nullable(S.List(S.Str(1, 20), max_items=32)), required=False, default=None),
+        note=F(S.Nullable(S.Str(0, 200)), required=False, default=None),
+        pinned=F(S.Nullable(S.Bool()), required=False, default=None),
+    ),
+    "edit-memory",
+)
+
+DELETE_MEMORY = _obj(
+    dict(
+        session_write_fields(),
+        memory_id=F(S.Id()),
+        reason=F(S.Nullable(S.Str(1, 120)), required=False, default=None, desc="为什么要删（写进审计）"),
+    ),
+    "delete-memory",
+)
+
+REQUEST_MEMORY = _obj(
+    dict(session_write_fields(), kind=F(S.Enum("summary", "archive"), desc="summary 立即总结 / archive 立即归档")),
+    "request-memory",
+)
+
 DEBUG_DELETE_THOUGHT = _obj(
     dict(
         session_write_fields(),
