@@ -27,6 +27,7 @@ from ..jsonio import copy
 from . import clock as CL
 from . import facts as FA
 from . import invariants
+from . import memories as MEM
 from . import mood as MO
 from . import ops as OPS
 from . import simulation
@@ -53,6 +54,8 @@ def commit_fields():
         "content_tags": F(S.List(S.Enum(*ST.TAG_IDS), max_items=12, unique=True),
                           desc="本回合正文涉及的内容标签（可为空数组）；只用内置标签表里的 id"),
         "summary": F(S.Str(1, 120), desc="本回合发生了什么，第三方视角，≤120 字"),
+        "remember": F(S.Nullable(S.Str(1, 60)), required=False, default=None,
+                      desc="可选：TA 会怎么记得这件事，第一人称、带当时的感受，≤60 字；不写就用 summary 记"),
         "open_action": F(S.Str(1, 80), desc="回合停在哪里、谁在等谁，≤80 字"),
         "quotes": F(S.List(S.Str(1, 80), max_items=3), required=False, default=[],
                     desc="≤3 条对后续有意义的原话，每条 ≤80 字"),
@@ -433,6 +436,9 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         OPS.clear_plan(work)
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
+    # 她的记忆：这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
+    remembered = MEM.capture(work, ctx, commit)
+    forgetting = MEM.maintain(work)
     crossed_day = work["clock"]["day"] > before_clock["day"]
     work["facts"] = work["facts"].settle()
     scene_changed = any(s["scene"] for s in ctx.settlements)
@@ -447,6 +453,8 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "scene_changed": scene_changed,
         "crossed_day": crossed_day,
         "chapter": chapter,
+        "remembered": [e["id"] for e in remembered],
+        "forgetting": forgetting,
         "replaced_turn": replaced,
         "mood": {
             cid: MO.brief(work, cid)

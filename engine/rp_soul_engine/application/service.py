@@ -319,6 +319,7 @@ DOMAIN_KEYS = (
     "operations",
     "content_tags",
     "summary",
+    "remember",
     "open_action",
     "quotes",
     "chapter_summary",
@@ -487,7 +488,7 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("chapter", "replaced_turn", "thoughts"):
+    for key in ("chapter", "replaced_turn", "thoughts", "remembered"):
         if result.get(key) is not None:
             out[key] = result[key]
     return out
