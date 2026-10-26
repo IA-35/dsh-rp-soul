@@ -457,6 +457,11 @@ ok(findAll(engineTree, (n) => n.type === 'input' && n.props.value === '雨夜诊
 has(engineText, '心情基准', '11. 表单有心情基准字段');
 has(engineText, '看 YAML', '11. 表单能切到 YAML 预览');
 has(engineText, '前置块', '11. 未落盘时提示从散文前置块迁移');
+has(engineText, '旧格式', '11. 旧的多角色格式会提示按单人读出');
+ok(findAll(engineTree, (n) => n.type === 'input' && n.props.value === '林晚').length === 1, '11. 第一个主要角色读成了单人表单');
+ok(findAll(engineTree, (n) => n.type === 'input' && n.props.value === '在诊所').length === 1, '11. 日程换成了作息「在<地点>」');
+hasNot(engineText, '加一个地点', '11. 不再有地点编辑');
+hasNot(engineText, '加一个角色', '11. 不再能加第二个角色');
 
 // 改一个字段再存：请求体里必须带改后的值
 calls.length = 0;
@@ -471,6 +476,12 @@ for (let i = 0; i < 30; i++) await Promise.resolve();
 const personaPut = calls.filter((c) => c.method === 'PUT' && c.url === '/rp-soul/engine/persona-file')[0];
 ok(personaPut !== undefined, '11. 点保存发出 PUT');
 eq(personaPut.body.front.title, '雨夜诊所·续', '11. PUT 里带改后的标题');
+eq(personaPut.body.front.name, '林晚', '11. PUT 写成单人格式：name 在顶层');
+eq(personaPut.body.front.id, 'lin_wan', '11. 她的 id 来自原来那个角色');
+eq(personaPut.body.front.cast, undefined, '11. PUT 里不再有 cast');
+eq(personaPut.body.front.places, undefined, '11. PUT 里不再有 places');
+eq(personaPut.body.front.legacy, undefined, '11. 界面用的 legacy 标记不写进文件');
+eq(personaPut.body.front.routine, [{ from: 0, to: 1439, doing: '在诊所' }], '11. 作息随 PUT 写回');
 
 // 切到「情绪」
 calls.length = 0;
@@ -494,6 +505,8 @@ has(moodText, '信任 12', '11. 显示对玩家的信任');
 has(moodText, '陌生', '11. 显示关系阶段');
 has(moodText, '感冒', '11. 显示状态');
 has(moodText, '行动冷却中', '11. can_act=false 的文案');
+has(moodText, '在你身边', '11. 在场写成「在你身边」');
+hasNot(moodText, '主要', '11. 不再显示主要/次要');
 has(moodText, '手动删除记录', '11. 有删除审计区');
 has(moodText, '手上的疤', '11. 审计区列出被删的条目');
 hasNot(moodText, '拼接顺序', '11. 情绪页不渲染人设页内容');
