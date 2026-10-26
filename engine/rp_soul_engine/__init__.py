@@ -6,7 +6,7 @@ persona pack (markdown + optional front matter).
 """
 
 ENGINE_VERSION = "0.1.0"
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2  # 2: sessions/slots upgraded to state schema 2 (migrate.py)
 STATE_SCHEMA_VERSION = 2  # 2: one companion (persona flat, no places/cast)
 RNG_VERSION = 1
 SAVE_FORMAT = "rp-soul-save"

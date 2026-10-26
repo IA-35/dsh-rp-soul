@@ -111,8 +111,8 @@ def two_identical_calls_both_answer(s):
 def doctor_creates_schema(s):
     data = s.ok("doctor")
     assert data["ok"] is True, data
-    assert data["db"]["schema"] == 1, data
-    assert data["db"]["target_schema"] == 1, data
+    assert data["db"]["schema"] == 2, data
+    assert data["db"]["target_schema"] == 2, data
     assert data["db"]["integrity"] == "ok", data
     again = s.ok("doctor")
     assert again["db"]["report"]["migrated"] is False, again

@@ -11,7 +11,7 @@ import os
 import re
 import time
 
-from .. import ENGINE_VERSION, RNG_VERSION, SAVE_FORMAT, STATE_SCHEMA_VERSION, paths
+from .. import ENGINE_VERSION, RNG_VERSION, SAVE_FORMAT, STATE_SCHEMA_VERSION, migrate, paths
 from ..errors import CONTENT_ERROR, INVALID_INPUT, UNSUPPORTED_VERSION, AppError, detail, fail
 from ..jsonio import canonical, decode_bytes, dumps, loads_strict
 
@@ -170,6 +170,12 @@ def check(doc):
     if not _keys(session, SESSION_KEYS, "$.session", problems):
         fail(problems)
     state, persona, archive = session["state"], session["persona"], session["archive"]
+    if version == migrate.FROM_SCHEMA and migrate.is_v1(state):
+        # 多角色时代的导出文件：按单人读进来（和数据库迁移同一套规则）
+        try:
+            state, persona = migrate.session_v1_to_v2(state, persona)
+        except (KeyError, TypeError, ValueError) as exc:
+            fail([detail("$.session", "旧格式存档转不成单人格式：%s" % exc, "这个文件没有写入任何数据", CONTENT_ERROR)])
     problems.extend(_state_problems(state))
     problems.extend(_persona_problems(persona))
     problems.extend(_archive_problems(archive))

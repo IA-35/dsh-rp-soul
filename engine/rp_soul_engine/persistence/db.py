@@ -230,7 +230,74 @@ def _migrate_to_1(conn):
     )
 
 
-MIGRATIONS = {1: _migrate_to_1}
+def _knowers(fact):
+    return "," + ",".join(fact["known_by"] + fact["believed_by"]) + ","
+
+
+def _rewrite_facts(conn, table, column, owner, keep, migrate):
+    """Fact rows of one session or slot, with only the two of you as knowers."""
+    import json
+
+    rows = conn.execute("SELECT id, data FROM %s WHERE %s=?" % (table, column), (owner,)).fetchall()
+    for fid, data in rows:
+        fact = migrate.fact_v1_to_v2(json.loads(data), keep)
+        conn.execute(
+            "UPDATE %s SET knowers=?, spreading=0, data=? WHERE %s=? AND id=?" % (table, column),
+            (_knowers(fact), json.dumps(fact, ensure_ascii=False, separators=(",", ":")), owner, fid),
+        )
+
+
+def _migrate_to_2(conn):
+    """State schema 1 (the multi-character engine) -> 2 (one companion).
+
+    Sessions, their undo points, fact rows and fact journal, and save slots
+    are upgraded in place by migrate.py; the turn log and the archive are
+    display-only history and stay as they were.
+    """
+    import json
+
+    from .. import migrate
+    from . import repo
+
+    for sid, state_blob, persona_blob in conn.execute("SELECT session_id, state, persona FROM sessions").fetchall():
+        state, persona = repo.unpack(state_blob), repo.unpack(persona_blob)
+        if not migrate.is_v1(state):
+            continue
+        new_state, new_persona = migrate.session_v1_to_v2(state, persona)
+        conn.execute(
+            "UPDATE sessions SET state=?, persona=?, persona_id=? WHERE session_id=?",
+            (repo.pack(new_state), repo.pack(new_persona), new_persona["id"], sid),
+        )
+        keep = migrate.keep_of(new_state)
+        _rewrite_facts(conn, "facts", "session_id", sid, keep, migrate)
+        for turn, fid, before in conn.execute(
+            "SELECT turn, id, before FROM fact_journal WHERE session_id=? AND before IS NOT NULL", (sid,)
+        ).fetchall():
+            fact = migrate.fact_v1_to_v2(json.loads(before), keep)
+            conn.execute(
+                "UPDATE fact_journal SET before=? WHERE session_id=? AND turn=? AND id=?",
+                (json.dumps(fact, ensure_ascii=False, separators=(",", ":")), sid, turn, fid),
+            )
+        for turn, blob in conn.execute("SELECT turn, state FROM undo_points WHERE session_id=?", (sid,)).fetchall():
+            old = repo.unpack(blob)
+            if migrate.is_v1(old):
+                conn.execute(
+                    "UPDATE undo_points SET state=? WHERE session_id=? AND turn=?",
+                    (repo.pack(migrate.state_v1_to_v2(old, persona)), sid, turn),
+                )
+    for name, state_blob, persona_blob in conn.execute("SELECT name, state, persona FROM slots").fetchall():
+        state, persona = repo.unpack(state_blob), repo.unpack(persona_blob)
+        if not migrate.is_v1(state):
+            continue
+        new_state, new_persona = migrate.session_v1_to_v2(state, persona)
+        conn.execute(
+            "UPDATE slots SET state=?, persona=?, persona_id=? WHERE name=?",
+            (repo.pack(new_state), repo.pack(new_persona), new_persona["id"], name),
+        )
+        _rewrite_facts(conn, "slot_facts", "slot", name, migrate.keep_of(new_state), migrate)
+
+
+MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2}
 
 
 def _now_stamp():
