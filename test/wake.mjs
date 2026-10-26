@@ -104,6 +104,7 @@ const ctx = {
   on(name, fn) { handlers[name] = fn; return () => { delete handlers[name]; }; },
   inject(_names, cb) {
     cb({
+      sessions: { flush: async (s) => { flushed.push(s?.id ?? null); return true; } },
       sessionController: {
         resolveAgent: async () => resolveReturn,
         list: async () => ({
