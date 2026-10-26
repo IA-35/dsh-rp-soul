@@ -295,7 +295,8 @@ def get_context(ctx, payload):
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
-    context = CX.full(state, persona, save_info(session)) if payload["depth"] == "full" else CX.brief(state, persona, save_info(session))
+    project = CX.full if payload["depth"] == "full" else CX.brief
+    context = project(state, persona, save_info(session), payload["cue"])
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
     if payload["want_twist"]:
         out["twists"] = list(persona.get("twists") or [])
@@ -319,10 +320,11 @@ DOMAIN_KEYS = (
     "operations",
     "content_tags",
     "summary",
+    "remember",
     "open_action",
     "quotes",
-    "chapter_summary",
-    "prologue",
+    "memory_summary",
+    "memory_archive",
     "replaces_turn",
     "together",
 )
@@ -333,14 +335,14 @@ SESSION_ID_RE = re.compile(r"s_[a-z0-9]{2,38}")
 
 def choose_depth(state, results, failed_before=False):
     """Full after a failed commit, after a record of several turns, on a new
-    stretch of time together or a new day, every 5 turns, and when a prologue
-    is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
+    stretch of time together or a new day, every 5 turns, and when her
+    memory archive is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
     if failed_before or len(results) > 1:
         return "full"
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
-    if state["requests"].get("prologue") or state["turn"] % 5 == 0:
+    if state["requests"].get("memory_summary") or state["requests"].get("memory_archive") or state["turn"] % 5 == 0:
         return "full"
     return "brief"
 
@@ -487,7 +489,7 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("chapter", "replaced_turn", "thoughts"):
+    for key in ("summarized", "archived", "replaced_turn", "thoughts", "remembered"):
         if result.get(key) is not None:
             out[key] = result[key]
     return out
@@ -644,11 +646,15 @@ def save_slot(ctx, payload):
 
 
 def _resume(state):
+    from ..domain import memories as MEM
+
     turns = state["memory"]["turns"]
-    chapters = state["memory"]["chapters"]
+    events = MEM.of_layer(state, "events")
+    years = MEM.of_layer(state, "years")
     return {
-        "chapter_summary": chapters[-1]["summary"] if chapters else None,
-        "prologue": state["memory"].get("prologue"),
+        # 接着玩时先看她最近记成「那些事」「那些年」的那一条
+        "last_event": events[-1]["content"] if events else None,
+        "last_chapter": years[-1]["content"] if years else None,
         "recent": [t["summary"] for t in turns[-3:]],
         "last_quotes": list(state["memory"].get("last_quotes") or []),
         "open_action": state["memory"].get("open_action") or "",
@@ -747,7 +753,8 @@ def list_sessions(ctx, payload):
     for row in repo.list_sessions(ctx.db(), payload["limit"]):
         state = row["state"]
         memory = state["memory"]
-        last = memory["turns"][-1]["summary"] if memory["turns"] else (memory["chapters"][-1]["summary"] if memory["chapters"] else None)
+        entries = memory.get("entries") or []
+        last = memory["turns"][-1]["summary"] if memory["turns"] else (entries[-1]["content"] if entries else None)
         out.append(
             {
                 "session_id": row["session_id"],
@@ -1091,6 +1098,102 @@ def debug_delete_thought(ctx, payload):
         }
 
     return session_write(ctx, "debug-delete-thought", payload, handler)
+
+
+# ---------------------------------------------------------------------------
+# settings page: her memory (RimTalk's workbench, simplified)
+
+
+def debug_memories(ctx, payload):
+    from ..domain import clock as CL
+    from ..domain import memories as MEM
+
+    payload = validate(specs.DEBUG_MEMORIES, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state = session["state"]
+    out = {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "clock_label": CL.label(state["clock"]),
+        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_summary", "memory_archive")},
+        "deletions": repo.memory_deletions(conn, state["session_id"]),
+    }
+    out.update(MEM.panel(state))
+    return out
+
+
+def _memory_write(ctx, command, spec, payload, change):
+    """A settings-page write on her memory: change(state, now) -> (receipt, extra)."""
+    from ..domain import memories as MEM
+
+    payload = validate(spec, payload)
+
+    def handler(conn, session, now):
+        state = session["state"]
+        receipt, extra = change(conn, state, payload, now)
+        # 删掉 / 钉住之后，待交的总结或归档要是没东西可写了就撤掉
+        MEM.prune_requests(state)
+        state["revision"] = state.get("revision", 0) + 1
+        repo.update_session(conn, state, now)
+        out = {"revision": state["revision"], "turn": state["turn"], "receipt": receipt}
+        out.update(extra)
+        out["memories"] = MEM.panel(state)
+        return out
+
+    return session_write(ctx, command, payload, handler)
+
+
+def _missing_memory(memory_id):
+    return AppError(NOT_FOUND, "没有这条记忆：%s" % memory_id,
+                    [detail("$.memory_id", "记忆不存在", "用 debug-memories 看当前条目", NOT_FOUND)])
+
+
+def edit_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        keys = ("content", "importance", "activity", "keywords", "note", "pinned")
+        entry = MEM.edit(state, payload["memory_id"], {k: payload[k] for k in keys})
+        if entry is None:
+            raise _missing_memory(payload["memory_id"])
+        return "已改「%s」" % entry["content"][:20], {"memory": MEM.row(state, entry)}
+
+    return _memory_write(ctx, "edit-memory", specs.EDIT_MEMORY, payload, change)
+
+
+def delete_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        entry = MEM.remove(state, payload["memory_id"])
+        if entry is None:
+            raise _missing_memory(payload["memory_id"])
+        repo.log_memory_delete(conn, state["session_id"], state["turn"], entry["id"], entry["layer"],
+                               entry["content"], payload["reason"], now)
+        return "已删除「%s」" % entry["content"][:20], {"removed": {"id": entry["id"], "layer": entry["layer"], "content": entry["content"]}}
+
+    return _memory_write(ctx, "delete-memory", specs.DELETE_MEMORY, payload, change)
+
+
+def request_memory(ctx, payload):
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        if payload["kind"] == "summary":
+            request = MEM.manual_summary_request(state)
+            key, what = "memory_summary", "总结"
+        else:
+            request = MEM.manual_archive_request(state)
+            key, what = "memory_archive", "归档"
+        if request is None:
+            raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
+                           [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])
+        state["requests"][key] = request
+        return "下一次提交会先做%s（%d 条）" % (what, len(request["ids"])), {"request": MEM.request_view(state, request)}
+
+    return _memory_write(ctx, "request-memory", specs.REQUEST_MEMORY, payload, change)
 
 
 # ---------------------------------------------------------------------------

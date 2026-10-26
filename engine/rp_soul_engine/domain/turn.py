@@ -5,8 +5,8 @@ caller's state is untouched (the working copy is discarded).
 
 Order inside a commit:
   1. replaces_turn: restore the state before the replaced turn (same commit)
-  2. the requests the record was written from (chapter summary, prologue):
-     its first turn pays them, so the later turns see none
+  2. the requests the record was written from (her daily memory summary,
+     the periodic archive): its first turn pays them, so the later turns see none
   3. the clock settles to the real moment first, in the fixed order of
      settlement.advance() (the offscreen step runs as a hook): the time apart
      happened *before* this turn, so an offscreen beat describes it and a
@@ -15,7 +15,8 @@ Order inside a commit:
   4. operations in order
   5. required offscreen beats, the break-band outburst, action mode, intimacy
      and safety checks
-  6. invariants, then bookkeeping: memory, chapter archive, prologue
+  6. invariants, then bookkeeping: the turn log, her memory (summary and
+     archive paid by this turn, this turn's entries, ageing)
 
 close_record runs once after the last turn of a record and sets what the
 engine asks of the next record.
@@ -27,6 +28,7 @@ from ..jsonio import copy
 from . import clock as CL
 from . import facts as FA
 from . import invariants
+from . import memories as MEM
 from . import mood as MO
 from . import ops as OPS
 from . import simulation
@@ -34,7 +36,7 @@ from . import state as SS
 from . import structure as ST
 
 F = S.Field
-MAX_MEMORY_TURNS = 40          # backstop only: chapter summaries keep it near 20
+MAX_MEMORY_TURNS = 40          # the rolling turn log; her memory lives in memories.py
 UNDO_KEEP = 30                 # undo points kept per session
 REWRITE_OPS = ("add_fact", "npc_action", "npc_state", "offscreen_beat", "add_thought")
 
@@ -53,13 +55,15 @@ def commit_fields():
         "content_tags": F(S.List(S.Enum(*ST.TAG_IDS), max_items=12, unique=True),
                           desc="本回合正文涉及的内容标签（可为空数组）；只用内置标签表里的 id"),
         "summary": F(S.Str(1, 120), desc="本回合发生了什么，第三方视角，≤120 字"),
+        "remember": F(S.Nullable(S.Str(1, 60)), required=False, default=None,
+                      desc="可选：TA 会怎么记得这件事，第一人称、带当时的感受，≤60 字；不写就用 summary 记"),
         "open_action": F(S.Str(1, 80), desc="回合停在哪里、谁在等谁，≤80 字"),
         "quotes": F(S.List(S.Str(1, 80), max_items=3), required=False, default=[],
                     desc="≤3 条对后续有意义的原话，每条 ≤80 字"),
-        "chapter_summary": F(S.Nullable(S.Str(1, 300)), required=False, default=None,
-                             desc="requests.chapter_summary 为 true 时在记录的第一项必填：上一章的摘要，≤300 字"),
-        "prologue": F(S.Nullable(S.Str(1, 300)), required=False, default=None,
-                      desc="requests.prologue 为 true 时在记录的第一项必填：把旧前情与最早几章合并成一段，≤300 字"),
+        "memory_summary": F(S.Nullable(S.Str(1, MEM.SUMMARY_MAX)), required=False, default=None,
+                            desc="requests.memory_summary 有值时在记录的第一项必填：用第一人称写那一天对 TA 来说发生了什么、什么感受，相似的事合并并注明次数，≤80 字"),
+        "memory_archive": F(S.Nullable(S.Str(1, MEM.ARCHIVE_MAX)), required=False, default=None,
+                            desc="requests.memory_archive 有值时在记录的第一项必填：把这些日子归成一段篇章，第一人称，提炼里程碑和长期变化，≤60 字"),
         "replaces_turn": F(S.Nullable(S.Int(1, 1000000)), required=False, default=None,
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
         "together": F(S.Bool(), required=False, default=True,
@@ -144,30 +148,24 @@ def _replace_base(current, turn, snapshot):
 def _request_checks(ctx):
     commit = ctx.commit
     requests = ctx.state["requests"]
-    if requests.get("chapter_summary"):
-        if not commit["chapter_summary"]:
+    if requests.get("memory_summary"):
+        if not commit["memory_summary"]:
             ctx.error(
-                "$.chapter_summary",
-                "引擎要求这次记录的第一个回合附章节摘要",
-                "把第 %d–%d 回合写成 ≤300 字的章节摘要，放进 chapter_summary"
-                % (chapter_start(ctx.state), ctx.turn - 1),
+                "$.memory_summary",
+                "新的一天了，引擎要求这次记录的第一个回合把那一天记成一条「那些事」",
+                "读上下文的 memory_summary_sources，用第一人称写成 ≤80 字放进 memory_summary",
             )
-    elif commit["chapter_summary"]:
-        ctx.error(
-            "$.chapter_summary",
-            "引擎没有要求章节摘要",
-            "去掉 chapter_summary；章节在每 20 回合或跨日后由引擎要求，要求在记录结束时出现，由下一次记录的第一项补上",
-            INVALID_INPUT,
-        )
-    if requests.get("prologue"):
-        if not commit["prologue"]:
+    elif commit["memory_summary"]:
+        ctx.error("$.memory_summary", "引擎没有要求每日总结", "去掉 memory_summary；跨天后引擎会在记录结束时要求", INVALID_INPUT)
+    if requests.get("memory_archive"):
+        if not commit["memory_archive"]:
             ctx.error(
-                "$.prologue",
-                "章节超过上限，引擎要求把最早几章合并成一段前情",
-                "读完整上下文的 prologue_merge，合并成 ≤300 字放进 prologue",
+                "$.memory_archive",
+                "又过了半个月，引擎要求把这些日子归成一段「那些年」",
+                "读上下文的 memory_archive_sources，合并成 ≤60 字放进 memory_archive",
             )
-    elif commit["prologue"]:
-        ctx.error("$.prologue", "引擎没有要求前情", "去掉 prologue", INVALID_INPUT)
+    elif commit["memory_archive"]:
+        ctx.error("$.memory_archive", "引擎没有要求归档", "去掉 memory_archive", INVALID_INPUT)
 
 
 def _mode_checks(ctx):
@@ -284,53 +282,34 @@ def _intimacy_checks(ctx):
 
 
 # ---------------------------------------------------------------------------
-# long-term memory
+# her memory: the summary and archive this turn pays
 
 
-def chapter_start(state):
-    counters = state["counters"]
-    return 1 if counters["chapter"] == 1 and not state["memory"]["chapters"] else counters["last_chapter_turn"] + 1
-
-
-def _close_chapter(state, turn, summary):
-    """Archive the turns before `turn` and the ended events; add the chapter."""
-    memory = state["memory"]
-    counters = state["counters"]
-    archive = []
-    kept = []
-    for entry in memory["turns"]:
-        if entry["turn"] < turn:
-            archive.append(("turn", entry))
-        else:
-            kept.append(entry)
-    memory["turns"] = kept
+def _archive_ended_events(state, turn):
+    """Events that ended before this turn leave the live state (they stay in the archive table)."""
+    rows = []
     for eid in sorted(state["events"], key=lambda e: int(e[1:])):
         event = state["events"][eid]
         if event["state"] != "pending" and event["resolved_turn"] is not None and event["resolved_turn"] < turn:
-            archive.append(("event", event))
+            rows.append(("event", event))
             del state["events"][eid]
-    days = [payload["day"] for kind, payload in archive if kind == "turn"]
-    chapter = {
-        "index": len(memory["chapters"]) + 1,
-        "from_turn": chapter_start(state),
-        "to_turn": turn - 1,
-        "day": days[-1] if days else state["clock"]["day"],
-        "summary": summary,
-    }
-    counters["last_chapter_turn"] = turn - 1
-    memory["chapters"].append(chapter)
-    return chapter, archive
+    return rows
 
 
-def _merge_prologue(state, text):
-    memory = state["memory"]
-    merged = memory["chapters"][: simulation.PROLOGUE_MERGE]
-    memory["chapters"] = memory["chapters"][simulation.PROLOGUE_MERGE:]
-    archive = [("chapter", chapter) for chapter in merged]
-    if memory["prologue"]:
-        archive.insert(0, ("prologue", {"text": memory["prologue"]}))
-    memory["prologue"] = text
-    return archive
+def _pay_memory_requests(work, commit, turn):
+    """(summary entry, archive entry, archive rows) for what the record's first turn paid."""
+    requests = work["requests"]
+    summary = archived = None
+    rows = []
+    if commit["memory_summary"]:
+        summary = MEM.apply_summary(work, requests.get("memory_summary"), commit["memory_summary"], turn)
+        requests["memory_summary"] = None
+        # 跨天总结时顺手收掉已经结束的约定和事件（原来跟着章节一起收）
+        rows.extend(_archive_ended_events(work, turn))
+    if commit["memory_archive"]:
+        archived = MEM.apply_archive(work, requests.get("memory_archive"), commit["memory_archive"], turn)
+        requests["memory_archive"] = None
+    return summary, archived, rows
 
 
 def _simulation_result(ctx):
@@ -411,14 +390,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     }
     if ctx.beats:
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
-    archive = []
-    chapter = None
-    if commit["chapter_summary"]:
-        chapter, archive = _close_chapter(work, ctx.turn, commit["chapter_summary"])
-        work["requests"]["chapter_summary"] = False
-    if commit["prologue"]:
-        archive.extend(_merge_prologue(work, commit["prologue"]))
-        work["requests"]["prologue"] = False
+    summarized, archived, archive = _pay_memory_requests(work, commit, ctx.turn)
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
     if overflow:
@@ -433,6 +405,13 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         OPS.clear_plan(work)
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
+    # 她的记忆：你这句话勾起来的那几条算「被想起」，变牢一点（和 soul_state 注入时同一套挑法）
+    # 只有真被你的话碰到的才算想起：否则排在前面的几条每回合都被续命，永远不会淡
+    _rounds, recalled = MEM.select(base, commit["player_input"], MEM.TOTAL_BRIEF)
+    MEM.reinforce(work, [e["id"] for e in recalled if MEM.cued_by_words(e, commit["player_input"])])
+    # 这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
+    remembered = MEM.capture(work, ctx, commit)
+    forgetting = MEM.maintain(work)
     crossed_day = work["clock"]["day"] > before_clock["day"]
     work["facts"] = work["facts"].settle()
     scene_changed = any(s["scene"] for s in ctx.settlements)
@@ -446,7 +425,10 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "time_settled": span,
         "scene_changed": scene_changed,
         "crossed_day": crossed_day,
-        "chapter": chapter,
+        "summarized": summarized["id"] if summarized else None,
+        "archived": archived["id"] if archived else None,
+        "remembered": [e["id"] for e in remembered],
+        "forgetting": forgetting,
         "replaced_turn": replaced,
         "mood": {
             cid: MO.brief(work, cid)

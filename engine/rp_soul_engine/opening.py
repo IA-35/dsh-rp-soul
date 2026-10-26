@@ -67,12 +67,13 @@ def new_session(persona, seed=None, player=None, now=None):
             "fact": 1,
             "event": 1,
             "thought": 1,
-            "chapter": 1,
+            "memory": 1,
             "boundary": 1,
         },
         "major_action_turn": {},
         "offscreen_beat_turn": {},
-        "last_chapter_turn": 0,
+        # 已经达成过的里程碑（第一次立约……），只自动 Pin 第一次
+        "milestones": [],
     }
     state = {
         "schema": STATE_SCHEMA_VERSION,
@@ -101,14 +102,15 @@ def new_session(persona, seed=None, player=None, now=None):
         # 她自己定下的下一件事：{"note": "去洗澡", "until": {"day","minute"}, "set_turn": N}
         # 旧存档没有这个键，读的地方一律用 .get("plan")
         "plan": None,
-        "memory": {"prologue": "", "chapters": [], "turns": [], "last_quotes": [], "open_action": ""},
+        # turns：回合流水（最近 40 条）；entries：她的记忆（四层，见 domain/memories.py）
+        "memory": {"turns": [], "last_quotes": [], "open_action": "", "entries": [], "last_archive_day": 1},
         "preferences": {
             "offscreen_simulation": True,
             "pace": "standard",
             "explicitness": "standard",
         },
         "safety": {"paused": False, "boundaries": []},
-        "requests": {"chapter_summary": False, "prologue": False},
+        "requests": {"memory_summary": None, "memory_archive": None},
         "undo_floor": 0,
         "session_id": None,
     }

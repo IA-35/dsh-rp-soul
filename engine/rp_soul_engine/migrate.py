@@ -22,11 +22,16 @@ same way.
 
 from . import persona as PE
 from . import schema as S
+from .domain import clock as CL
+from .domain import memories as MEM
 from .domain import relationship as RL
 from .jsonio import copy
 
 FROM_SCHEMA = 1
 TO_SCHEMA = 2
+LATEST = 3
+# 旧回合和章节只记了哪一天，不知道几点：一律当作那天中午
+UNKNOWN_MINUTE = 720
 
 
 def is_v1(state):
@@ -143,3 +148,79 @@ def session_v1_to_v2(state, persona):
 def keep_of(state):
     """The two ids an upgraded state keeps (for rewriting stored fact rows)."""
     return set(state["characters"])
+
+
+# ---------------------------------------------------------------------------
+# schema 2 -> 3: the turns / chapters / prologue chain becomes her memory
+
+
+def _entry(state, layer, kind, text, importance, day, a0_at, turn=0, **extra):
+    """A migrated entry: starts fading from the migration, not from the day it happened.
+
+    Today's turns sit at the current minute, never later: an entry in the future
+    would outrank the conversations that follow the upgrade."""
+    day = max(1, day)
+    minute = min(UNKNOWN_MINUTE, state["clock"]["minute"]) if day >= state["clock"]["day"] else UNKNOWN_MINUTE
+    at = {"day": day, "minute": minute}
+    entry = MEM.add(state, layer, kind, text, importance, at=at, turn=turn, **extra)
+    MEM.touch(entry, a0_at, 1.0)
+    return entry
+
+
+def state_v2_to_v3(state):
+    """A schema-2 state with her memory in four layers. Pure; other schemas pass through.
+
+    - the rolling turn log stays (`memory.turns`); each turn also becomes an
+      entry: today's latest six in 刚刚, the rest in 这几天. Turns a chapter
+      already covered count as summarised, so no daily summary repeats them;
+    - every chapter becomes a 那些事 summary, the prologue one 那些年 chapter;
+    - the chapter / prologue requests become memory_summary / memory_archive
+      (recomputed when the next record closes).
+    """
+    if not isinstance(state, dict) or state.get("schema") != TO_SCHEMA:
+        return state
+    s = copy(state)
+    memory = s["memory"]
+    chapters = memory.pop("chapters", None) or []
+    chapters = [c for c in chapters if isinstance(c, dict)]
+    prologue = (memory.pop("prologue", "") or "").strip()
+    counters = s["counters"]
+    covered = counters.pop("last_chapter_turn", 0) or 0
+    counters["next"].pop("chapter", None)
+    counters["next"]["memory"] = 1
+    counters.setdefault("milestones", [])
+    memory["entries"] = []
+    memory["last_archive_day"] = s["clock"]["day"]
+    now = CL.to_abs(s["clock"])
+    if prologue:
+        first_day = min([c.get("day") or 1 for c in chapters] or [1])
+        _entry(s, "years", "chapter", prologue, 0.6, first_day, now)
+    for chapter in chapters:
+        _entry(s, "events", "summary", chapter.get("summary") or "", 0.5, chapter.get("day") or 1, now,
+               turn=chapter.get("to_turn") or 0)
+    turns = [t for t in memory.get("turns") or [] if isinstance(t, dict) and (t.get("summary") or "").strip()]
+    today = [t for t in turns if t.get("day") == s["clock"]["day"]][-MEM.CAPACITY["now"]:]
+    for item in turns:
+        layer = "now" if item in today else "days"
+        _entry(s, layer, "conversation", item["summary"], 0.3, item.get("day") or 1, now,
+               turn=item.get("turn") or 0, quotes=list(item.get("quotes") or [])[:3],
+               summarized=(item.get("turn") or 0) <= covered)
+    requests = s.setdefault("requests", {})
+    requests.pop("chapter_summary", None)
+    requests.pop("prologue", None)
+    requests["memory_summary"] = None
+    requests["memory_archive"] = None
+    s["schema"] = LATEST
+    return s
+
+
+def upgrade(state, persona):
+    """(state, persona) of any older save, brought to the latest schema."""
+    if is_v1(state):
+        state, persona = session_v1_to_v2(state, persona)
+    return state_v2_to_v3(state), persona
+
+
+def upgrade_state(state, persona):
+    """Only the state (undo points, which keep no persona of their own)."""
+    return upgrade(state, persona)[0]

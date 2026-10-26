@@ -121,12 +121,22 @@ const committed = await call('soul_commit', {
   ],
   content_tags: [],
   summary: '玩家进门，和林晚搭了两句。',
+  remember: '他冒着雨进来，问我忙不忙，我心里松了一下',
   open_action: '林晚从里屋走出来了吗',
 });
 ok(committed.committed === true, '6. commit 成功（' + JSON.stringify(committed.error ?? '') + '）');
 eq(committed.turn, 1, '6. turn 前进到 1');
 ok(committed.revision > revision, '6. revision 递增');
 revision = committed.revision;
+
+// ---- 6b. 记忆：这一回合留在「刚刚」，soul_state 带 cue 能读到 ----
+const recalled = await call('soul_state', { cue: '今晚雨真大' });
+const memories = recalled.context?.memories ?? [];
+ok(Array.isArray(memories) && memories.length >= 1, '6b. context 带 memories');
+eq(memories[0].text, '他冒着雨进来，问我忙不忙，我心里松了一下', '6b. 第一人称的 remember 成了她的记忆');
+eq(memories[0].layer, '刚刚', '6b. 在「刚刚」这一层');
+ok(Array.isArray(recalled.context?.her_knows), '6b. context 带 her_knows');
+eq(recalled.context?.recent, undefined, '6b. 旧的 recent 摘要不再单独给');
 
 // ---- 7. stale revision 会被引擎拒，但带当前 revision ----
 const staleClient = tools.get('soul_commit');

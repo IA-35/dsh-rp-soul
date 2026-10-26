@@ -31,8 +31,10 @@ def her_fact(key, text, scope="companion_only"):
     return {"op": "add_fact", "key": key, "text": text, "scope": scope, "origin": "observed"}
 
 
-def play(sidecar, sid, rev, ops=None, mode="continue", tags=None, on_her=None):
-    extra = {} if on_her is None else {"acts_on_her": on_her}
+def play(sidecar, sid, rev, ops=None, mode="continue", tags=None, on_her=None, **fields):
+    extra = dict(fields)
+    if on_her is not None:
+        extra["acts_on_her"] = on_her
     body = e2e.commit({"session_id": sid, "revision": rev}, ops=ops or [npc_action()], mode=mode, tags=tags, **extra)
     data = sidecar.ok("commit-turn", body)
     return data["revision"], data
@@ -526,6 +528,69 @@ def a_relationship_move_is_felt_by_her(s):
     assert s.fail("debug-mood", {"session_id": sid, "npc_id": "player"})["code"] == "NOT_FOUND"
 
 
+def the_memory_page_shows_her_memories(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="她第一次对我笑")
+    data = s.ok("debug-memories", {"session_id": sid})
+    assert data["revision"] == rev and data["counts"]["now"] >= 1, data["counts"]
+    mine = [e for e in data["entries"] if e["content"] == "她第一次对我笑"]
+    assert mine and mine[0]["layer_label"] == "刚刚" and mine[0]["activity"] == 1.0, data["entries"]
+    assert data["layers"]["years"] == "那些年" and data["capacity"]["days"] == 20
+
+
+def editing_a_memory_marks_it_yours(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="下雨那天")
+    mid = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["content"] == "下雨那天"][0]["id"]
+    out = s.ok("edit-memory", {"session_id": sid, "request_id": e2e.rid("r_m"), "expected_revision": rev,
+                               "memory_id": mid, "content": "下雨那天他把伞给了我", "pinned": True, "note": "别忘"})
+    assert out["revision"] == rev + 1 and "已改" in out["receipt"], out
+    row = out["memory"]
+    assert row["edited"] is True and row["pinned"] is True and row["note"] == "别忘", row
+    assert "雨伞" not in row["keywords"] and "把伞" in row["keywords"], row["keywords"]
+    err = s.fail("edit-memory", {"session_id": sid, "request_id": e2e.rid("r_m"), "expected_revision": rev,
+                                 "memory_id": mid, "note": "旧版本"})
+    assert err["code"] == "STALE_REVISION", err
+
+
+def deleting_a_memory_leaves_an_audit(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="不想记得的事")
+    mid = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["content"] == "不想记得的事"][0]["id"]
+    s.ok("delete-memory", {"session_id": sid, "request_id": e2e.rid("r_d"), "expected_revision": rev,
+                           "memory_id": mid, "reason": "测试"})
+    data = s.ok("debug-memories", {"session_id": sid})
+    assert all(e["id"] != mid for e in data["entries"]), data["entries"]
+    assert data["deletions"][0]["memory_id"] == mid and data["deletions"][0]["reason"] == "测试", data["deletions"]
+    err = s.fail("delete-memory", {"session_id": sid, "request_id": e2e.rid("r_d"), "expected_revision": data["revision"],
+                                   "memory_id": mid})
+    assert err["code"] == "NOT_FOUND", err
+
+
+def summarize_now_is_paid_by_the_next_commit(s):
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="今天陪她值了夜班")
+    out = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "summary"})
+    rev = out["revision"]
+    assert out["request"]["sources"][0]["text"] == "今天陪她值了夜班", out
+    ctx = s.ok("get-context", {"session_id": sid})["context"]
+    assert ctx["memory_summary_sources"]["sources"], ctx.get("memory_summary_sources")
+    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[npc_action(significant=False)]))
+    assert "那些事" in json.dumps(err, ensure_ascii=False), err
+    play(s, sid, rev, ops=[npc_action(significant=False)], memory_summary="那晚我值夜班，有人陪着，没那么难熬")
+    events = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "events"]
+    assert events and events[0]["content"].startswith("那晚我值夜班"), events
+    archived = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"),
+                                       "expected_revision": s.ok("get-context", {"session_id": sid})["revision"], "kind": "archive"})
+    assert [x["text"] for x in archived["request"]["sources"]] == [events[0]["content"]], archived
+
+
+def nothing_to_archive_is_refused(s):
+    sid, rev, _ = e2e.start(s)
+    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "archive"})
+    assert err["code"] == "INVALID_INPUT" and "没有可以归档" in err["message"], err
+
+
 def settings_moods_page_lists_her(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[
@@ -642,6 +707,11 @@ check("an unknown session is NOT_FOUND", with_sc(missing_session_is_not_found))
 check("the same request_id replays instead of writing twice", with_sc(idempotency_returns_the_same_turn))
 check("a relationship move is felt by her", with_sc(a_relationship_move_is_felt_by_her))
 check("the mood page lists her", with_sc(settings_moods_page_lists_her))
+check("the memory page shows her memories", with_sc(the_memory_page_shows_her_memories))
+check("editing a memory marks it yours", with_sc(editing_a_memory_marks_it_yours))
+check("deleting a memory leaves an audit", with_sc(deleting_a_memory_leaves_an_audit))
+check("summarize now is paid by the next commit", with_sc(summarize_now_is_paid_by_the_next_commit))
+check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))
 check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))

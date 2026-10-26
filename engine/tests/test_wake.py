@@ -335,8 +335,8 @@ def a_quiet_commit(ops):
         "summary": "她把水杯洗干净。",
         "open_action": "她擦干手。",
         "quotes": [],
-        "chapter_summary": None,
-        "prologue": None,
+        "memory_summary": None,
+        "memory_archive": None,
         "replaces_turn": None,
         "together": True,
     }
