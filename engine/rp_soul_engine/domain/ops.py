@@ -76,6 +76,8 @@ class TurnContext:
         self.persona = persona
         self.commit = commit
         self.mode = commit["action_mode"]
+        # 唤醒回合（她自己到点醒来）是 together: false：你不在场，这一回合是她的时间。
+        self.together = commit.get("together", True)
         self.authorized = commit["player_authorized"]
         self.turn = state["turn"] + 1
         self.her = SS.companion(state)
@@ -157,6 +159,17 @@ def _flush(ctx, errs):
     return True
 
 
+SEPARATED = "这是她自己醒着的回合：你不在场，等你回来再说"
+
+
+def _apart(ctx, path, what, errs):
+    """together: false 的回合里，凡是需要你本人在场的事一律驳回。"""
+    if ctx.together:
+        return False
+    errs.append(detail(path, "你不在场，这一回合里%s" % what, SEPARATED, INVARIANT_VIOLATION))
+    return True
+
+
 def _note(ctx, key, text, known_by, visibility="private", origin=None):
     """Record the fact behind a feeling. Returns the fact id.
 
@@ -186,13 +199,15 @@ def _note(ctx, key, text, known_by, visibility="private", origin=None):
 # time
 
 
-def advance(ctx, minutes, path, default=False, to_clock=None):
+def advance(ctx, minutes, path, default=False, to_clock=None, player_absent=False):
     """Settle the real time that passed since the last turn.
 
     Nothing here is model-authored: `minutes` is the real gap and `to_clock` is
     the moment it lands on, both computed from the wall clock by the caller.
     """
-    report = settlement.advance(ctx.state, minutes, ctx.turn, ctx.hooks, to_clock=to_clock)
+    report = settlement.advance(
+        ctx.state, minutes, ctx.turn, ctx.hooks, to_clock=to_clock, player_absent=player_absent
+    )
     report["default"] = default
     offscreen = report.get("offscreen") or {}
     report["preview"] = simulation.preview_payload(ctx.state, report, ctx.persona)
@@ -269,6 +284,9 @@ def _response_guard(ctx, npc, op, path, errs):
 def op_npc_response(ctx, op, path):
     errs = []
     npc = ctx.her
+    if _apart(ctx, path, "不能给谁回应", errs):
+        _flush(ctx, errs)
+        return
     if not SS.is_present(ctx.state, npc):
         errs.append(detail(path, "%s 不在你身边，不能当面回应" % ctx.name(npc), None, INVARIANT_VIOLATION))
     _basis(ctx, npc, op["basis_fact_ids"], path + ".basis_fact_ids", errs)
@@ -468,6 +486,8 @@ def op_add_fact(ctx, op, path):
         errs.append(detail(path + ".scope", "假事实是TA信了的事：scope 写 companion_only", None, INVARIANT_VIOLATION))
     if ctx.in_beat is not None and op["scope"] in ("shared", "player_only"):
         errs.append(detail(path + ".scope", "离屏时你不在：这段时间里的事只有TA知道（companion_only / inner）", None, INVARIANT_VIOLATION))
+    if not ctx.together and op["scope"] in ("shared", "player_only"):
+        errs.append(detail(path + ".scope", "你不在场：这一回合里的事只有TA知道（companion_only / inner）", SEPARATED, INVARIANT_VIOLATION))
     if op["truth"] and op["origin"] != "retcon":
         existing = next(iter(FA.of(state).by_key(op["key"])), None)
         if existing is not None:
@@ -618,6 +638,8 @@ def op_event_create(ctx, op, path):
             errs.append(detail(path, "你们之间的约定只能在玩家本人答应时成立（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
     if ctx.in_beat is not None and op["with_player"]:
         errs.append(detail(path + ".with_player", "离屏片段不能创建你们之间的事件", "with_player 写 false", INVARIANT_VIOLATION))
+    if not ctx.together and op["with_player"]:
+        errs.append(detail(path + ".with_player", "你不在场，不能凭空定下你们之间的事", "with_player 写 false：这一回合只安排她自己的事", SEPARATED, INVARIANT_VIOLATION))
     key = op["dedupe_key"]
     used = state["counters"].setdefault("event_keys", {}).get(key, 0)
     if any(e["state"] == "pending" and e["dedupe_key"].split("#")[0] == key for e in state["events"].values()):
@@ -680,6 +702,8 @@ def _player_deal_guard(ctx, event, path, errs):
     if event["kind"] == "promise" and player in event["participants"]:
         if ctx.in_beat is not None:
             errs.append(detail(path, "离屏片段不能兑现或取消你们之间的约定", None, INVARIANT_VIOLATION))
+        elif not ctx.together:
+            errs.append(detail(path, "你不在场，不能替你兑现或取消你们之间的约定", SEPARATED, INVARIANT_VIOLATION))
         elif ctx.mode not in ("result", "attempt") or not ctx.authorized:
             errs.append(detail(path, "你们之间的约定，其兑现与取消要由玩家本人决定（result/attempt + player_authorized）", None, INVARIANT_VIOLATION))
 
@@ -724,6 +748,57 @@ def op_event_cancel(ctx, op, path):
     event["note"] = op["reason"]
     ctx.observable = True
     ctx.applied.append({"op": "event_cancel", "event_id": event["id"]})
+
+
+# ---------------------------------------------------------------------------
+# plan: 她自己定下的下一件事
+
+
+@register(
+    "plan_next",
+    {
+        "note": F(S.Str(1, ST.PLAN_NOTE_MAX)),
+        "in_minutes": F(S.Int(1, ST.MINUTES_PER_DAY), required=False),
+        "until": F(S.Str(5, 5, r"([01][0-9]|2[0-3]):[0-5][0-9]", "HH:MM，例如 23:00"), required=False),
+    },
+    "她说好接下来做什么、做到几点：in_minutes 多少分钟后（1–1440）或 until 当天的某个时刻，二选一。"
+    "记进账本后，到时间会把她叫醒过一次自己的时间；新的安排替换旧的",
+)
+def op_plan_next(ctx, op, path):
+    errs = []
+    state = ctx.state
+    given = [k for k in ("in_minutes", "until") if k in op]
+    if len(given) != 1:
+        errs.append(detail(path, "in_minutes 与 until 必须且只能给一个", "多少分钟后用 in_minutes，某个时刻用 until", INVALID_INPUT))
+    until = None
+    if len(given) == 1:
+        if given[0] == "in_minutes":
+            until = CL.add_minutes(state["clock"], op["in_minutes"])
+        else:
+            hour, minute = (int(part) for part in op["until"].split(":"))
+            until = dict(state["clock"])
+            until["minute"] = hour * 60 + minute
+            if CL.to_abs(until) <= CL.to_abs(state["clock"]):
+                until = CL.add_minutes(until, ST.MINUTES_PER_DAY)
+    if not _flush(ctx, errs):
+        return
+    state["plan"] = {"note": op["note"], "until": until, "set_turn": ctx.turn}
+    ctx.observable = True
+    ctx.applied.append({"op": "plan_next", "note": op["note"], "until": dict(until), "label": CL.label(until)})
+
+
+def current_plan(state):
+    """Her standing plan, or None: {note, until, set_turn}."""
+    plan = state.get("plan")
+    if not isinstance(plan, dict):
+        return None
+    if not plan.get("note") or not isinstance(plan.get("until"), dict):
+        return None
+    return plan
+
+
+def clear_plan(state):
+    state["plan"] = None
 
 
 # ---------------------------------------------------------------------------

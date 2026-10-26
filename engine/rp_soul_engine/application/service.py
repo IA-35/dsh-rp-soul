@@ -324,6 +324,7 @@ DOMAIN_KEYS = (
     "chapter_summary",
     "prologue",
     "replaces_turn",
+    "together",
 )
 # A failed commit with one of these codes makes the next context full.
 FAILURE_CODES = (INVALID_INPUT, INVARIANT_VIOLATION, NOT_FOUND, SAFETY_BLOCK)
@@ -970,6 +971,50 @@ def status(ctx, payload):
         out["thought_deletions"] = repo.thought_deletions(conn, state["session_id"])
         out["persona"] = _persona_summary(persona)
     return out
+
+
+def next_wake(ctx, payload):
+    """When she should wake up on her own, and why. Read-only: nothing is written."""
+    from ..domain import clock as CL
+    from ..domain import wake as WK
+
+    payload = validate(specs.NEXT_WAKE, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state, persona = session["state"], session["persona"]
+    now = CL.parse_iso(payload["now"]) if payload["now"] else None
+    pick, rows = WK.next_wake(
+        state,
+        persona,
+        miss_you_hours=payload["miss_you_hours"],
+        streak=payload["streak"],
+        routine=payload["routine"],
+        quiet_text=payload["quiet"],
+        now=now,
+    )
+    out = {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "clock": dict(state["clock"], label=CL.label(state["clock"])),
+        "paused": bool(state["safety"]["paused"]),
+        "plan": _plan_row(state),
+        "candidates": rows,
+        "next": pick,
+        "now": now.isoformat(timespec="seconds") if now else state.get("real_at"),
+    }
+    return out
+
+
+def _plan_row(state):
+    from ..domain import clock as CL
+    from ..domain import ops as OPS
+
+    plan = OPS.current_plan(state)
+    if plan is None:
+        return None
+    return {"note": plan["note"], "until": dict(plan["until"]),
+            "until_label": CL.label(plan["until"]), "set_turn": plan.get("set_turn")}
 
 
 def _her(state, payload):

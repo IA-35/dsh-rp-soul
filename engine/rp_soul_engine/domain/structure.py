@@ -217,3 +217,23 @@ INTIMACY_TAGS = tuple(tag[0] for tag in TAGS if tag[1] == "intimacy")
 # 这些标签要求提交写明亲密参与者
 STRUCTURAL_INTIMACY_TAGS = ("intimate", "explicit")
 CONFLICT_TAGS = tuple(tag[0] for tag in TAGS if tag[1] == "conflict")
+
+# ---------------------------------------------------------------------------
+# 唤醒线（她自己到点醒来）
+#
+# 候选全在账本里算：她的安排、你们的约定、她自己的事、想你了、作息换段。
+# 时间先算成游戏时钟，再按「建局时刻 + 走过的分钟」换算成真实时刻。
+
+WAKE_REASONS = ("plan", "promise", "event", "miss_you", "routine")
+WAKE_REASON_LABELS = {
+    "plan": "她说好做到的时间",
+    "promise": "你们的约定",
+    "event": "她自己的事",
+    "miss_you": "想你了",
+    "routine": "作息换段",
+}
+WAKE_LEAD_MINUTES = 30            # 约定到期前多久叫醒她
+WAKE_MISS_YOU_HOURS = 6           # 你多久没说话算「想你了」（0 = 关）
+WAKE_MISS_YOU_NEXT = (6, 12, 24)  # 没回话时逐次拉长
+WAKE_QUIET = "00:00-08:00"        # 安静时段；只有她自己的安排能叫醒她
+PLAN_NOTE_MAX = 40

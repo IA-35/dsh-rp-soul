@@ -259,7 +259,7 @@ def settle(state, turn):
 # situational thoughts: computed by the engine, never written by the model
 
 
-def refresh_situational(state, turn, gap=0):
+def refresh_situational(state, turn, gap=0, player_absent=False):
     """Recompute the engine-owned thoughts. Idempotent.
 
     Called after the clock moved; `gap` is how many real minutes passed since
@@ -273,7 +273,10 @@ def refresh_situational(state, turn, gap=0):
     """
     now = CL.to_abs(state["clock"])
     player = state["player_id"]
-    player_present = SS.is_present(state, player)
+    # `player_absent` is the wake-line turn (together: false): she is alone even
+    # though the player card stays in the scene, because the scene cannot drop
+    # the player (invariants) and presence is not the same question as company.
+    player_present = SS.is_present(state, player) and not player_absent
     planned = {}
     for cid in SS.npcs(state):
         char = state["characters"][cid]

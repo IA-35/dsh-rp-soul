@@ -114,6 +114,22 @@ STATUS = _obj(
     "status",
 )
 
+NEXT_WAKE = _obj(
+    {
+        "session_id": F(SESSION_ID),
+        "miss_you_hours": F(S.Nullable(S.Int(0, 96)), required=False, default=None,
+                            desc="你多久没说话算「想你了」（0 = 关；省略用默认 6 小时）"),
+        "streak": F(S.Int(0, 20), required=False, default=0,
+                    desc="已经连着几次叫醒她没得到回话（每多一次，想你了的间隔按 6/12/24 小时拉长）"),
+        "routine": F(S.Bool(), required=False, default=True, desc="作息换段也算一个唤醒来源"),
+        "quiet": F(S.Nullable(S.Str(0, 11)), required=False, default=None,
+                   desc="安静时段，形如 00:00-08:00；空字符串表示没有安静时段"),
+        "now": F(S.Nullable(S.Str(1, 40)), required=False, default=None,
+                 desc="当作现在几点（省略就用真实时间）"),
+    },
+    "next-wake",
+)
+
 DEBUG_MOOD = _obj(
     {
         "session_id": F(SESSION_ID),

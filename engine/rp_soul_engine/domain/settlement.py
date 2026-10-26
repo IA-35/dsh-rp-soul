@@ -89,7 +89,7 @@ def expire_conditions(state, until_clock):
     return expired
 
 
-def advance(state, minutes, turn, hooks=None, to_clock=None):
+def advance(state, minutes, turn, hooks=None, to_clock=None, player_absent=False):
     """Move the clock forward and settle. Returns the settlement report.
 
     `minutes` is how much real time passed; `to_clock` is the clock that moment
@@ -120,13 +120,15 @@ def advance(state, minutes, turn, hooks=None, to_clock=None):
     }
     if minutes >= ST.SCENE_BREAK_MINUTES:
         report["scene"] = new_scene(state, "time_skip")
-    if minutes > 0:
+    if minutes > 0 or player_absent:
+        # 唤醒回合哪怕一秒都没过去，也要重算一次情境：她一个人醒着，
+        # 「你不在」这件事本身就写在她心上。
         report["resolved_events"] = settle_events(state, state["clock"], turn)
         report["steps"].append("events")
         report["expired_conditions"] = expire_conditions(state, state["clock"])
         report["expired_thoughts"] = MO.settle(state, turn)
         report["steps"].append("status")
-        MO.refresh_situational(state, turn, gap=minutes)
+        MO.refresh_situational(state, turn, gap=minutes, player_absent=player_absent)
         report["steps"].append("mood")
     if "offscreen" in hooks:
         report["offscreen"] = hooks["offscreen"](state, report)

@@ -98,6 +98,9 @@ def new_session(persona, seed=None, player=None, now=None):
         "counters": counters,
         # 一段相处：隔一小时以上再说话就是新的一段（settlement.new_scene）
         "scene": {"id": "sc0", "present": [PE.PLAYER_ID, her["id"]], "since": dict(clock), "responses": []},
+        # 她自己定下的下一件事：{"note": "去洗澡", "until": {"day","minute"}, "set_turn": N}
+        # 旧存档没有这个键，读的地方一律用 .get("plan")
+        "plan": None,
         "memory": {"prologue": "", "chapters": [], "turns": [], "last_quotes": [], "open_action": ""},
         "preferences": {
             "offscreen_simulation": True,

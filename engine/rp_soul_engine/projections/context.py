@@ -16,6 +16,7 @@ from ..domain import agency as AG
 from ..domain import clock as CL
 from ..domain import facts as FA
 from ..domain import mood as MO
+from ..domain import ops as OPS
 from .. import persona as PE
 from ..domain import simulation as SI
 from ..domain import state as SS
@@ -40,6 +41,18 @@ def _clock(state):
         "day": state["clock"]["day"],
         "minute": state["clock"]["minute"],
         "label": CL.label(state["clock"]),
+    }
+
+
+def _plan_row(state):
+    """Her standing plan in the shape context shows: {note, until, until_label}."""
+    plan = OPS.current_plan(state)
+    if plan is None:
+        return None
+    return {
+        "note": plan["note"],
+        "until": dict(plan["until"]),
+        "until_label": CL.label(plan["until"]),
     }
 
 
@@ -74,6 +87,11 @@ def _companion_brief(state, cid, turn):
         ]
     if char["status"]["conditions"]:
         entry["conditions"] = [c["text"] for c in char["status"]["conditions"]]
+    if cid == SS.companion(state):
+        plan = _plan_row(state)
+        if plan is not None:
+            # 她说好做到几点：唤醒线靠它把她叫醒，写正文时也该看得见。
+            entry["plan"] = plan
     # No goal/stance here: what she wants right now is measured from state and
     # already in context["agency"] (kind + weight + because).
     return entry

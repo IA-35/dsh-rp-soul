@@ -62,6 +62,8 @@ def commit_fields():
                       desc="requests.prologue 为 true 时在记录的第一项必填：把旧前情与最早几章合并成一段，≤300 字"),
         "replaces_turn": F(S.Nullable(S.Int(1, 1000000)), required=False, default=None,
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
+        "together": F(S.Bool(), required=False, default=True,
+                      desc="这一回合你们在不在一起；她自己醒来的那个回合是 false（由桥接层自动带，模型不用填）"),
     }
 
 
@@ -173,6 +175,18 @@ def _mode_checks(ctx):
     mode = commit["action_mode"]
     her = ctx.her
     on_her = commit["acts_on_her"]
+    if not ctx.together:
+        # 你不在场：这一回合没有「玩家做了什么」，只能是她自己的时间。
+        if mode in ("result", "attempt", "rewrite"):
+            ctx.error(
+                "$.action_mode",
+                "你不在场，这一回合只能是她自己的时间：action_mode 写 continue（她做了点事）或 wait（时间在走）",
+                "她在唤醒回合里说的话由她自己决定；等你回来再说与你有关的事",
+            )
+        if on_her is not None:
+            ctx.error("$.acts_on_her", "你不在场，这一回合没有冲着你的事", "acts_on_her 留空")
+        if commit["player_authorized"]:
+            ctx.error("$.player_authorized", "你不在场，不能替你授权任何事", "player_authorized 留空")
     if mode == "result" and on_her:
         ctx.error(
             "$.action_mode",
@@ -216,7 +230,7 @@ def _break_checks(ctx):
     The band is the one the turn started in, so a commit cannot dodge it by
     adding a cheerful thought first. A rewrite turn only restates the past.
     """
-    if ctx.mode == "rewrite":
+    if ctx.mode == "rewrite" or not ctx.together:
         return
     player = ctx.state["player_id"]
     if player not in ctx.start_present:
@@ -233,6 +247,9 @@ def _break_checks(ctx):
 def _beat_checks(ctx):
     """Every NPC a large real-time gap named must get an offscreen beat,
     written after the gap: the beat is what they did while nobody was there."""
+    if not ctx.together:
+        # 这一回合本身就是她的时间，不必再补一段「你不在时她做了什么」
+        return None
     missing = [npc for npc in ctx.required_beats if npc not in ctx.beats_after_time]
     if not missing:
         return None
@@ -248,6 +265,9 @@ def _intimacy_checks(ctx):
     commit = ctx.commit
     tags = set(commit["content_tags"])
     if not tags & set(ST.STRUCTURAL_INTIMACY_TAGS):
+        return
+    if not ctx.together:
+        ctx.error("$.content_tags", "你不在场，这一回合不可能有亲密场景", "换个写法：写她自己这半天的事")
         return
     her = ctx.her
     if not SS.is_present(ctx.state, her):
@@ -352,7 +372,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     _request_checks(ctx)
     span, to_clock = SS.real_span(work, now)
     work["real_at"] = now
-    OPS.advance(ctx, span, "$", default=True, to_clock=to_clock)
+    OPS.advance(ctx, span, "$", default=True, to_clock=to_clock, player_absent=not ctx.together)
     for index, op in enumerate(commit["operations"]):
         path = "$.operations[%d]" % index
         if ctx.mode == "rewrite" and op["op"] not in REWRITE_OPS:
@@ -404,6 +424,13 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     if overflow:
         archive.extend(("turn", old) for old in overflow)
         del memory["turns"][:-MAX_MEMORY_TURNS]
+    # 你说过话的那一刻：唤醒线的「想你了」以它为基准。
+    if commit["player_input"].strip():
+        work["last_player_at"] = work["real_at"]
+    # 说好做到的时间已经过了：这条安排就算兑现完了，不能拿它反复把她叫醒。
+    plan = OPS.current_plan(work)
+    if plan is not None and CL.to_abs(plan["until"]) <= CL.to_abs(work["clock"]):
+        OPS.clear_plan(work)
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
     crossed_day = work["clock"]["day"] > before_clock["day"]
