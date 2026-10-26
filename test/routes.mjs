@@ -222,4 +222,31 @@ writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
 const pf3 = await call('GET', '/rp-soul/engine/persona-file');
 eq(pf3.parsed.front.id, 'new_world', '11. persona.md 存在时散文前置块被忽略');
 
+// ---- 12. 记忆接口 ----
+// 测试替身的 inject() 无视依赖一律回调，所以记忆模块会挂载成功（但里面既没有
+// 真会话也没有 on()，钩子全部跳过）。这里验的是接口形状与配置读写。
+const memOff = await call('GET', '/rp-soul/memory');
+eq(memOff.status, 200, '12. GET /memory 200');
+eq(memOff.parsed.ok, true, '12. /memory 回 ok');
+eq(memOff.parsed.mounted, true, '12. 记忆模块已挂载');
+eq(memOff.parsed.enabled, true, '12. 默认开启记忆（enabled 反映配置）');
+eq(memOff.parsed.turnsLimit, 60, '12. 默认注入 60 轮');
+eq(memOff.parsed.recent, [], '12. 还没有任何记忆时 recent 为空数组');
+
+const forgetOff = await call('POST', '/rp-soul/memory/forget');
+eq(forgetOff.status, 200, '12. POST /memory/forget 200');
+eq(forgetOff.parsed.ok, true, '12. 忘掉操作成功');
+
+// 记忆开关与轮数走同一个 config 接口，且必须落盘。
+const memCfg = await call('POST', '/rp-soul/config', { memoryEnabled: false, memoryTurns: 12 });
+eq(memCfg.status, 200, '12. POST /config 200（记忆字段）');
+eq(memCfg.parsed.config.memoryEnabled, false, '12. memoryEnabled 落盘生效');
+eq(memCfg.parsed.config.memoryTurns, 12, '12. memoryTurns 落盘生效');
+const back2 = await call('GET', '/rp-soul/memory');
+eq(back2.parsed.enabled, false, '12. /memory 反映关掉的开关');
+eq(back2.parsed.turnsLimit, 12, '12. /memory 反映改过的轮数');
+const badTurns = await call('POST', '/rp-soul/config', { memoryTurns: 9999 });
+eq(badTurns.parsed.config.memoryTurns, 400, '12. memoryTurns 上限夹到 400');
+await call('POST', '/rp-soul/config', { memoryEnabled: true, memoryTurns: 60 });
+
 done('routes');
