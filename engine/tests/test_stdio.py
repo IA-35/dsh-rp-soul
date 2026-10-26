@@ -30,7 +30,7 @@ def version_shape(s):
     data = s.ok("version")
     assert data["engine"] == "0.1.0", data
     assert data["save_format"] == "rp-soul-save", data
-    assert data["schema_version"] == 2, data
+    assert data["schema_version"] == 3, data
     assert data["python"]["ok"] is True, data
     assert data["sqlite"]["ok"] is True, data
 
@@ -111,8 +111,8 @@ def two_identical_calls_both_answer(s):
 def doctor_creates_schema(s):
     data = s.ok("doctor")
     assert data["ok"] is True, data
-    assert data["db"]["schema"] == 2, data
-    assert data["db"]["target_schema"] == 2, data
+    assert data["db"]["schema"] == 3, data
+    assert data["db"]["target_schema"] == 3, data
     assert data["db"]["integrity"] == "ok", data
     again = s.ok("doctor")
     assert again["db"]["report"]["migrated"] is False, again

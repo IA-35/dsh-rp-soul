@@ -13,12 +13,10 @@ from .. import persona as PE
 from . import agency as AG
 from . import clock as CL
 from . import facts as FA
+from . import memories as MEM
 from . import state as SS
 from . import structure as ST
 
-CHAPTER_EVERY = 20
-CHAPTER_CAP = 10
-PROLOGUE_MERGE = 5
 # 回看作息时的采样步长（分钟）：一天最多 96 个点，够分辨每一段
 ROUTINE_STEP = 15
 
@@ -71,31 +69,20 @@ def offscreen(state, report, turn):
 
 
 def settlement_requests(state, report, turn):
-    """Step 5 during a skip: what the *next* record must provide."""
-    return {
-        "chapter_summary": report["crossed_day"] or (turn - state["counters"]["last_chapter_turn"] >= CHAPTER_EVERY),
-    }
+    """Step 5 during a skip: whether a new day began (her daily summary follows)."""
+    return {"crossed_day": report["crossed_day"]}
 
 
 def finalize_requests(state, crossed_day):
-    """Step 5 once per record, after every operation."""
+    """Step 5 once per record, after every operation: what the next record pays.
+
+    Her daily memory summary (the oldest finished day that is not summarised
+    yet) and, every fifteen days, the archive of 那些事 into 那些年.
+    """
     requests = state["requests"]
-    memory = state["memory"]
-    requests["chapter_summary"] = crossed_day or (state["turn"] - state["counters"]["last_chapter_turn"] >= CHAPTER_EVERY)
-    requests["prologue"] = len(memory["chapters"]) > CHAPTER_CAP
+    requests["memory_summary"] = MEM.summary_request(state)
+    requests["memory_archive"] = MEM.archive_request(state)
     return requests
-
-
-def prologue_source(state):
-    """What the model merges into the prologue when requests.prologue is set."""
-    chapters = state["memory"]["chapters"][:PROLOGUE_MERGE]
-    return {
-        "previous": state["memory"]["prologue"],
-        "chapters": [
-            {"index": c["index"], "from_turn": c["from_turn"], "to_turn": c["to_turn"], "summary": c["summary"]}
-            for c in chapters
-        ],
-    }
 
 
 def preview_npc(state, cid, report, persona=None):

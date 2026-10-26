@@ -322,8 +322,8 @@ DOMAIN_KEYS = (
     "remember",
     "open_action",
     "quotes",
-    "chapter_summary",
-    "prologue",
+    "memory_summary",
+    "memory_archive",
     "replaces_turn",
     "together",
 )
@@ -334,14 +334,14 @@ SESSION_ID_RE = re.compile(r"s_[a-z0-9]{2,38}")
 
 def choose_depth(state, results, failed_before=False):
     """Full after a failed commit, after a record of several turns, on a new
-    stretch of time together or a new day, every 5 turns, and when a prologue
-    is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
+    stretch of time together or a new day, every 5 turns, and when her
+    memory archive is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
     if failed_before or len(results) > 1:
         return "full"
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
-    if state["requests"].get("prologue") or state["turn"] % 5 == 0:
+    if state["requests"].get("memory_archive") or state["turn"] % 5 == 0:
         return "full"
     return "brief"
 
@@ -488,7 +488,7 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("chapter", "replaced_turn", "thoughts", "remembered"):
+    for key in ("summarized", "archived", "replaced_turn", "thoughts", "remembered"):
         if result.get(key) is not None:
             out[key] = result[key]
     return out
@@ -645,11 +645,15 @@ def save_slot(ctx, payload):
 
 
 def _resume(state):
+    from ..domain import memories as MEM
+
     turns = state["memory"]["turns"]
-    chapters = state["memory"]["chapters"]
+    events = MEM.of_layer(state, "events")
+    years = MEM.of_layer(state, "years")
     return {
-        "chapter_summary": chapters[-1]["summary"] if chapters else None,
-        "prologue": state["memory"].get("prologue"),
+        # 接着玩时先看她最近记成「那些事」「那些年」的那一条
+        "last_event": events[-1]["content"] if events else None,
+        "last_chapter": years[-1]["content"] if years else None,
         "recent": [t["summary"] for t in turns[-3:]],
         "last_quotes": list(state["memory"].get("last_quotes") or []),
         "open_action": state["memory"].get("open_action") or "",
@@ -748,7 +752,8 @@ def list_sessions(ctx, payload):
     for row in repo.list_sessions(ctx.db(), payload["limit"]):
         state = row["state"]
         memory = state["memory"]
-        last = memory["turns"][-1]["summary"] if memory["turns"] else (memory["chapters"][-1]["summary"] if memory["chapters"] else None)
+        entries = memory.get("entries") or []
+        last = memory["turns"][-1]["summary"] if memory["turns"] else (entries[-1]["content"] if entries else None)
         out.append(
             {
                 "session_id": row["session_id"],

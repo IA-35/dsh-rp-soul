@@ -170,12 +170,12 @@ def check(doc):
     if not _keys(session, SESSION_KEYS, "$.session", problems):
         fail(problems)
     state, persona, archive = session["state"], session["persona"], session["archive"]
-    if version == migrate.FROM_SCHEMA and migrate.is_v1(state):
-        # 多角色时代的导出文件：按单人读进来（和数据库迁移同一套规则）
+    if version < STATE_SCHEMA_VERSION and isinstance(state, dict) and isinstance(state.get("schema"), int):
+        # 旧版导出文件：多角色时代的按单人读进来，章节 / 前情换成她的四层记忆（和数据库迁移同一套规则）
         try:
-            state, persona = migrate.session_v1_to_v2(state, persona)
+            state, persona = migrate.upgrade(state, persona)
         except (KeyError, TypeError, ValueError) as exc:
-            fail([detail("$.session", "旧格式存档转不成单人格式：%s" % exc, "这个文件没有写入任何数据", CONTENT_ERROR)])
+            fail([detail("$.session", "旧格式存档升级失败：%s" % exc, "这个文件没有写入任何数据", CONTENT_ERROR)])
     problems.extend(_state_problems(state))
     problems.extend(_persona_problems(persona))
     problems.extend(_archive_problems(archive))

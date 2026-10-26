@@ -15,10 +15,10 @@ import json
 from ..domain import agency as AG
 from ..domain import clock as CL
 from ..domain import facts as FA
+from ..domain import memories as MEM
 from ..domain import mood as MO
 from ..domain import ops as OPS
 from .. import persona as PE
-from ..domain import simulation as SI
 from ..domain import state as SS
 
 BRIEF_LIMIT = 6 * 1024
@@ -181,11 +181,11 @@ def brief(state, persona, save=None):
     for key in ("pace", "explicitness"):
         if state["preferences"].get(key) != "standard":
             context["preferences"][key] = state["preferences"][key]
-    chapters = state["memory"]["chapters"]
-    if chapters and len(context["recent"]) < LIMITS["recent"]:
-        # Right after a chapter closes its turns are archived; the chapter
-        # summary keeps the thread until new turn summaries accumulate.
-        context["last_chapter"] = chapters[-1]["summary"]
+    # 引擎要她写每日总结 / 归档时，把要写的那些记忆一起给出来（不论 brief 还是 full）
+    for key in ("memory_summary", "memory_archive"):
+        view = MEM.request_view(state, state["requests"].get(key))
+        if view is not None:
+            context[key + "_sources"] = view
     _fit(context, BRIEF_LIMIT, ("known_facts", "due_soon", "scene_responses", "recent", "last_quotes", "agency"))
     return context
 
@@ -249,12 +249,6 @@ def full(state, persona, save=None):
     context.pop("due_soon", None)
     context["player_facts"] = player_facts(state, 30)
     context["events"] = _events(state)
-    context["chapters"] = [c["summary"] for c in state["memory"]["chapters"][-3:]]
-    context.pop("last_chapter", None)
-    if state["memory"].get("prologue"):
-        context["prologue"] = state["memory"]["prologue"]
-    if state["requests"].get("prologue"):
-        context["prologue_merge"] = SI.prologue_source(state)
     _fit_full(context)
     return context
 
@@ -296,15 +290,11 @@ def _template(state, body):
     turn["summary"] = "<第三方视角一两句>"
     turn["open_action"] = "<停在哪个未决动作>"
     turn["quotes"] = ["<本回合值得记住的原话，原样一句，<=80 字；没有就删掉这条>"]
-    if state["requests"].get("chapter_summary"):
-        from ..domain.turn import chapter_start
-
-        turn["chapter_summary"] = "<第 %d-%d 回合的摘要，不含之后的事，第三方视角，<=300 字>" % (
-            chapter_start(state),
-            state["turn"],
-        )
-    if state["requests"].get("prologue"):
-        turn["prologue"] = "<完整上下文 prologue_merge 合并成的前情，<=300 字>"
+    turn["remember"] = "<可选：TA 会怎么记得这件事，第一人称、带感受，<=60 字；不写就删掉这条>"
+    if state["requests"].get("memory_summary"):
+        turn["memory_summary"] = "<memory_summary_sources 那一天，第一人称写成一条：发生了什么、什么感受，相似的合并注明次数，<=80 字>"
+    if state["requests"].get("memory_archive"):
+        turn["memory_archive"] = "<memory_archive_sources 这些日子，第一人称归成一段篇章：里程碑和长期变化，<=60 字>"
     return {
         "session_id": state["session_id"],
         "request_id": "<上一次返回的 next_request_id>",
@@ -338,15 +328,11 @@ def _fit_steps(context):
         while context.get("events") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["events"].pop()
 
-    def chapters_cut():
-        while context.get("chapters") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
-            context["chapters"].pop(0)
-
     def agency_cut():
         while context.get("agency") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["agency"].pop()
 
-    return [rules_cut, card_clipped, facts_cut, events_cut, chapters_cut, agency_cut]
+    return [rules_cut, card_clipped, facts_cut, events_cut, agency_cut]
 
 
 def _fit_full(context):

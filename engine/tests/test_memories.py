@@ -221,6 +221,111 @@ def when_label_is_lifelike():
     assert MEM.when_label(state, {"day": 1, "minute": 1230}) == "3 天前 · 周一晚上"
 
 
+# ---------------------------------------------------------------------------
+# 每日总结与归档
+
+
+def play(state, persona, now, **kw):
+    """一回合一条记录：提交后像 close_record 一样算出下一条记录要交的请求。"""
+    new = commit(state, persona, now, **kw)
+    TU.close_record(new, [{"crossed_day": new["clock"]["day"] > state["clock"]["day"]}])
+    return new
+
+
+def a_finished_day_asks_for_a_summary():
+    state, persona = start()
+    state = play(state, persona, at(0), remember="下雨天他来了")
+    assert state["requests"]["memory_summary"] is None, "today is still going on"
+    state = play(state, persona, at(1), ops=[beat(), glance()])
+    assert state["requests"]["memory_summary"] is None
+    state = play(state, persona, at(14), ops=[beat(), glance()])          # 第二天 10:00
+    request = state["requests"]["memory_summary"]
+    # 第一天：两回合对话 + 一段离屏经历（动作类不进总结）
+    assert request and request["day"] == 1 and len(request["ids"]) == 3, request
+    try:
+        commit(state, persona, at(14.1))
+    except Exception as exc:
+        assert "那些事" in str(exc), exc
+    else:
+        raise AssertionError("the summary is required")
+    state = play(state, persona, at(14.2), memory_summary="那天下雨他来了两次，我挺高兴")
+    events = MEM.of_layer(state, "events")
+    assert len(events) == 1 and events[0]["origin_ids"] == request["ids"], events
+    assert events[0]["at"]["day"] == 1 and "高兴" in events[0]["keywords"], events[0]
+    sources = [e for e in MEM.entries(state) if e["id"] in request["ids"]]
+    assert all(e["summarized"] for e in sources), "sources are marked, not removed"
+    assert state["requests"]["memory_summary"] is None, "day one is not asked for again"
+
+
+def a_summary_nobody_asked_for_is_refused():
+    state, persona = start()
+    try:
+        commit(state, persona, at(0), memory_summary="没人要的总结")
+    except Exception as exc:
+        assert "没有要求每日总结" in str(exc), exc
+    else:
+        raise AssertionError("refused")
+
+
+def ended_events_leave_with_the_summary():
+    state, persona = start()
+    deadline = {"op": "event_create", "kind": "deadline", "title": "交报告", "in_minutes": 60,
+                "dedupe_key": "report", "with_player": False}
+    state = play(state, persona, at(0), ops=[deadline])
+    state = play(state, persona, at(14), ops=[beat(), glance()])          # 到期、跨天
+    assert state["events"]["e1"]["state"] == "resolved"
+    state = play(state, persona, at(14.1), memory_summary="那天的报告没交上")
+    assert "e1" not in state["events"], "an ended event is archived with the day"
+
+
+def half_a_month_asks_for_an_archive():
+    state, persona = start()
+    old = MEM.add(state, "events", "summary", "第一周的事", 0.5)
+    kept = MEM.add(state, "events", "summary", "第一次吵架", 0.9, pinned=True)
+    state["clock"] = {"day": 16, "minute": 600}
+    request = MEM.archive_request(state)
+    assert request == {"ids": [old["id"]]}, request
+    state["requests"]["memory_archive"] = request
+    state["real_at"] = at(15 * 24 - 10)
+    state = commit(state, persona, at(15 * 24 - 9.9), memory_archive="那半个月我们慢慢熟了")
+    years = MEM.of_layer(state, "years")
+    assert len(years) == 1 and years[0]["origin_ids"] == [old["id"]], years
+    assert old["id"] not in [e["id"] for e in MEM.entries(state)], "archived sources are consumed"
+    assert kept["id"] in [e["id"] for e in MEM.entries(state)], "a pinned 那些事 stays"
+    assert state["memory"]["last_archive_day"] == 16 and MEM.archive_request(state) is None
+
+
+def the_old_chain_becomes_her_memory():
+    from rp_soul_engine import migrate as MG
+    state, persona = start()
+    old = copy.deepcopy(state)
+    old["schema"] = 2
+    old["clock"] = {"day": 5, "minute": 600}
+    old["memory"] = {
+        "prologue": "我们是在雨夜认识的",
+        "chapters": [{"index": 1, "from_turn": 1, "to_turn": 20, "day": 2, "summary": "第二天一起吃了面"}],
+        "turns": [{"turn": 20, "day": 2, "summary": "吃面", "quotes": []},
+                  {"turn": 21, "day": 4, "summary": "她生气了", "quotes": ["走开"]},
+                  {"turn": 22, "day": 5, "summary": "和好了", "quotes": []}],
+        "last_quotes": [], "open_action": "",
+    }
+    old["counters"]["last_chapter_turn"] = 20
+    old["counters"]["next"]["chapter"] = 2
+    old["counters"]["next"].pop("memory", None)
+    old["requests"] = {"chapter_summary": True, "prologue": False}
+    new = MG.state_v2_to_v3(old)
+    assert new["schema"] == 3 and "chapters" not in new["memory"] and "prologue" not in new["memory"]
+    by = {e["content"]: e for e in MEM.entries(new)}
+    assert by["我们是在雨夜认识的"]["layer"] == "years"
+    assert by["第二天一起吃了面"]["layer"] == "events"
+    assert by["吃面"]["summarized"] is True, "covered by the chapter"
+    assert by["她生气了"]["summarized"] is False and by["她生气了"]["quotes"] == ["走开"]
+    assert by["和好了"]["layer"] == "now" and by["她生气了"]["layer"] == "days"
+    assert new["requests"] == {"memory_summary": None, "memory_archive": None}
+    assert "last_chapter_turn" not in new["counters"] and new["counters"]["next"]["memory"] == 6
+    assert MG.state_v2_to_v3(new) is new, "a schema-3 state passes through"
+
+
 def keywords_are_bigrams():
     assert MEM.keywords("下雨天") == ["下雨", "雨天"]
     assert MEM.keywords("Rain 很大") == ["很大", "rain"]
@@ -242,4 +347,9 @@ check("a turn alone is an experience", an_alone_turn_is_an_experience)
 check("memory follows undo (commit works on a copy)", memory_follows_undo)
 check("time labels are lifelike", when_label_is_lifelike)
 check("keywords are two-character pieces", keywords_are_bigrams)
+check("a finished day asks for a summary", a_finished_day_asks_for_a_summary)
+check("a summary nobody asked for is refused", a_summary_nobody_asked_for_is_refused)
+check("ended events leave with the summary", ended_events_leave_with_the_summary)
+check("half a month asks for an archive", half_a_month_asks_for_an_archive)
+check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
 run("memories")

@@ -33,7 +33,7 @@ CLEAN_BELOW = 0.025
 TYPES = ("conversation", "experience", "action", "summary", "chapter")
 # 留在「刚刚」里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
-CONTENT_MAX = 200
+CONTENT_MAX = 300
 KEYWORDS_MAX = 32
 YOU_MAX = 60
 
@@ -244,6 +244,88 @@ def maintain(state):
 
 def _num(entry):
     return int(entry["id"][1:])
+
+
+# ---------------------------------------------------------------------------
+# daily summary and periodic archive (RimTalk's MemorySummarizer, written by
+# the model in a commit instead of a separate AI queue)
+
+SUMMARY_MAX = 80
+ARCHIVE_MAX = 60
+ARCHIVE_EVERY_DAYS = 15
+
+
+def summary_request(state):
+    """The oldest complete day with unsummarised 刚刚/这几天 conversations, or None.
+
+    "Complete" is a day before today: RimTalk groups by the oldest finished
+    period, so a day still going on is never summarised half-way.
+    """
+    today = state["clock"]["day"]
+    days = {}
+    for entry in entries(state):
+        if entry["layer"] in ("now", "days") and entry["type"] in KEEPS and not entry.get("summarized") and entry["at"]["day"] < today:
+            days.setdefault(entry["at"]["day"], []).append(entry["id"])
+    if not days:
+        return None
+    day = min(days)
+    return {"day": day, "ids": days[day]}
+
+
+def archive_request(state):
+    """Every ARCHIVE_EVERY_DAYS days: all unpinned 那些事 into one 那些年 chapter."""
+    last = state["memory"].get("last_archive_day", 1)
+    if state["clock"]["day"] - last < ARCHIVE_EVERY_DAYS:
+        return None
+    ids = [e["id"] for e in entries(state) if e["layer"] == "events" and not e.get("pinned")]
+    return {"ids": ids} if ids else None
+
+
+def sources(state, request):
+    """The entries a request names that still exist, oldest first."""
+    wanted = set((request or {}).get("ids") or [])
+    return [e for e in entries(state) if e["id"] in wanted]
+
+
+def _merge(state, layer, kind, text, picked, turn):
+    importance = sum(e["importance"] for e in picked) / len(picked) if picked else 0.5
+    latest = max(picked, key=lambda e: (CL.to_abs(e["at"]), _num(e))) if picked else None
+    entry = add(state, layer, kind, text, importance, at=latest["at"] if latest else None, turn=turn)
+    merged = []
+    for source in picked:
+        merged.extend(source["keywords"])
+    entry["keywords"] = list(dict.fromkeys(entry["keywords"] + merged))[:KEYWORDS_MAX]
+    entry["origin_ids"] = [e["id"] for e in picked]
+    return entry
+
+
+def apply_summary(state, request, text, turn):
+    """One day of 刚刚/这几天 becomes one 那些事 entry; the sources stay and keep fading."""
+    picked = sources(state, request)
+    entry = _merge(state, "events", "summary", text, picked, turn)
+    for source in picked:
+        source["summarized"] = True
+    return entry
+
+
+def apply_archive(state, request, text, turn):
+    """All unpinned 那些事 become one 那些年 chapter; the sources are consumed."""
+    picked = [e for e in sources(state, request) if e["layer"] == "events" and not e.get("pinned")]
+    entry = _merge(state, "years", "chapter", text, picked, turn)
+    gone = set(e["id"] for e in picked)
+    entries(state)[:] = [e for e in entries(state) if e["id"] not in gone]
+    state["memory"]["last_archive_day"] = state["clock"]["day"]
+    return entry
+
+
+def request_view(state, request):
+    """What the model reads to write a summary or archive: the sources, in order."""
+    if not request:
+        return None
+    out = {"sources": [{"id": e["id"], "when": when_label(state, e["at"]), "text": e["content"]} for e in sources(state, request)]}
+    if "day" in request:
+        out["day"] = request["day"]
+    return out
 
 
 # ---------------------------------------------------------------------------
