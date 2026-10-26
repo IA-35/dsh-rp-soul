@@ -174,7 +174,7 @@ def check(doc):
         # 旧版导出文件：多角色时代的按单人读进来，章节 / 前情换成她的四层记忆（和数据库迁移同一套规则）
         try:
             state, persona = migrate.upgrade(state, persona)
-        except (KeyError, TypeError, ValueError) as exc:
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
             fail([detail("$.session", "旧格式存档升级失败：%s" % exc, "这个文件没有写入任何数据", CONTENT_ERROR)])
     problems.extend(_state_problems(state))
     problems.extend(_persona_problems(persona))

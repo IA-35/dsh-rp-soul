@@ -129,7 +129,7 @@ def now_keeps_six():
 
 def days_are_forgotten_in_about_three_days():
     state, persona = start()
-    entry = MEM.add(state, "days", "conversation", "那天一起吃了面", 0.5)
+    entry = MEM.add(state, "days", "conversation", "那天一起吃了面", 0.5, summarized=True)
     start_minute = entry["t0"]
     assert 0.29 < MEM.activity(entry, start_minute + 24 * 60) < 0.30, MEM.activity(entry, start_minute + 24 * 60)
     assert MEM.activity(entry, start_minute + 71 * 60) > MEM.CLEAN_BELOW
@@ -158,9 +158,9 @@ def pinned_is_never_forgotten():
 
 def days_capacity_drops_the_least_active():
     state, persona = start()
-    first = MEM.add(state, "days", "conversation", "最早的事", 0.5)
+    first = MEM.add(state, "days", "conversation", "最早的事", 0.5, summarized=True)
     state["clock"] = CL.add_minutes(state["clock"], 60)
-    rest = [MEM.add(state, "days", "conversation", "第%d件事" % i, 0.5) for i in range(20)]
+    rest = [MEM.add(state, "days", "conversation", "第%d件事" % i, 0.5, summarized=True) for i in range(20)]
     report = MEM.maintain(state)
     assert first["id"] in report["forgotten"], report
     assert len(MEM.of_layer(state, "days")) == 20 and rest[-1] in MEM.entries(state)
@@ -407,6 +407,103 @@ def mentioning_it_makes_it_stronger():
     assert MEM.activity(strong, now) > MEM.activity(weak, now), (MEM.activity(strong, now), MEM.activity(weak, now))
 
 
+# ---------------------------------------------------------------------------
+# 审查发现的问题（回归测试）
+
+
+def a_long_absence_keeps_the_day_for_its_summary():
+    """回归：隔了五天才回来，走之前那天在总结前不能被忘掉。"""
+    state, persona = start()
+    state = play(state, persona, at(0), remember="走之前那晚我们聊到很晚")
+    state = play(state, persona, at(1), ops=[beat(), glance()])
+    state = play(state, persona, at(5 * 24), ops=[beat(), glance()])
+    request = state["requests"]["memory_summary"]
+    assert request and request["day"] == 1 and len(request["ids"]) == 3, request
+    texts = [e["content"] for e in MEM.sources(state, request)]
+    assert "走之前那晚我们聊到很晚" in texts, texts
+    state = play(state, persona, at(5 * 24 + 0.1), memory_summary="那晚我们聊到很晚，之后他好几天没来")
+    assert all(e["summarized"] for e in MEM.entries(state) if e["at"]["day"] == 1 and e["type"] in MEM.KEEPS)
+    state = play(state, persona, at(5 * 24 + 0.2), ops=[glance()])
+    assert not [e for e in MEM.entries(state) if e["at"]["day"] == 1 and e["type"] == "conversation"], \
+        "once summarised, the faded days are forgotten"
+
+
+def a_busy_day_is_summarised_whole():
+    """回归：一天聊了 26 回合，这几天的容量 20 不能在总结前挤掉其中几回合。"""
+    state, persona = start()
+    for i in range(26):
+        state = commit(state, persona, at(0.02 * i), ops=[{"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "忙%d" % i}]}])
+    state = play(state, persona, at(14), ops=[beat(), glance()])
+    request = state["requests"]["memory_summary"]
+    assert request and len(request["ids"]) == 26, (request and len(request["ids"]))
+
+
+def the_brief_stays_small_while_a_summary_is_due():
+    """回归：待交的总结 / 归档不能把 brief 撑过 6 KB、把记忆挤没。"""
+    from rp_soul_engine.projections import context as CX
+    state, persona = start()
+    for i in range(21):
+        MEM.add(state, "days", "conversation", "那天发生的第%d件事，" % i + "细节" * 55, 0.5, at={"day": 1, "minute": 600})
+    for i in range(50):
+        MEM.add(state, "events", "summary", "第%d天，" % i + "点滴" * 38, 0.5)
+    state["clock"] = {"day": 20, "minute": 600}
+    state["requests"]["memory_summary"] = MEM.summary_request(state)
+    state["requests"]["memory_archive"] = MEM.manual_archive_request(state)
+    brief = CX.brief(state, persona, cue="细节")
+    assert brief["size_bytes"] <= 6 * 1024, brief["size_bytes"]
+    assert brief["memories"], "memories survive the budget"
+    assert brief["memory_summary_sources"]["more"] == 9 and len(brief["memory_summary_sources"]["sources"]) == 12
+    full = CX.full(state, persona, cue="细节")
+    assert len(full["memory_summary_sources"]["sources"]) == 21, "the full context has every source"
+
+
+def migrating_in_the_morning_keeps_today_in_the_past():
+    """回归：早上 8 点升级，今天的旧回合不能落在中午（未来）、压过之后的新对话。"""
+    from rp_soul_engine import migrate as MG
+    state, persona = start()
+    old = copy.deepcopy(state)
+    old["schema"] = 2
+    old["clock"] = {"day": 1, "minute": 480}
+    old["memory"] = {"prologue": "", "chapters": [], "last_quotes": [], "open_action": "",
+                     "turns": [{"turn": i, "day": 1, "summary": "旧回合%d" % i, "quotes": []} for i in range(1, 9)]}
+    old["counters"]["last_chapter_turn"] = 0
+    old["counters"]["next"].pop("memory", None)
+    old["requests"] = {"chapter_summary": False, "prologue": False}
+    new = MG.state_v2_to_v3(old)
+    assert all(CL.to_abs(e["at"]) <= CL.to_abs(new["clock"]) for e in MEM.entries(new)), "nothing in the future"
+    new["real_at"] = T0
+    for i in range(3):
+        new = commit(new, persona, at(0.01 * (i + 1)), summary="新回合%d" % i)
+    rounds = [e["content"] for e in MEM.recent_rounds(new)]
+    assert rounds == ["新回合2", "新回合1", "新回合0"], rounds
+
+
+def saving_unchanged_fields_is_not_an_edit():
+    """回归：设置页只改 Pin / 备注，不该算「你改过」（RimTalk 给改过的 +0.3）。"""
+    state, persona = start()
+    entry = MEM.add(state, "days", "conversation", "下雨那天", 0.5)
+    MEM.edit(state, entry["id"], {"content": "下雨那天", "importance": 0.5, "keywords": list(entry["keywords"]),
+                                  "activity": 1.0, "note": "备注", "pinned": True})
+    assert entry["edited"] is False and entry["pinned"] is True and entry["note"] == "备注", entry
+    MEM.edit(state, entry["id"], {"content": "下雨那天他来了"})
+    assert entry["edited"] is True
+
+
+def long_ascii_words_are_clipped():
+    """回归：网址片段之类的长英文词截到 20 个字符，设置页才存得回去。"""
+    words = MEM.keywords("看 https://example.com/watch?v=dQw4w9WgXcQ supercalifragilisticexpialidocious")
+    assert words and all(len(w) <= MEM.KEYWORD_LEN for w in words), words
+
+
+def a_request_with_nothing_left_is_dropped():
+    state, persona = start()
+    entry = MEM.add(state, "events", "summary", "那些日子", 0.5)
+    state["requests"]["memory_archive"] = MEM.manual_archive_request(state)
+    entry["pinned"] = True
+    MEM.prune_requests(state)
+    assert state["requests"]["memory_archive"] is None, "an archive of only pinned 那些事 has nothing to write"
+
+
 def keywords_are_bigrams():
     assert MEM.keywords("下雨天") == ["下雨", "雨天"]
     assert MEM.keywords("Rain 很大") == ["很大", "rain"]
@@ -439,4 +536,11 @@ check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_
 check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)
 check("mentioning it makes it stronger", mentioning_it_makes_it_stronger)
+check("a long absence keeps the day for its summary", a_long_absence_keeps_the_day_for_its_summary)
+check("a busy day is summarised whole", a_busy_day_is_summarised_whole)
+check("the brief stays small while a summary is due", the_brief_stays_small_while_a_summary_is_due)
+check("migrating in the morning keeps today in the past", migrating_in_the_morning_keeps_today_in_the_past)
+check("saving unchanged fields is not an edit", saving_unchanged_fields_is_not_an_edit)
+check("long ASCII words are clipped", long_ascii_words_are_clipped)
+check("a request with nothing left is dropped", a_request_with_nothing_left_is_dropped)
 run("memories")

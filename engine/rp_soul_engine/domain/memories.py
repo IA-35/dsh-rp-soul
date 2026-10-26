@@ -36,6 +36,7 @@ TYPES = ("conversation", "experience", "action", "summary", "chapter")
 KEEPS = ("conversation", "experience")
 CONTENT_MAX = 300
 KEYWORDS_MAX = 32
+KEYWORD_LEN = 20                # 英文长词（网址片段之类）截到这么长，设置页才存得回去
 YOU_MAX = 60
 
 CJK_RUN = re.compile(r"[一-鿿]+")
@@ -59,7 +60,7 @@ def keywords(*texts):
             if len(run) == 1:
                 out.append(run)
             out.extend(run[i:i + 2] for i in range(len(run) - 1))
-        out.extend(word.lower() for word in ASCII_WORD.findall(text or ""))
+        out.extend(word.lower()[:KEYWORD_LEN] for word in ASCII_WORD.findall(text or ""))
     return list(dict.fromkeys(out))[:KEYWORDS_MAX]
 
 
@@ -195,6 +196,18 @@ def _leave_now(entry, at_minute):
     touch(entry, at_minute, entry["a0"])
 
 
+def _awaiting_summary(entry):
+    """A conversation or experience of 刚刚 / 这几天 that no daily summary has covered yet.
+
+    RimTalk summarises every in-game day on the hour, so 这几天 never fades
+    before its day is written down. Here the summary waits for the next commit,
+    which may come days later: until its day is summarised such an entry is
+    neither forgotten nor pushed out by capacity, or a long absence would erase
+    the day before you left without a trace.
+    """
+    return entry["layer"] in ("now", "days") and entry["type"] in KEEPS and not entry.get("summarized")
+
+
 def maintain(state):
     """Expire 刚刚, forget the faded, enforce capacities. Returns what moved/went."""
     now = CL.to_abs(state["clock"])
@@ -221,25 +234,28 @@ def maintain(state):
         else:
             items.remove(entry)
             report["dropped"].append(entry["id"])
-    # forgotten
-    faded = [e for e in items if e["layer"] != "now" and not e.get("pinned") and activity(e, now) < CLEAN_BELOW]
+    # forgotten (not before its day is summarised)
+    faded = [e for e in items if e["layer"] != "now" and not e.get("pinned") and not _awaiting_summary(e)
+             and activity(e, now) < CLEAN_BELOW]
     for entry in faded:
         items.remove(entry)
         report["forgotten"].append(entry["id"])
-    # 这几天 / 那些年 over capacity: the least active goes
-    for layer in ("days", "years"):
-        pool = [e for e in items if e["layer"] == layer and not e.get("pinned")]
-        pool.sort(key=lambda e: (activity(e, now), CL.to_abs(e["at"]), _num(e)))
-        for entry in pool[: max(0, len(pool) - CAPACITY[layer])]:
-            items.remove(entry)
-            report["forgotten"].append(entry["id"])
-    # 那些事 over capacity: the oldest moves into 那些年 as it is (no summary)
+    # 那些事 over capacity: the oldest moves into 那些年 as it is (no summary) -
+    # before 那些年's own capacity check, so 那些年 never ends a commit over 50
     pool = [e for e in items if e["layer"] == "events" and not e.get("pinned")]
     pool.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
     for entry in pool[: max(0, len(pool) - CAPACITY["events"])]:
         entry["layer"] = "years"
         touch(entry, now, activity(entry, now))
         report["moved"].append(entry["id"])
+    # 这几天 / 那些年 over capacity: the least active goes (not what awaits its summary)
+    for layer in ("days", "years"):
+        pool = [e for e in items if e["layer"] == layer and not e.get("pinned") and not _awaiting_summary(e)]
+        counted = sum(1 for e in items if e["layer"] == layer and not e.get("pinned"))
+        pool.sort(key=lambda e: (activity(e, now), CL.to_abs(e["at"]), _num(e)))
+        for entry in pool[: max(0, counted - CAPACITY[layer])]:
+            items.remove(entry)
+            report["forgotten"].append(entry["id"])
     return report
 
 
@@ -351,18 +367,23 @@ def edit(state, memory_id, changes):
         # 取消 Pin 时从当前值接着衰减，钉上时把当前值冻住
         touch(entry, now, activity(entry, now))
         entry["pinned"] = changes["pinned"]
-    if changes.get("content") is not None:
-        entry["content"] = changes["content"].strip()[:CONTENT_MAX]
+    # 只有真的改了「她记得什么」才算你改过（RimTalk 给改过的加分）；原样送回来的不算
+    content = changes.get("content")
+    if content is not None and content.strip()[:CONTENT_MAX] != entry["content"]:
+        entry["content"] = content.strip()[:CONTENT_MAX]
         if changes.get("keywords") is None:
             entry["keywords"] = keywords(entry["content"])
         entry["edited"] = True
-    if changes.get("importance") is not None:
-        entry["importance"] = round(max(0.0, min(1.0, changes["importance"])), 3)
+    importance = changes.get("importance")
+    if importance is not None and round(max(0.0, min(1.0, importance)), 3) != entry["importance"]:
+        entry["importance"] = round(max(0.0, min(1.0, importance)), 3)
         entry["edited"] = True
     if changes.get("keywords") is not None:
-        entry["keywords"] = list(dict.fromkeys(k.strip() for k in changes["keywords"] if k.strip()))[:KEYWORDS_MAX]
-        entry["edited"] = True
-    if changes.get("activity") is not None:
+        wanted = list(dict.fromkeys(k.strip()[:KEYWORD_LEN] for k in changes["keywords"] if k.strip()))[:KEYWORDS_MAX]
+        if wanted != entry["keywords"]:
+            entry["keywords"] = wanted
+            entry["edited"] = True
+    if changes.get("activity") is not None and abs(changes["activity"] - activity(entry, now)) > 1e-6:
         touch(entry, now, max(0.0, min(1.0, changes["activity"])))
     if changes.get("note") is not None:
         entry["note"] = changes["note"]
@@ -376,11 +397,41 @@ def remove(state, memory_id):
     return entry
 
 
-def request_view(state, request):
+def prune_requests(state):
+    """Drop a pending summary / archive whose sources are all gone (deleted or
+    pinned on the settings page), so the model is never asked to write one
+    from nothing."""
+    requests = state["requests"]
+    if requests.get("memory_summary") and not sources(state, requests["memory_summary"]):
+        requests["memory_summary"] = None
+    archive = requests.get("memory_archive")
+    if archive and not [e for e in sources(state, archive) if e["layer"] == "events" and not e.get("pinned")]:
+        requests["memory_archive"] = None
+
+
+BRIEF_SOURCES = 12
+BRIEF_SOURCE_TEXT = 30
+
+
+def request_view(state, request, compact=False):
     """What the model reads to write a summary or archive: the sources, in order."""
     if not request:
         return None
-    out = {"sources": [{"id": e["id"], "when": when_label(state, e["at"]), "text": e["content"]} for e in sources(state, request)]}
+    picked = sources(state, request)
+    if compact:
+        # brief 里一条一行「时间 · 内容」，截短
+        shown = picked[-BRIEF_SOURCES:]
+        out = {"sources": [
+            "%s · %s" % (when_label(state, e["at"]),
+                         e["content"] if len(e["content"]) <= BRIEF_SOURCE_TEXT else e["content"][:BRIEF_SOURCE_TEXT - 1] + "…")
+            for e in shown
+        ]}
+    else:
+        shown = picked
+        out = {"sources": [{"id": e["id"], "when": when_label(state, e["at"]), "text": e["content"]} for e in shown]}
+    if compact and len(shown) < len(picked):
+        # brief 只有 6 KB：多的那些在 depth=full 里
+        out["more"] = len(picked) - len(shown)
     if "day" in request:
         out["day"] = request["day"]
     return out
@@ -496,6 +547,11 @@ def inject(state, cue="", total=TOTAL_BRIEF):
             item["pinned"] = True
         rows.append(item)
     return rows
+
+
+def cued_by_words(entry, words):
+    """Whether your own words touch this memory (a recall, not just a context slot)."""
+    return bool(words) and _keyword_score(entry, keywords(words)) > 0
 
 
 def reinforce(state, ids):

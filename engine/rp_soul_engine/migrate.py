@@ -155,8 +155,13 @@ def keep_of(state):
 
 
 def _entry(state, layer, kind, text, importance, day, a0_at, turn=0, **extra):
-    """A migrated entry: starts fading from the migration, not from the day it happened."""
-    at = {"day": max(1, day), "minute": UNKNOWN_MINUTE}
+    """A migrated entry: starts fading from the migration, not from the day it happened.
+
+    Today's turns sit at the current minute, never later: an entry in the future
+    would outrank the conversations that follow the upgrade."""
+    day = max(1, day)
+    minute = min(UNKNOWN_MINUTE, state["clock"]["minute"]) if day >= state["clock"]["day"] else UNKNOWN_MINUTE
+    at = {"day": day, "minute": minute}
     entry = MEM.add(state, layer, kind, text, importance, at=at, turn=turn, **extra)
     MEM.touch(entry, a0_at, 1.0)
     return entry
@@ -177,6 +182,7 @@ def state_v2_to_v3(state):
     s = copy(state)
     memory = s["memory"]
     chapters = memory.pop("chapters", None) or []
+    chapters = [c for c in chapters if isinstance(c, dict)]
     prologue = (memory.pop("prologue", "") or "").strip()
     counters = s["counters"]
     covered = counters.pop("last_chapter_turn", 0) or 0
@@ -192,7 +198,7 @@ def state_v2_to_v3(state):
     for chapter in chapters:
         _entry(s, "events", "summary", chapter.get("summary") or "", 0.5, chapter.get("day") or 1, now,
                turn=chapter.get("to_turn") or 0)
-    turns = [t for t in memory.get("turns") or [] if (t.get("summary") or "").strip()]
+    turns = [t for t in memory.get("turns") or [] if isinstance(t, dict) and (t.get("summary") or "").strip()]
     today = [t for t in turns if t.get("day") == s["clock"]["day"]][-MEM.CAPACITY["now"]:]
     for item in turns:
         layer = "now" if item in today else "days"

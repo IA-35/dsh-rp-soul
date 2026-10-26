@@ -207,9 +207,10 @@ def brief(state, persona, save=None, cue=""):
     for key in ("pace", "explicitness"):
         if state["preferences"].get(key) != "standard":
             context["preferences"][key] = state["preferences"][key]
-    # 引擎要她写每日总结 / 归档时，把要写的那些记忆一起给出来（不论 brief 还是 full）
+    # 引擎要她写每日总结 / 归档时，把要写的那些记忆一起给出来；brief 里截短、最多 15 条，
+    # 完整的在 full 里（有待交的总结时引擎自己也会给 full）
     for key in ("memory_summary", "memory_archive"):
-        view = MEM.request_view(state, state["requests"].get(key))
+        view = MEM.request_view(state, state["requests"].get(key), compact=True)
         if view is not None:
             context[key + "_sources"] = view
     _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency"))
@@ -276,6 +277,10 @@ def full(state, persona, save=None, cue=""):
     context["player_facts"] = player_facts(state, 30)
     context["events"] = _events(state)
     context["memories"] = MEM.inject(state, cue, MEM.TOTAL_FULL)
+    for key in ("memory_summary", "memory_archive"):
+        view = MEM.request_view(state, state["requests"].get(key))
+        if view is not None:
+            context[key + "_sources"] = view
     _fit_full(context)
     return context
 

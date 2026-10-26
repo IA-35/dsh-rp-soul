@@ -406,8 +406,9 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     memory["open_action"] = commit["open_action"]
     memory["last_quotes"] = list(commit["quotes"])
     # 她的记忆：你这句话勾起来的那几条算「被想起」，变牢一点（和 soul_state 注入时同一套挑法）
+    # 只有真被你的话碰到的才算想起：否则排在前面的几条每回合都被续命，永远不会淡
     _rounds, recalled = MEM.select(base, commit["player_input"], MEM.TOTAL_BRIEF)
-    MEM.reinforce(work, [e["id"] for e in recalled])
+    MEM.reinforce(work, [e["id"] for e in recalled if MEM.cued_by_words(e, commit["player_input"])])
     # 这一回合留在「刚刚」，然后各层按真实时间老化、迁移、遗忘
     remembered = MEM.capture(work, ctx, commit)
     forgetting = MEM.maintain(work)

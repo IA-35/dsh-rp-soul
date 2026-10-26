@@ -579,7 +579,9 @@ ok(memPut !== undefined, '11. 保存发 PUT /engine/memory');
 eq(memPut.body.memory_id, 'm2', '11. PUT 带 memory_id');
 eq(memPut.body.content, '下雨那天他把伞给了我', '11. PUT 带改后的内容');
 eq(memPut.body.revision, 11, '11. PUT 用面板里的 revision');
-eq(memPut.body.keywords, ['下雨'], '11. 关键词按逗号拆回数组');
+eq(memPut.body.keywords, undefined, '11. 没改的关键词不送（原样送回会被当成你改过）');
+eq(memPut.body.importance, undefined, '11. 没改的重要度不送');
+eq(memPut.body.pinned, undefined, '11. 没改的 Pin 不送');
 // 立即总结
 calls.length = 0;
 findButton(memEdited, '立即总结').props.onClick();

@@ -342,7 +342,7 @@ def choose_depth(state, results, failed_before=False):
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
-    if state["requests"].get("memory_archive") or state["turn"] % 5 == 0:
+    if state["requests"].get("memory_summary") or state["requests"].get("memory_archive") or state["turn"] % 5 == 0:
         return "full"
     return "brief"
 
@@ -1131,6 +1131,8 @@ def _memory_write(ctx, command, spec, payload, change):
     def handler(conn, session, now):
         state = session["state"]
         receipt, extra = change(conn, state, payload, now)
+        # 删掉 / 钉住之后，待交的总结或归档要是没东西可写了就撤掉
+        MEM.prune_requests(state)
         state["revision"] = state.get("revision", 0) + 1
         repo.update_session(conn, state, now)
         out = {"revision": state["revision"], "turn": state["turn"], "receipt": receipt}
