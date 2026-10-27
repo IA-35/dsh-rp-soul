@@ -762,7 +762,52 @@ def the_facts_page_lists_what_is_known(s):
 
 
 check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
+def deleting_a_fact_takes_its_thoughts_with_it(s):
+    """常识库能手动删：删了事实，指着它的想法一起走，下一回合不会卡在校验上。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        her_fact("stare", "她注意到你一直盯着她看"),
+        {"op": "add_thought", "label": "被人盯着看", "delta": -8, "basis_fact_id": "f1"},
+        npc_action(),
+    ])
+    rows = s.ok("debug-facts", {"session_id": sid})["rows"]
+    target = [r for r in rows if r["key"] == "stare"]
+    assert target, rows
+    out = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": target[0]["id"]})
+    assert out["removed"]["text"] == "她注意到你一直盯着她看" and out["dropped_thoughts"] == 1, out
+    assert "已删除" in out["receipt"], out
+    after = s.ok("debug-facts", {"session_id": sid})
+    assert all(r["id"] != target[0]["id"] for r in after["rows"]), after["rows"]
+    assert out["revision"] == rev + 1, out
+    mood = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    assert all(t["label"] != "被人盯着看" for t in mood["thoughts"]), mood["thoughts"]
+    # 下一回合照常能提交（想法依据的事实已经不在了，校验不该炸）
+    play(s, sid, out["revision"], ops=[npc_action(significant=False)])
+    err = s.fail("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"),
+                                 "expected_revision": out["revision"] + 1, "fact_id": target[0]["id"]})
+    assert err["code"] == "NOT_FOUND", err
+
+
 check("the facts page lists what is known", with_sc(the_facts_page_lists_what_is_known))
+check("deleting a fact takes its thoughts with it", with_sc(deleting_a_fact_takes_its_thoughts_with_it))
+
+
+def undo_brings_a_deleted_fact_back(s):
+    """删事实会进 fact_journal，撤回那一回合就回来了。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
+    rev, _ = play(s, sid, rev, ops=[npc_action()])
+    fid = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["key"] == "rain"][0]["id"]
+    rev = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": fid})["revision"]
+    assert all(r["id"] != fid for r in s.ok("debug-facts", {"session_id": sid})["rows"])
+    s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})
+    back = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
+    assert back and back[0]["key"] == "rain", back
+
+
+check("undo brings a deleted fact back", with_sc(undo_brings_a_deleted_fact_back))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
 check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))

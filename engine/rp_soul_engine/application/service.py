@@ -1411,6 +1411,49 @@ def debug_facts(ctx, payload):
     }
 
 
+def delete_fact(ctx, payload):
+    """设置页「常识库」：手动删一条事实（留审计）。"""
+    from ..domain import facts as FA
+    from ..domain import mood as MO
+
+    payload = validate(specs.DELETE_FACT, payload)
+
+    def handler(conn, session, now):
+        state = session["state"]
+        fid = payload["fact_id"]
+        work = FA.working_copy(state)
+        removed = FA.drop(work, fid)
+        if removed is None:
+            raise AppError(NOT_FOUND, "没有这条事实：%s" % fid,
+                           [detail("$.fact_id", "事实不存在", "用 debug-facts 看当前条目", NOT_FOUND)])
+        # 指着这条事实的记忆类想法要一起删：事实没了一起，invariants 会在下一次提交时
+        # 因为「想法依据的事实不存在」把整回合拒掉。
+        cid_of = {}
+        for cid in sorted(work["characters"]):
+            mood = work["characters"][cid].get("mood") or {}
+            for thought in list(mood.get("thoughts") or []):
+                if thought.get("source_fact_id") == fid:
+                    cid_of[thought["id"]] = (cid, thought)
+        for tid in sorted(cid_of):
+            cid, thought = cid_of[tid]
+            MO.remove_thought(work, cid, tid)
+            repo.log_thought_delete(conn, state["session_id"], work["turn"], cid, tid, thought["label"],
+                                    thought.get("delta"), "依据的事实被删了", now)
+        work["revision"] = state.get("revision", 0) + 1
+        repo.write_fact_changes(conn, state["session_id"], work["turn"], work["facts"])
+        work["facts"] = repo.FactSource(conn, state["session_id"])
+        repo.update_session(conn, work, now)
+        return {
+            "revision": work["revision"],
+            "turn": work["turn"],
+            "removed": {"id": removed["id"], "text": removed["text"]},
+            "dropped_thoughts": len(cid_of),
+            "receipt": "已删除「%s」%s" % (removed["text"][:20], "" if not cid_of else "（连带 %d 条想法）" % len(cid_of)),
+        }
+
+    return session_write(ctx, "delete-fact", payload, handler)
+
+
 def debug_activity(ctx, payload):
     from ..domain import clock as CL
 

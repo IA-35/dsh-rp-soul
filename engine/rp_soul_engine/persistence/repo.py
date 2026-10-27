@@ -160,15 +160,26 @@ class FactSource(FA.FactsAPI):
 
 
 def write_fact_changes(conn, session_id, turn, view):
-    """Store a commit's new and changed facts; journal what they were."""
+    """Store a commit's new and changed facts, drop the deleted ones; journal
+    what they were (a deleted fact journals its last version, so undo brings
+    it back)."""
     changed = view.changed_facts()
-    if not changed:
-        return
-    conn.executemany(FACT_INSERT, [fact_row(session_id, f) for f in changed])
-    conn.executemany(
-        "INSERT OR IGNORE INTO fact_journal(session_id, turn, id, before) VALUES(?,?,?,?)",
-        [(session_id, turn, f["id"], None if view.before[f["id"]] is None else _dump(view.before[f["id"]])) for f in changed],
-    )
+    if changed:
+        conn.executemany(FACT_INSERT, [fact_row(session_id, f) for f in changed])
+        conn.executemany(
+            "INSERT OR IGNORE INTO fact_journal(session_id, turn, id, before) VALUES(?,?,?,?)",
+            [(session_id, turn, f["id"], None if view.before[f["id"]] is None else _dump(view.before[f["id"]])) for f in changed],
+        )
+    dropped = view.dropped()
+    if dropped:
+        conn.executemany(
+            "INSERT OR IGNORE INTO fact_journal(session_id, turn, id, before) VALUES(?,?,?,?)",
+            [(session_id, turn, f["id"], _dump(f)) for f in dropped],
+        )
+        conn.executemany(
+            "DELETE FROM facts WHERE session_id=? AND id=?",
+            [(session_id, f["id"]) for f in dropped],
+        )
 
 
 def revert_turn_facts(conn, session_id, turn):

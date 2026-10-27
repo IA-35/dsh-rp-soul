@@ -117,15 +117,21 @@ class FactView(FactsAPI):
 
     New facts and edited copies live in `changed`; the source is never
     touched. `before` keeps the original of every edited fact (None for new
-    ones) so storage can journal the turn for undo.
+    ones) so storage can journal the turn for undo. `removed` holds the facts
+    the settings page deleted (id -> the fact), so storage can drop their rows:
+    RUNTIME_PROTOCOL 7 says play never deletes a fact, but a person deleting
+    one by hand is not play.
     """
 
     def __init__(self, source):
         self.source = DictSource(source) if isinstance(source, dict) else source
         self.changed = {}
         self.before = {}
+        self.removed = {}
 
     def get(self, fid, default=None):
+        if fid in self.removed:
+            return default
         if fid in self.changed:
             return self.changed[fid]
         fact = self.source.get(fid)
@@ -147,8 +153,22 @@ class FactView(FactsAPI):
             self.changed[fid] = copy(original)
         return self.changed[fid]
 
+    def drop(self, fid):
+        """Delete a fact from this view. Returns the fact, or None if unknown."""
+        fact = self.get(fid)
+        if fact is None:
+            return None
+        self.changed.pop(fid, None)
+        self.before.pop(fid, None)
+        self.removed[fid] = fact
+        return fact
+
+    def dropped(self):
+        """The facts deleted through this view, in creation order."""
+        return [self.removed[fid] for fid in sorted(self.removed, key=lambda i: int(i[1:]))]
+
     def _merge(self, found, keep):
-        out = {f["id"]: f for f in found if f["id"] not in self.changed}
+        out = {f["id"]: f for f in found if f["id"] not in self.changed and f["id"] not in self.removed}
         for fid, fact in self.changed.items():
             if keep(fact):
                 out[fid] = fact
@@ -167,7 +187,7 @@ class FactView(FactsAPI):
         return self._merge(self.source.spreading(), lambda f: f.get("spreading") and f["visibility"] != "inner")
 
     def player_ranked(self, player, present_ids, present_names, recent_turn, limit=None, exclude=()):
-        skip = set(exclude) | set(self.changed)
+        skip = set(exclude) | set(self.changed) | set(self.removed)
         wanted = None if limit is None else limit + len(self.changed)
         found = self.source.player_ranked(player, present_ids, present_names, recent_turn, wanted, tuple(sorted(skip)))
         found += [f for fid, f in self.changed.items() if knows(f, player) and fid not in exclude]
@@ -183,6 +203,8 @@ class FactView(FactsAPI):
         if isinstance(self.source, DictSource):
             merged = dict(self.source.facts)
             merged.update(self.changed)
+            for fid in self.removed:
+                merged.pop(fid, None)
             return {fid: merged[fid] for fid in sorted(merged, key=lambda i: int(i[1:]))}
         return self
 
@@ -192,6 +214,14 @@ def edit(state, fid):
     (owned by the caller) is changed in place."""
     facts = state["facts"]
     return facts[fid] if isinstance(facts, dict) else facts.edit(fid)
+
+
+def drop(state, fid):
+    """Delete a fact (settings page). Returns the fact, or None if unknown."""
+    facts = state["facts"]
+    if isinstance(facts, dict):
+        return facts.pop(fid, None)
+    return facts.drop(fid)
 
 
 def working_copy(state):

@@ -162,6 +162,8 @@ DEBUG_MEMORIES = _obj({"session_id": F(SESSION_ID)}, "debug-memories")
 
 DEBUG_FACTS = _obj({"session_id": F(SESSION_ID)}, "debug-facts")
 
+DELETE_FACT = _obj(dict(session_write_fields(), fact_id=F(S.Id())), "delete-fact")
+
 EDIT_MEMORY = _obj(
     dict(
         session_write_fields(),
