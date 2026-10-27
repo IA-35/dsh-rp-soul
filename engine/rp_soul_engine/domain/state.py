@@ -92,8 +92,9 @@ def real_span(state, now):
     Time only goes forward: a wall clock that was adjusted backwards settles as
     zero rather than rewinding the story.
     """
-    anchor = CL.parse_iso(state.get("real_at"))
-    if CL.parse_iso(now) is None or anchor is None:
+    # 读的是库里已有的列，坏值当「没有锚点」，不能让整局从此每回合都抛。
+    anchor = CL.parse_iso_loose(state.get("real_at"))
+    if CL.parse_iso_loose(now) is None or anchor is None:
         return 0, dict(state["clock"]), state.get("real_at") or now
     minutes = max(0, CL.real_minutes_between(state["real_at"], now))
     settled_at = (anchor + timedelta(minutes=minutes)).isoformat()

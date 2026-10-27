@@ -21,7 +21,9 @@ from ..domain import facts as FA
 from ..domain import memories as MEM
 from ..errors import NOT_FOUND, UNSUPPORTED_VERSION, AppError, detail
 
-IDEMPOTENCY_KEEP = 1000
+IDEMPOTENCY_KEEP = 200
+# 每条幂等记录都躺着一份 6~20KB 的完整 context：1000 条能撑到 20MB，
+# 而真正会被重试的窗口只有最近几十次请求，砍到 200 条足够且省下十几 MB。
 
 # Every session is opened from a persona pack; the column stays for the
 # session list's "how was this opened" line.

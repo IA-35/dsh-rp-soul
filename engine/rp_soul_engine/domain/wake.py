@@ -78,7 +78,7 @@ def _base(state, now=None):
     carry neither `real_at` nor `real_start`; the story clock then stands on
     the moment we are asked, which is what the next turn will assume anyway.
     """
-    base = CL.parse_iso(state.get("real_at")) or CL.parse_iso(state.get("real_start"))
+    base = CL.parse_iso_loose(state.get("real_at")) or CL.parse_iso_loose(state.get("real_start"))
     return base or now
 
 
@@ -136,7 +136,7 @@ def _event_candidates(state):
 def _miss_you_candidates(state, hours, streak=0, now=None, last_wake_at=None):
     if not hours:
         return []
-    player_at = CL.parse_iso(state.get("last_player_at"))
+    player_at = CL.parse_iso_loose(state.get("last_player_at"))
     base = player_at or _base(state, now)
     if base is None:
         return []

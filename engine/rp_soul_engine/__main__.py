@@ -89,8 +89,14 @@ def execute_line(ctx_factory, line):
     """Run one request. Returns (envelope dict, exit code). Never raises."""
     request_id = None
     ctx = None
+    # 解析是否已经走过。ValueError 只有在解析**之前**抛出才是「JSON 不合法」：
+    # loads_strict 内部已把 json 的 ValueError 转成 AppError，所以解析之后的
+    # ValueError 一定是 handler（clock.parse_iso / mood.add_thought / …）抛的，
+    # 不能再谎报成 JSON 错误，否则模型拿到完全误导的提示、真错误也不进日志。
+    parsed = False
     try:
         request = loads_strict(line, "请求")
+        parsed = True
         if not isinstance(request, dict):
             raise AppError(INVALID_INPUT, "每一行必须是一个 JSON 对象", [detail("$", "顶层应为对象", None)])
         request_id = request.get("id")
@@ -128,8 +134,18 @@ def execute_line(ctx_factory, line):
             request_id = salvage_id(line)
         return {"id": request_id, "ok": False, "data": None, "error": body}, exit_code_for(err.code)
     except ValueError as err:
-        # The line never parsed, so the id is salvaged by hand: a caller that
-        # cannot match the reply to its request waits forever otherwise.
+        if parsed:
+            # handler 里抛的 ValueError：真错误，按内部错误处理并留日志。
+            error_id = "E" + time.strftime("%Y%m%d%H%M%S") + os.urandom(3).hex()
+            log = None
+            if ctx is not None:
+                log = log_internal_error(ctx.data_dir, error_id, traceback.format_exc())
+            hint = "状态没有改变；查看日志 %s" % log if log else "状态没有改变"
+            body = {"code": INTERNAL_ERROR, "message": "未预期错误（编号 %s）" % error_id,
+                    "details": [detail("$", "%s: %s" % (type(err).__name__, err), hint)],
+                    "error_id": error_id, "log": log, "next_request_id": new_request_id()}
+            return {"id": request_id, "ok": False, "data": None, "error": body}, EXIT_INTERNAL
+        # 走到这里说明请求行根本没解析成功。
         body = {"code": INVALID_INPUT, "message": "输入不是合法 JSON：%s" % err,
                 "details": [detail("$", str(err), "检查引号与转义")], "next_request_id": new_request_id()}
         return {"id": salvage_id(line) if request_id is None else request_id, "ok": False, "data": None,

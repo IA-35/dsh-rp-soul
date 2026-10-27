@@ -413,10 +413,16 @@ def ensure_schema(conn, backups_dir):
         if backup_file is not None:
             restore(conn, backup_file)
             restored = True
+        # 文案不能说谎：没备份（库里还没有 schema_version，是全新库）时就说没可恢复的。
+        hint = "不会加载任何会话；换回可用版本或把错误报告给维护者"
+        if restored:
+            message = "数据库从 schema %d 迁移到 %d 失败，已恢复迁移前的状态" % (report["from"], DB_SCHEMA_VERSION)
+        else:
+            message = "数据库从 schema %d 迁移到 %d 失败；这是全新库，没有可恢复的备份" % (report["from"], DB_SCHEMA_VERSION)
         raise AppError(
             MIGRATION_FAILED,
-            "数据库从 schema %d 迁移到 %d 失败，已恢复迁移前的状态" % (report["from"], DB_SCHEMA_VERSION),
-            [detail("$.db", "%s: %s" % (type(exc).__name__, exc), "不会加载任何会话；换回可用版本或把错误报告给维护者")],
+            message,
+            [detail("$.db", "%s: %s" % (type(exc).__name__, exc), hint)],
             backup=backup_file,
             restored=restored,
         )

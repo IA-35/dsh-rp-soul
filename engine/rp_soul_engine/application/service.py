@@ -118,6 +118,8 @@ def session_write(ctx, command, payload, handler):
         response["replayed"] = False
         repo.idem_put(conn, payload["session_id"], payload["request_id"], digest, response, now)
         conn.execute("COMMIT")
+        # 事务成了才落盘日记文件；文件失败不影响已提交的局面。
+        _flush_journal(ctx)
         return response
     except BaseException:
         if conn.in_transaction:
@@ -284,12 +286,17 @@ def get_context(ctx, payload):
     # `persona` is the file the user is editing right now. Sending it here is
     # what makes an edit visible without restarting the story: the persona is
     # static facts, the story is not, and only the former gets replaced.
-    session = repo.load_session(conn, payload["session_id"])
-    state, persona = session["state"], session["persona"]
     persona_report = None
-    if payload["persona"] is not None:
+    if payload["persona"] is None:
+        session = repo.load_session(conn, payload["session_id"])
+        state, persona = session["state"], session["persona"]
+    else:
+        # 写锁必须在读之前拿：_refresh_persona 会把整份 state blob 写回去，
+        # 无锁读到的快照会覆盖掉这中间别人刚提交的内容。
         db.begin_write(conn)
         try:
+            session = repo.load_session(conn, payload["session_id"])
+            state, persona = session["state"], session["persona"]
             persona, persona_report = _refresh_persona(conn, state, persona, payload["persona"], now_iso())
             conn.execute("COMMIT")
         except BaseException:
@@ -410,7 +417,7 @@ def _commit_turn(ctx, payload):
                 raise
             results.append(result)
         _engine_outcomes_last(results)
-        _write_journal(ctx, results)
+        _plan_journal(ctx, results)
         turn.close_record(state, results)
         repo.update_session(conn, state, now, turns_since_save=unsaved)
         depth = choose_depth(state, results, failed_before)
@@ -426,25 +433,44 @@ def _commit_turn(ctx, payload):
     return session_write(ctx, "commit-turn", payload, handler)
 
 
-def _write_journal(ctx, results):
-    """Write the month's diary to her journal folder, inside the transaction.
+def _plan_journal(ctx, results):
+    """排好月份日记的落盘任务，真正写文件留到 COMMIT 之后。
 
-    One file per batch: 这几天 fills up, the month is written as a whole, and the
-    entries are cleared, so the ranges never overlap. Only the real commit
-    reaches here (never the undo baseline), so undoing or replaying a record
-    does not write the file twice.
+    分层：DB 是事务性的，文件系统不是。写在 COMMIT 之前的话，事务一回滚就留下
+    孤儿文件；写盘失败（磁盘满/无权限）又会把整回合判失败，而模型无从修复。
+    所以这里只算路径、挂到 ctx 上，由 session_write 在 COMMIT 之后调用
+    _flush_journal 落盘 —— 文件写失败只是少一份日记，回合照样算数。
     """
     written = [r["journaled"] for r in results if r.get("journaled")]
     if not written:
         return
     folder = paths.journal_dir(ctx.data_dir)
-    os.makedirs(folder, exist_ok=True)
+    pending = ctx.__dict__.setdefault("_journal_pending", [])
     for entry in written:
         first, last = entry["lines"][0]["day"], entry["lines"][-1]["day"]
         path = os.path.join(folder, "journal-%04d-%04d.md" % (first, last))
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(entry["markdown"])
         entry["path"] = path
+        pending.append((path, entry["markdown"]))
+
+
+def _flush_journal(ctx):
+    """COMMIT 之后把排好的日记写到盘上。失败不抛，只记一条日志。"""
+    pending = getattr(ctx, "_journal_pending", None)
+    if not pending:
+        return
+    ctx._journal_pending = []
+    folder = paths.journal_dir(ctx.data_dir)
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        return
+    for path, markdown in pending:
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(markdown)
+        except OSError:
+            # 日记是副本，写不进去不该让已提交的回合失败。
+            continue
 
 
 def _record_end(state, results):
@@ -1022,6 +1048,11 @@ def next_wake(ctx, payload):
     # The story clock stands on the last settled turn; a save without one (an
     # older build, or one migrated from the old engine) stands on right now.
     now = CL.parse_iso(payload["now"]) if payload["now"] else CL.parse_iso(now_iso())
+    if now is not None and now.utcoffset() is None:
+        # naive 的 now 和带时区的候选时刻一相减就 TypeError，几秒内可反复触发；
+        # 和 last_wake_at 一样在入口就挡下来。
+        raise AppError(INVALID_INPUT, "当前时刻必须是带时区的 ISO 时间",
+                       [detail("$.now", "时间格式不合法或缺少时区", "例如 2026-10-26T13:00:00+08:00", INVALID_INPUT)])
     try:
         last_wake = CL.parse_iso(payload["last_wake_at"])
         if last_wake is not None and last_wake.utcoffset() is None:
@@ -1120,7 +1151,8 @@ def debug_delete_thought(ctx, payload):
                 suppressed = True
         work["revision"] = state.get("revision", 0) + 1
         if suppressed:
-            repo.write_fact_changes(conn, session["session_id"], work["turn"], work["facts"])
+            # 同样记 turn 0：手动抑制标记不属于任何回合，撤销那回合不该把它取消掉。
+            repo.write_fact_changes(conn, session["session_id"], 0, work["facts"])
         work["facts"] = repo.FactSource(conn, session["session_id"])
         repo.update_session(conn, work, now)
         repo.log_thought_delete(conn, session["session_id"], work["turn"], cid, removed["id"], removed["label"],
@@ -1440,7 +1472,9 @@ def delete_fact(ctx, payload):
             repo.log_thought_delete(conn, state["session_id"], work["turn"], cid, tid, thought["label"],
                                     thought.get("delta"), "依据的事实被删了", now)
         work["revision"] = state.get("revision", 0) + 1
-        repo.write_fact_changes(conn, state["session_id"], work["turn"], work["facts"])
+        # 记在 turn 0：这是在设置页里手动删的，不属于任何一回合。
+        # 记成当前回合的话，主人撤销那一回合就会把删掉的事实又「恢复」回来。
+        repo.write_fact_changes(conn, state["session_id"], 0, work["facts"])
         work["facts"] = repo.FactSource(conn, state["session_id"])
         repo.update_session(conn, work, now)
         return {

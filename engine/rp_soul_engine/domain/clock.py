@@ -18,10 +18,29 @@ def to_abs(clock):
 
 
 def parse_iso(text):
-    """Parse one of the engine's stored ISO timestamps (None stays None)."""
+    """Parse one of the engine's stored ISO timestamps (None stays None).
+
+    Strict on purpose: the sidecar validates user-supplied times with it, and
+    a bad value has to come back as INVALID_INPUT instead of silently None.
+    Reading a *stored* column is a different matter — see parse_iso_loose.
+    """
     if not text:
         return None
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+
+
+def parse_iso_loose(text):
+    """Like parse_iso, but unreadable input is None instead of an exception.
+
+    For columns already sitting in the database: an imported save carrying a
+    bad `real_at` made every single settlement raise, and import never checks
+    it, so one bad export bricked the game for good. Unreadable means "no
+    anchor", which every caller already handles.
+    """
+    try:
+        return parse_iso(text)
+    except (TypeError, ValueError):
+        return None
 
 
 def real_minutes_between(earlier, later):

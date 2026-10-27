@@ -45,6 +45,8 @@ class Context:
         self._prepared = False
         self._conn = None
         self.schema_report = None
+        # 日记 .md 的待写队列：事务提交之后才真正落盘，避免回滚留孤儿文件。
+        self._journal_pending = []
 
     # -- data directory ----------------------------------------------------
 

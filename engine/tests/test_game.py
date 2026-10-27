@@ -793,8 +793,8 @@ check("the facts page lists what is known", with_sc(the_facts_page_lists_what_is
 check("deleting a fact takes its thoughts with it", with_sc(deleting_a_fact_takes_its_thoughts_with_it))
 
 
-def undo_brings_a_deleted_fact_back(s):
-    """删事实会进 fact_journal，撤回那一回合就回来了。"""
+def undo_does_not_resurrect_a_deleted_fact(s):
+    """设置页手动删的事实不属于任何回合：撤回上一回合不该把它变回来。"""
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
     rev, _ = play(s, sid, rev, ops=[npc_action()])
@@ -802,12 +802,12 @@ def undo_brings_a_deleted_fact_back(s):
     rev = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
                                "fact_id": fid})["revision"]
     assert all(r["id"] != fid for r in s.ok("debug-facts", {"session_id": sid})["rows"])
-    s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})
-    back = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
-    assert back and back[0]["key"] == "rain", back
+    rev = s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})["revision"]
+    still = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
+    assert still == [], still
 
 
-check("undo brings a deleted fact back", with_sc(undo_brings_a_deleted_fact_back))
+check("undo does not resurrect a deleted fact", with_sc(undo_does_not_resurrect_a_deleted_fact))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
 check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))

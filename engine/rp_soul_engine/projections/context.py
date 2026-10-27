@@ -348,12 +348,35 @@ def _fit(context, limit, order):
     if size_of(context) <= limit:
         context["size_bytes"] = size_of(context)
         return
+    # 每 pop 一次都重新全量 dumps 是 O(n²)：候选列表长、上限又小的时候，
+    # 一回合能白白烧掉上百次序列化。这里改成二分找「这一项最多能留几个」——
+    # 判定单调（留得越少越小），一次二分只要 log(n) 次测量，
+    # 而与原来的逐条 pop 结果一致：先砍 key 在 order 里靠前的，砍到不能再砍再换下一项。
     for key in order:
-        value = context.get(key)
-        if isinstance(value, dict):
-            context[key] = {}
-        while isinstance(context.get(key), list) and context[key] and size_of(context) > limit:
-            context[key].pop()
         if size_of(context) <= limit:
             break
+        if isinstance(context.get(key), dict):
+            context[key] = {}
+            continue
+        lst = context.get(key)
+        if not isinstance(lst, list) or not lst:
+            continue
+        total = len(lst)
+
+        def size_with(keep):
+            context[key] = lst[:keep]
+            return size_of(context)
+
+        context[key] = []
+        if size_of(context) > limit:
+            # 全砍空都不够：这一项帮不上忙，保持砍空，交给下一项。
+            continue
+        lo, hi = 0, total
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if size_with(mid) <= limit:
+                lo = mid
+            else:
+                hi = mid - 1
+        context[key] = lst[:lo]
     context["size_bytes"] = size_of(context)
