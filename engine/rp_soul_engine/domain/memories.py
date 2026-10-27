@@ -1,10 +1,16 @@
 """Her memory: four layers that age with real time (after RimTalk-ExpandMemory).
 
-    刚刚 now     what just happened; does not decay; lives 24 hours, then a
-                 conversation moves on to 这几天 and a passing action is dropped
-    这几天 days  decays 0.05 per hour (about three days to forget)
-    那些事 events daily summaries; decays 0.00384 per hour (about forty days)
-    那些年 years  archived chapters; decays 0.0003 per hour (about a year and a half)
+    刚刚 now     what just happened; does not decay. Up to ten; over ten the
+                 oldest are archived, as they are, into 今日. A passing action,
+                 never promoted, is dropped after 24 hours.
+    今日 temp    the short-term archive: 刚刚's overflow, verbatim, in order.
+                 Does not decay. The next day's daily summary reads all of it
+                 (and whatever is still in 刚刚) and folds it into 这几天.
+    这几天 days  the last month of her life; decays 0.006 per hour (about
+                 thirty days to forget). Over thirty, the month is written out
+                 to a journal file and the layer starts empty again.
+    那些事 events what mattered enough to keep: no decay, no capacity, only
+                 you delete them.
 
 Activity follows ``activity *= 1 - rate`` every hour (RimTalk). Instead of
 writing that back every hour, an entry keeps the activity it had when it was
@@ -25,22 +31,37 @@ import math
 from . import clock as CL
 from .text import keywords, cue_keywords, KEYWORDS_MAX, KEYWORD_LEN
 
-LAYERS = ("now", "days", "events", "years")
-LAYER_LABELS = {"now": "刚刚", "days": "这几天", "events": "那些事", "years": "那些年"}
-DECAY = {"now": 0.0, "days": 0.05, "events": 0.00384, "years": 0.0003}
-CAPACITY = {"now": 6, "days": 20, "events": 50, "years": 50}
+LAYERS = ("now", "temp", "days", "events")
+LAYER_LABELS = {"now": "刚刚", "temp": "今日", "days": "这几天", "events": "那些事"}
+DECAY = {"now": 0.0, "temp": 0.0, "days": 0.005, "events": 0.0}
+# None = unlimited: 那些事 is only ever emptied by you
+CAPACITY = {"now": 10, "temp": 200, "days": 30, "events": None}
 NOW_LIFESPAN_MINUTES = 24 * 60
 CLEAN_BELOW = 0.025
-TYPES = ("conversation", "experience", "action", "summary", "chapter")
+TYPES = ("conversation", "experience", "action", "summary")
 # 留在「刚刚」里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
 CONTENT_MAX = 300
 YOU_MAX = 60
+# 每日总结的正文长度
+SUMMARY_MAX = 100
 
 
 def entries(state):
     """Her memory entries, oldest first (the list lives in state["memory"])."""
     return state["memory"].setdefault("entries", [])
+
+
+def normalize_legacy(state):
+    """Old saves: 那些年 is gone, and the monthly request is no longer an archive."""
+    memory = state.get("memory") or {}
+    for entry in memory.get("entries") or []:
+        if entry.get("layer") in ("years", "chapter"):
+            entry["layer"] = "events"
+    requests = state.get("requests") or {}
+    if "memory_archive" in requests:
+        requests["memory_journal"] = requests.pop("memory_archive")
+    return state
 
 
 def of_layer(state, layer):
@@ -173,14 +194,8 @@ def capture(state, ctx, commit):
 # maintenance: once per commit, after capture
 
 
-def _leave_now(entry, at_minute):
-    """刚刚 → 这几天 at `at_minute` (when it stopped being 刚刚)."""
-    entry["layer"] = "days"
-    touch(entry, at_minute, entry["a0"])
-
-
 def _awaiting_summary(entry):
-    """A conversation or experience of 刚刚 / 这几天 that no daily summary has covered yet.
+    """A conversation or experience of 刚刚 / 今日 / 这几天 no daily summary has covered yet.
 
     RimTalk summarises every in-game day on the hour, so 这几天 never fades
     before its day is written down. Here the summary waits for the next commit,
@@ -188,55 +203,65 @@ def _awaiting_summary(entry):
     neither forgotten nor pushed out by capacity, or a long absence would erase
     the day before you left without a trace.
     """
+    if entry["layer"] == "temp":
+        return not entry.get("summarized")
     return entry["layer"] in ("now", "days") and entry["type"] in KEEPS and not entry.get("summarized")
 
 
+def _archive(state, picked):
+    """The oldest 刚刚 lines move into 今日 one by one, exactly as they are.
+
+    Nothing is merged and no model is asked: 今日 is only a holding place until
+    the next day's daily summary reads the whole day at once.
+    """
+    for entry in picked:
+        entry["layer"] = "temp"
+    return picked
+
+
 def maintain(state):
-    """Expire 刚刚, forget the faded, enforce capacities. Returns what moved/went."""
+    """Archive 刚刚 over ten into 今日, forget the faded, enforce capacities.
+
+    Returns what moved/went.
+    """
     now = CL.to_abs(state["clock"])
-    report = {"moved": [], "forgotten": [], "dropped": []}
+    report = {"moved": [], "forgotten": [], "dropped": [], "archived": []}
     items = entries(state)
     keep = []
     for entry in items:
-        if entry["layer"] == "now" and now - CL.to_abs(entry["at"]) >= NOW_LIFESPAN_MINUTES:
-            if entry["type"] in KEEPS or entry.get("pinned"):
-                _leave_now(entry, CL.to_abs(entry["at"]) + NOW_LIFESPAN_MINUTES)
-                report["moved"].append(entry["id"])
-            else:
-                report["dropped"].append(entry["id"])
-                continue
-        keep.append(entry)
-    items[:] = keep
-    # 刚刚 over capacity: the oldest moves on now (actions are dropped)
-    current = [e for e in items if e["layer"] == "now" and not e.get("pinned")]
-    current.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
-    for entry in current[: max(0, len(current) - CAPACITY["now"])]:
-        if entry["type"] in KEEPS:
-            _leave_now(entry, now)
-            report["moved"].append(entry["id"])
-        else:
-            items.remove(entry)
+        if entry["layer"] != "now":
+            keep.append(entry)
+            continue
+        if entry["type"] in KEEPS or entry.get("pinned"):
+            keep.append(entry)
+        elif now - CL.to_abs(entry["at"]) >= NOW_LIFESPAN_MINUTES:
+            # a passing action is dropped, never promoted
             report["dropped"].append(entry["id"])
-    # forgotten (not before its day is summarised)
-    faded = [e for e in items if e["layer"] != "now" and not e.get("pinned") and not _awaiting_summary(e)
+        else:
+            keep.append(entry)
+    items[:] = keep
+    # 刚刚 over capacity: the oldest move into 今日, one by one
+    current = [e for e in items if e["layer"] == "now" and not e.get("pinned") and e["type"] in KEEPS]
+    current.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
+    spill = current[: max(0, len(current) - CAPACITY["now"])]
+    if spill:
+        _archive(state, spill)
+        report["archived"].extend(e["id"] for e in spill)
+    # forgotten (not before its day is summarised; 那些事 never fades)
+    faded = [e for e in items if e["layer"] in ("days",) and not e.get("pinned") and not _awaiting_summary(e)
              and activity(e, now) < CLEAN_BELOW]
     for entry in faded:
         items.remove(entry)
         report["forgotten"].append(entry["id"])
-    # 那些事 over capacity: the oldest moves into 那些年 as it is (no summary) -
-    # before 那些年's own capacity check, so 那些年 never ends a commit over 50
-    pool = [e for e in items if e["layer"] == "events" and not e.get("pinned")]
-    pool.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
-    for entry in pool[: max(0, len(pool) - CAPACITY["events"])]:
-        entry["layer"] = "years"
-        touch(entry, now, activity(entry, now))
-        report["moved"].append(entry["id"])
-    # 这几天 / 那些年 over capacity: the least active goes (not what awaits its summary)
-    for layer in ("days", "years"):
+    # 今日 / 这几天 over capacity: the least active goes (not what awaits its summary)
+    for layer in ("temp", "days"):
+        limit = CAPACITY[layer]
+        if limit is None:
+            continue
         pool = [e for e in items if e["layer"] == layer and not e.get("pinned") and not _awaiting_summary(e)]
         counted = sum(1 for e in items if e["layer"] == layer and not e.get("pinned"))
         pool.sort(key=lambda e: (activity(e, now), CL.to_abs(e["at"]), _num(e)))
-        for entry in pool[: max(0, counted - CAPACITY[layer])]:
+        for entry in pool[: max(0, counted - limit)]:
             items.remove(entry)
             report["forgotten"].append(entry["id"])
     return report
@@ -247,16 +272,15 @@ def _num(entry):
 
 
 # ---------------------------------------------------------------------------
-# daily summary and periodic archive (RimTalk's MemorySummarizer, written by
-# the model in a commit instead of a separate AI queue)
+# daily summary: today's 刚刚 + 今日 fold into one 这几天 line, and the day is
+# written into the journal file
 
-SUMMARY_MAX = 80
-ARCHIVE_MAX = 60
-ARCHIVE_EVERY_DAYS = 15
+
+ARCHIVE_MAX = 300
 
 
 def summary_request(state):
-    """The oldest complete day with unsummarised 刚刚/这几天 conversations, or None.
+    """The oldest complete day with unsummarised 刚刚/今日 conversations, or None.
 
     "Complete" is a day before today: RimTalk groups by the oldest finished
     period, so a day still going on is never summarised half-way.
@@ -264,7 +288,7 @@ def summary_request(state):
     today = state["clock"]["day"]
     days = {}
     for entry in entries(state):
-        if entry["layer"] in ("now", "days") and entry["type"] in KEEPS and not entry.get("summarized") and entry["at"]["day"] < today:
+        if entry["layer"] in ("now", "temp") and not entry.get("summarized") and entry["at"]["day"] < today                 and (entry["layer"] == "temp" or entry["type"] in KEEPS):
             days.setdefault(entry["at"]["day"], []).append(entry["id"])
     if not days:
         return None
@@ -273,12 +297,11 @@ def summary_request(state):
 
 
 def archive_request(state):
-    """Every ARCHIVE_EVERY_DAYS days: all unpinned 那些事 into one 那些年 chapter."""
-    last = state["memory"].get("last_archive_day", 1)
-    if state["clock"]["day"] - last < ARCHIVE_EVERY_DAYS:
+    """这几天 is full: the whole month goes into the journal file and is cleared."""
+    ids = [e["id"] for e in entries(state) if e["layer"] == "days"]
+    if len(ids) < CAPACITY["days"]:
         return None
-    ids = [e["id"] for e in entries(state) if e["layer"] == "events" and not e.get("pinned")]
-    return {"ids": ids} if ids else None
+    return {"ids": ids}
 
 
 def sources(state, request):
@@ -299,35 +322,61 @@ def _merge(state, layer, kind, text, picked, turn):
     return entry
 
 
-def apply_summary(state, request, text, turn):
-    """One day of 刚刚/这几天 becomes one 那些事 entry; the sources stay and keep fading."""
+def apply_summary(state, request, text, turn, keep=()):
+    """One day of 刚刚/今日 becomes one 这几天 entry; the sources are consumed.
+
+    `keep` names the 0~2 entries the model judged worth remembering for good:
+    they are copied into 那些事 before the day is folded away.
+    """
     picked = sources(state, request)
-    entry = _merge(state, "events", "summary", text, picked, turn)
     for source in picked:
-        source["summarized"] = True
+        if source["id"] in keep:
+            important = add(state, "events", source["type"], source["content"], source["importance"],
+                            at=dict(source["at"]), turn=turn)
+            important["keywords"] = list(source["keywords"])
+            important["origin_ids"] = [source["id"]]
+    entry = _merge(state, "days", "summary", text, picked, turn)
+    gone = set(e["id"] for e in picked)
+    entries(state)[:] = [e for e in entries(state) if e["id"] not in gone]
     return entry
 
 
 def apply_archive(state, request, text, turn):
-    """All unpinned 那些事 become one 那些年 chapter; the sources are consumed."""
-    picked = [e for e in sources(state, request) if e["layer"] == "events" and not e.get("pinned")]
-    entry = _merge(state, "years", "chapter", text, picked, turn)
+    """The month's 这几天 become one journal file; the entries are cleared.
+
+    Nothing new is added to memory: the written file is the record, and 这几天
+    starts over from empty. The returned `lines` are what the file is built from.
+    """
+    picked = [e for e in sources(state, request) if e["layer"] == "days"]
+    lines = [{"day": e["at"]["day"], "text": e["content"]} for e in sorted(picked, key=lambda e: (CL.to_abs(e["at"]), _num(e)))]
     gone = set(e["id"] for e in picked)
     entries(state)[:] = [e for e in entries(state) if e["id"] not in gone]
-    state["memory"]["last_archive_day"] = state["clock"]["day"]
-    return entry
+    return {"gone": sorted(gone), "text": text, "lines": lines, "day": state["clock"]["day"]}
+
+
+def journal_markdown(state, text, lines):
+    """One month's 这几天 written the way she would keep a diary."""
+    first, last = lines[0]["day"], lines[-1]["day"]
+    body = ["# %s" % text, "", "> %s — %s" % (_day_text(state, first), _day_text(state, last)), ""]
+    body.extend("- **%s** %s" % (_day_text(state, line["day"]), line["text"]) for line in lines)
+    return "\n".join(body) + "\n"
+
+
+def _day_text(state, day):
+    weekday = _weekday(state, day)
+    return "第 %d 天%s" % (day, " · " + weekday if weekday else "")
 
 
 def manual_summary_request(state):
-    """「立即总结」: everything not yet summarised in 刚刚 / 这几天, today included."""
-    ids = [e["id"] for e in entries(state)
-           if e["layer"] in ("now", "days") and e["type"] in KEEPS and not e.get("summarized")]
+    """「立即总结」: everything not yet summarised in 刚刚 / 今日, today included."""
+    ids = [e["id"] for e in entries(state) if e["layer"] in ("now", "temp") and not e.get("summarized")
+           and (e["layer"] == "temp" or e["type"] in KEEPS)]
     return {"day": state["clock"]["day"], "ids": ids} if ids else None
 
 
-def manual_archive_request(state):
-    """「立即归档」: all unpinned 那些事, without waiting for fifteen days."""
-    ids = [e["id"] for e in entries(state) if e["layer"] == "events" and not e.get("pinned")]
+def manual_journal_request(state):
+    """「立即归档」: every summarised 这几天 entry, without waiting to fill up."""
+    ids = [e["id"] for e in entries(state) if e["layer"] == "days"]
     return {"ids": ids} if ids else None
 
 
@@ -381,15 +430,14 @@ def remove(state, memory_id):
 
 
 def prune_requests(state):
-    """Drop a pending summary / archive whose sources are all gone (deleted or
-    pinned on the settings page), so the model is never asked to write one
-    from nothing."""
+    """Drop a pending summary / journal whose sources are all gone (deleted on
+    the settings page), so the model is never asked to write one from nothing."""
     requests = state["requests"]
     if requests.get("memory_summary") and not sources(state, requests["memory_summary"]):
         requests["memory_summary"] = None
-    archive = requests.get("memory_archive")
-    if archive and not [e for e in sources(state, archive) if e["layer"] == "events" and not e.get("pinned")]:
-        requests["memory_archive"] = None
+    journal = requests.get("memory_journal")
+    if journal and not [e for e in sources(state, journal) if e["layer"] == "days"]:
+        requests["memory_journal"] = None
 
 
 BRIEF_SOURCES = 12
@@ -423,11 +471,12 @@ def request_view(state, request, compact=False):
 # ---------------------------------------------------------------------------
 # injection: quota harvesting (RimTalk's UnifiedMemoryInjector + DynamicMemoryInjection)
 
-ROUNDS = 3                      # maxABMInjectionRounds：最近几轮原样放
-TOTAL_BRIEF = 8                 # brief 6 KB 的预算里用 8 条
-TOTAL_FULL = 10                 # maxInjectedMemories
+# 刚刚整层原样放（十轮），其余全从所有层里打分取
+ROUNDS = CAPACITY["now"]
+TOTAL_BRIEF = 15                # brief 6 KB：刚刚十条 + 打分补五条
+TOTAL_FULL = 20                 # maxInjectedMemories
 THRESHOLD = 0.15                # memoryScoreThreshold
-LAYER_BONUS = {"now": 1.0, "days": 0.7, "events": 0.4, "years": 0.2}
+LAYER_BONUS = {"now": 1.0, "temp": 0.85, "days": 0.7, "events": 0.5}
 LAYER_WEIGHT = 0.2
 PINNED_BONUS = 0.5
 EDITED_BONUS = 0.3

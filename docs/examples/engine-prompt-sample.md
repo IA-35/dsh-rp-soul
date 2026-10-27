@@ -119,7 +119,7 @@
   },
   "requests": {
     "memory_summary": null,
-    "memory_archive": null
+    "memory_journal": null
   },
   "memories": [
     {

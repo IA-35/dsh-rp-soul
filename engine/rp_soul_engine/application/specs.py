@@ -160,6 +160,10 @@ DEBUG_ACTIVITY = _obj(
 
 DEBUG_MEMORIES = _obj({"session_id": F(SESSION_ID)}, "debug-memories")
 
+DEBUG_FACTS = _obj({"session_id": F(SESSION_ID)}, "debug-facts")
+
+DELETE_FACT = _obj(dict(session_write_fields(), fact_id=F(S.Id())), "delete-fact")
+
 EDIT_MEMORY = _obj(
     dict(
         session_write_fields(),
@@ -184,7 +188,7 @@ DELETE_MEMORY = _obj(
 )
 
 REQUEST_MEMORY = _obj(
-    dict(session_write_fields(), kind=F(S.Enum("summary", "archive"), desc="summary 立即总结 / archive 立即归档")),
+    dict(session_write_fields(), kind=F(S.Enum("summary", "journal"), desc="summary 立即总结 / journal 立即把这个月写进日记")),
     "request-memory",
 )
 

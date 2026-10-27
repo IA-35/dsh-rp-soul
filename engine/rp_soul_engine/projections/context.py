@@ -286,9 +286,10 @@ def _template(state, body):
     turn["quotes"] = ["<本回合值得记住的原话，原样一句，<=80 字；没有就删掉这条>"]
     turn["remember"] = "<可选：TA 会怎么记得这件事，第一人称、带感受，<=60 字；不写就删掉这条>"
     if dict(state["requests"]).get("memory_summary"):
-        turn["memory_summary"] = "<memory_summary_sources 那一天，第一人称写成一条：发生了什么、什么感受，相似的合并注明次数，<=80 字>"
-    if dict(state["requests"]).get("memory_archive"):
-        turn["memory_archive"] = "<memory_archive_sources 这些日子，第一人称归成一段篇章：里程碑和长期变化，<=60 字>"
+        turn["memory_summary"] = "<读 memory_summary_sources，把今天写成日记放进「这几天」：第一人称（我），今天发生了什么、当时的感受、1~2 个具体细节，<=100 字>"
+    if dict(state["requests"]).get("memory_journal"):
+        turn["memory_journal"] = "<读 memory_journal_sources，第一人称把这一个月写成日记：按日子顺下来，感受和变化，<=300 字>"
+        turn["memory_keep"] = ["<可选：这一天里值得一直记着的 0~2 条经历 id，没有就删掉这条>"]
     return {
         "session_id": state["session_id"],
         "request_id": "<上一次返回的 next_request_id>",

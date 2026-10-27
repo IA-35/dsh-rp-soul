@@ -11,7 +11,7 @@ import sys
 APP_DIR_NAME = "rp-soul-engine"
 ENV_VAR = "RP_SOUL_ENGINE_HOME"
 DB_FILE = "engine.db"
-SUBDIRS = ("backups", "exports", "logs")
+SUBDIRS = ("backups", "exports", "logs", "journal")
 
 
 def platform_default(platform=None, environ=None, home=None):
@@ -69,3 +69,8 @@ def backups_dir(data_dir):
 
 def exports_dir(data_dir):
     return os.path.join(data_dir, "exports")
+
+
+def journal_dir(data_dir):
+    """Her diary: one markdown file per month (see domain/memories.py)."""
+    return os.path.join(data_dir, "journal")

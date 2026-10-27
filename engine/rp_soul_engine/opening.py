@@ -103,14 +103,14 @@ def new_session(persona, seed=None, player=None, now=None):
         # 旧存档没有这个键，读的地方一律用 .get("plan")
         "plan": None,
         # turns：回合流水（最近 40 条）；entries：她的记忆（四层，见 domain/memories.py）
-        "memory": {"turns": [], "last_quotes": [], "open_action": "", "entries": [], "last_archive_day": 1},
+        "memory": {"turns": [], "last_quotes": [], "open_action": "", "entries": []},
         "preferences": {
             "offscreen_simulation": True,
             "pace": "standard",
             "explicitness": "standard",
         },
         "safety": {"paused": False, "boundaries": []},
-        "requests": {"memory_summary": None, "memory_archive": None},
+        "requests": {"memory_summary": None, "memory_journal": None},
         "undo_floor": 0,
         "session_id": None,
     }

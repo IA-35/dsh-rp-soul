@@ -566,7 +566,7 @@ def the_memory_page_shows_her_memories(s):
     assert data["revision"] == rev and data["counts"]["now"] >= 1, data["counts"]
     mine = [e for e in data["entries"] if e["content"] == "她第一次对我笑"]
     assert mine and mine[0]["layer_label"] == "刚刚" and mine[0]["activity"] == 1.0, data["entries"]
-    assert data["layers"]["years"] == "那些年" and data["capacity"]["days"] == 20
+    assert data["layers"]["events"] == "那些事" and data["capacity"]["days"] == 30
 
 
 def editing_a_memory_marks_it_yours(s):
@@ -607,19 +607,16 @@ def summarize_now_is_paid_by_the_next_commit(s):
     ctx = s.ok("get-context", {"session_id": sid})["context"]
     assert ctx["memory_summary_sources"]["sources"], ctx.get("memory_summary_sources")
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[npc_action(significant=False)]))
-    assert "那些事" in json.dumps(err, ensure_ascii=False), err
+    assert "日记" in json.dumps(err, ensure_ascii=False), err
     play(s, sid, rev, ops=[npc_action(significant=False)], memory_summary="那晚我值夜班，有人陪着，没那么难熬")
-    events = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "events"]
-    assert events and events[0]["content"].startswith("那晚我值夜班"), events
-    archived = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"),
-                                       "expected_revision": s.ok("get-context", {"session_id": sid})["revision"], "kind": "archive"})
-    assert [x["text"] for x in archived["request"]["sources"]] == [events[0]["content"]], archived
+    days = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "days"]
+    assert days and days[0]["content"].startswith("那晚我值夜班"), days
 
 
 def nothing_to_archive_is_refused(s):
     sid, rev, _ = e2e.start(s)
-    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "archive"})
-    assert err["code"] == "INVALID_INPUT" and "没有可以归档" in err["message"], err
+    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "journal"})
+    assert err["code"] == "INVALID_INPUT" and "没有可以写进日记" in err["message"], err
 
 
 def settings_moods_page_lists_her(s):
@@ -748,7 +745,69 @@ check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))
 check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))
+
+
+def the_facts_page_lists_what_is_known(s):
+    """常识库页是只读的：她知道的事列出来，谁知道也写清楚。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        her_fact("secret", "你偷偷看了她的病历", scope="player_only"),
+        her_fact("rain", "昨天下了一整夜的雨", scope="companion_only"),
+    ])
+    data = s.ok("debug-facts", {"session_id": sid})
+    assert data["revision"] == rev and data["count"] == len(data["rows"]) >= 2, data["count"]
+    by_key = {f["key"]: f for f in data["rows"]}
+    assert by_key["secret"]["known_by"] == ["你"], by_key["secret"]
+    assert by_key["rain"]["visibility"] == "private" and "林晚" in by_key["rain"]["known_by"], by_key["rain"]
+
+
 check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
+def deleting_a_fact_takes_its_thoughts_with_it(s):
+    """常识库能手动删：删了事实，指着它的想法一起走，下一回合不会卡在校验上。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        her_fact("stare", "她注意到你一直盯着她看"),
+        {"op": "add_thought", "label": "被人盯着看", "delta": -8, "basis_fact_id": "f1"},
+        npc_action(),
+    ])
+    rows = s.ok("debug-facts", {"session_id": sid})["rows"]
+    target = [r for r in rows if r["key"] == "stare"]
+    assert target, rows
+    out = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": target[0]["id"]})
+    assert out["removed"]["text"] == "她注意到你一直盯着她看" and out["dropped_thoughts"] == 1, out
+    assert "已删除" in out["receipt"], out
+    after = s.ok("debug-facts", {"session_id": sid})
+    assert all(r["id"] != target[0]["id"] for r in after["rows"]), after["rows"]
+    assert out["revision"] == rev + 1, out
+    mood = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+    assert all(t["label"] != "被人盯着看" for t in mood["thoughts"]), mood["thoughts"]
+    # 下一回合照常能提交（想法依据的事实已经不在了，校验不该炸）
+    play(s, sid, out["revision"], ops=[npc_action(significant=False)])
+    err = s.fail("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"),
+                                 "expected_revision": out["revision"] + 1, "fact_id": target[0]["id"]})
+    assert err["code"] == "NOT_FOUND", err
+
+
+check("the facts page lists what is known", with_sc(the_facts_page_lists_what_is_known))
+check("deleting a fact takes its thoughts with it", with_sc(deleting_a_fact_takes_its_thoughts_with_it))
+
+
+def undo_brings_a_deleted_fact_back(s):
+    """删事实会进 fact_journal，撤回那一回合就回来了。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
+    rev, _ = play(s, sid, rev, ops=[npc_action()])
+    fid = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["key"] == "rain"][0]["id"]
+    rev = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": fid})["revision"]
+    assert all(r["id"] != fid for r in s.ok("debug-facts", {"session_id": sid})["rows"])
+    s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})
+    back = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
+    assert back and back[0]["key"] == "rain", back
+
+
+check("undo brings a deleted fact back", with_sc(undo_brings_a_deleted_fact_back))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
 check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))
