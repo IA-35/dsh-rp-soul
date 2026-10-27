@@ -403,7 +403,8 @@ def a_quiet_commit(ops):
         "open_action": "她擦干手。",
         "quotes": [],
         "memory_summary": None,
-        "memory_archive": None,
+        "memory_journal": None,
+        "memory_keep": [],
         "replaces_turn": None,
         "together": True,
     }

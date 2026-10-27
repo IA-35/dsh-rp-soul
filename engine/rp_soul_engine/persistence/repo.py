@@ -18,6 +18,7 @@ import zlib
 
 from .. import STATE_SCHEMA_VERSION as STATE_VERSION
 from ..domain import facts as FA
+from ..domain import memories as MEM
 from ..errors import NOT_FOUND, UNSUPPORTED_VERSION, AppError, detail
 
 IDEMPOTENCY_KEEP = 1000
@@ -218,7 +219,7 @@ def load_session(conn, session_id, with_persona=True):
     if row is None:
         raise _missing_session(session_id)
     info = dict(zip(SESSION_COLUMNS, row[: len(SESSION_COLUMNS)]))
-    info["state"] = _check_state(unpack(row[len(SESSION_COLUMNS)]), "session %s" % session_id)
+    info["state"] = MEM.normalize_legacy(_check_state(unpack(row[len(SESSION_COLUMNS)]), "session %s" % session_id))
     info["state"]["facts"] = FactSource(conn, session_id)
     if with_persona:
         info["persona"] = unpack(row[len(SESSION_COLUMNS) + 1])

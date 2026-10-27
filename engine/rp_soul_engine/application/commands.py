@@ -69,6 +69,7 @@ _register("edit-memory", APP + "service", "edit_memory", "required", "session_wr
 _register("delete-memory", APP + "service", "delete_memory", "required", "session_write", "设置页记忆页：删一条记忆（留审计）", "DELETE_MEMORY")
 _register("request-memory", APP + "service", "request_memory", "required", "session_write", "设置页记忆页：立即总结 / 立即归档（下一次提交执行）", "REQUEST_MEMORY")
 _register("debug-activity", APP + "service", "debug_activity", "required", "read", "设置页自主行动页：最近若干回合的行动、离屏片段与关系变化", "DEBUG_ACTIVITY")
+_register("debug-facts", APP + "service", "debug_facts", "required", "read", "设置页常识库：她知道的事（只读）", "DEBUG_FACTS")
 
 
 def get(name):

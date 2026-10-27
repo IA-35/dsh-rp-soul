@@ -74,7 +74,7 @@ def memory_validation_stays_inside_the_atomic_turn():
     try:
         turn.commit_turn(state, pack, commit_body(), now=T0)
     except AppError as err:
-        assert "那些事" in str(err), str(err)
+        assert "日记" in str(err), str(err)
     else:
         raise AssertionError("pending memory summary must be validated")
     assert state == before

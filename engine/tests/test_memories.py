@@ -103,49 +103,58 @@ def importance_follows_the_feelings():
     assert main_entry(calm, 1)["importance"] == 0.3
 
 
-def now_lives_a_day_then_moves_on():
+def now_keeps_the_whole_day_then_the_summary_moves_it_on():
+    """今天的事今天一直在刚刚，每日总结把它变成「这几天」的一条（原文被收走）。"""
     state, persona = start()
-    state = commit(state, persona, at(0))
+    state = play(state, persona, at(0))
     first = main_entry(state, 1)["id"]
     action = [e["id"] for e in MEM.entries(state) if e["type"] == "action"][0]
-    state = commit(state, persona, at(23), ops=[beat(), glance()])
-    assert layer_of(state, first) == "now", "still 刚刚 before 24 hours"
-    state = commit(state, persona, at(25), ops=[beat(), glance()])
-    assert layer_of(state, first) == "days", "a conversation moves on to 这几天"
+    state = commit(state, persona, at(1), ops=[beat(), glance()])
+    assert layer_of(state, first) == "now", "still 刚刚 on the day it happened"
+    state = play(state, persona, at(25), ops=[beat(), glance()])   # 次日 21:00，那一天的总结还没写
+    assert layer_of(state, first) == "now", "今天就是今天：超过 24 小时也还在刚刚"
     assert layer_of(state, action) is None, "a passing action is dropped"
-    moved = [e for e in MEM.entries(state) if e["id"] == first][0]
-    assert moved["t0"] == CL.to_abs(moved["at"]) + MEM.NOW_LIFESPAN_MINUTES, "decay starts when it left 刚刚"
+    assert state["requests"]["memory_summary"], "the finished day asks to be summarised"
+    state = play(state, persona, at(26), ops=[beat(), glance()], memory_summary="那天晚上他来了，我们聊到很晚。")
+    assert layer_of(state, first) is None, "每日总结之后原文不再留在记忆里"
+    days = MEM.of_layer(state, "days")
+    assert len(days) == 1 and days[0]["content"] == "那天晚上他来了，我们聊到很晚。", days
 
 
-def now_keeps_six():
+def now_keeps_ten_and_archives_the_rest():
+    """刚刚满了 10 条就把最老的逐条移进「今日」，原文不动，今天不往「这几天」扔东西。"""
     state, persona = start()
-    for i in range(8):
+    for i in range(13):
         state = commit(state, persona, at(0.05 * i), ops=[glance()] if i == 0 else [{"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "忙%d" % i}]}])
-    now = [e for e in MEM.entries(state) if e["layer"] == "now" and e["type"] != "action"]
-    assert len([e for e in MEM.entries(state) if e["layer"] == "now"]) <= 6
-    assert main_entry(state, 1)["layer"] == "days", "the oldest moved on"
-    assert now, now
+    assert len([e for e in MEM.entries(state) if e["layer"] == "now" and e["type"] in MEM.KEEPS]) == MEM.CAPACITY["now"]
+    archived = MEM.of_layer(state, "temp")
+    assert len(archived) == 3, archived
+    assert all(e["type"] in MEM.KEEPS for e in archived), "逐条移，不是拼成一条"
+    assert all(e["content"] != "" for e in archived), archived
+    assert not MEM.of_layer(state, "days"), "nothing of today moved on"
+    assert main_entry(state, 13)["layer"] == "now", "the newest of the day stays"
 
 
-def days_are_forgotten_in_about_three_days():
+def days_are_forgotten_in_about_a_month():
+    """这几天装得下一个月的对话：一个月没人再提才淡掉。"""
     state, persona = start()
-    entry = MEM.add(state, "days", "conversation", "那天一起吃了面", 0.5, summarized=True)
+    entry = MEM.add(state, "days", "summary", "那天一起吃了面", 0.5)
     start_minute = entry["t0"]
-    assert 0.29 < MEM.activity(entry, start_minute + 24 * 60) < 0.30, MEM.activity(entry, start_minute + 24 * 60)
-    assert MEM.activity(entry, start_minute + 71 * 60) > MEM.CLEAN_BELOW
-    assert MEM.activity(entry, start_minute + 73 * 60) < MEM.CLEAN_BELOW
-    state["clock"] = CL.from_abs(start_minute + 73 * 60)
+    assert MEM.activity(entry, start_minute + 29 * 24 * 60) > MEM.CLEAN_BELOW
+    assert MEM.activity(entry, start_minute + 31 * 24 * 60) < MEM.CLEAN_BELOW
+    state["clock"] = CL.from_abs(start_minute + 31 * 24 * 60)
     report = MEM.maintain(state)
     assert entry["id"] in report["forgotten"], report
 
 
-def years_last_about_a_year_and_a_half():
+def the_events_never_fade():
+    """那些事不衰减，只能你手动删。"""
     state, persona = start()
-    entry = MEM.add(state, "years", "chapter", "那年秋天", 0.5)
-    month = MEM.activity(entry, entry["t0"] + 30 * 24 * 60)
-    assert 0.80 < month < 0.81, month
-    assert MEM.activity(entry, entry["t0"] + 500 * 24 * 60) > MEM.CLEAN_BELOW
-    assert MEM.activity(entry, entry["t0"] + 520 * 24 * 60) < MEM.CLEAN_BELOW
+    entry = MEM.add(state, "events", "summary", "那年秋天", 0.5, at={"day": 1, "minute": 600})
+    state["clock"] = {"day": 2000, "minute": 600}
+    assert MEM.activity(entry, CL.to_abs(state["clock"])) == 1.0
+    report = MEM.maintain(state)
+    assert entry["id"] not in report["forgotten"] and entry in MEM.entries(state)
 
 
 def pinned_is_never_forgotten():
@@ -158,23 +167,28 @@ def pinned_is_never_forgotten():
 
 def days_capacity_drops_the_least_active():
     state, persona = start()
-    first = MEM.add(state, "days", "conversation", "最早的事", 0.5, summarized=True)
+    first = MEM.add(state, "days", "summary", "最早的事", 0.5)
     state["clock"] = CL.add_minutes(state["clock"], 60)
-    rest = [MEM.add(state, "days", "conversation", "第%d件事" % i, 0.5, summarized=True) for i in range(20)]
+    rest = [MEM.add(state, "days", "summary", "第%d件事" % i, 0.5) for i in range(30)]
     report = MEM.maintain(state)
     assert first["id"] in report["forgotten"], report
-    assert len(MEM.of_layer(state, "days")) == 20 and rest[-1] in MEM.entries(state)
+    assert len(MEM.of_layer(state, "days")) == MEM.CAPACITY["days"] and rest[-1] in MEM.entries(state)
 
 
-def events_overflow_moves_into_years():
+def a_full_days_layer_asks_for_the_journal():
+    """这几天满了 30 条：要求写日记，写完把那 30 条清空、这几条重新开始数。"""
     state, persona = start()
-    oldest = MEM.add(state, "events", "summary", "最早的那天", 0.5)
-    state["clock"] = CL.add_minutes(state["clock"], 1)
-    for i in range(50):
-        MEM.add(state, "events", "summary", "第%d天" % i, 0.5)
-    MEM.maintain(state)
-    assert layer_of(state, oldest["id"]) == "years", "over capacity: the oldest becomes 那些年 as it is"
-    assert len(MEM.of_layer(state, "events")) == 50
+    for i in range(30):
+        MEM.add(state, "days", "summary", "第%d天" % i, 0.5, at={"day": 1 + i, "minute": 600})
+    state["clock"] = {"day": 31, "minute": 600}
+    request = MEM.archive_request(state)
+    assert request and len(request["ids"]) == 30, request
+    done = MEM.apply_archive(state, request, "这个月我们慢慢熟了", 99)
+    assert done["text"] == "这个月我们慢慢熟了" and len(done["lines"]) == 30, done
+    assert not MEM.of_layer(state, "days"), "写完日记那 30 条就清空"
+    assert MEM.archive_request(state) is None, "重新开始数"
+    md = MEM.journal_markdown(state, done["text"], done["lines"])
+    assert md.startswith("# 这个月我们慢慢熟了") and "第0天" in md and "第29天" in md, md
 
 
 def a_stage_advance_is_pinned():
@@ -240,20 +254,20 @@ def a_finished_day_asks_for_a_summary():
     assert state["requests"]["memory_summary"] is None
     state = play(state, persona, at(14), ops=[beat(), glance()])          # 第二天 10:00
     request = state["requests"]["memory_summary"]
-    # 第一天：两回合对话 + 一段离屏经历（动作类不进总结）
+    # 第一天：一回合对话 + 一段离屏经历（动作类不进总结）
     assert request and request["day"] == 1 and len(request["ids"]) == 3, request
     try:
         commit(state, persona, at(14.1))
     except Exception as exc:
-        assert "那些事" in str(exc), exc
+        assert "日记" in str(exc), exc
     else:
         raise AssertionError("the summary is required")
     state = play(state, persona, at(14.2), memory_summary="那天下雨他来了两次，我挺高兴")
-    events = MEM.of_layer(state, "events")
-    assert len(events) == 1 and events[0]["origin_ids"] == request["ids"], events
-    assert events[0]["at"]["day"] == 1 and "高兴" in events[0]["keywords"], events[0]
+    days = MEM.of_layer(state, "days")
+    assert len(days) == 1 and days[0]["origin_ids"] == request["ids"], days
+    assert days[0]["at"]["day"] == 1 and "高兴" in days[0]["keywords"], days[0]
     sources = [e for e in MEM.entries(state) if e["id"] in request["ids"]]
-    assert all(e["summarized"] for e in sources), "sources are marked, not removed"
+    assert not sources, "每日总结把原文收进那一条，不再单独留着"
     assert state["requests"]["memory_summary"] is None, "day one is not asked for again"
 
 
@@ -316,12 +330,12 @@ def the_old_chain_becomes_her_memory():
     new = MG.state_v2_to_v3(old)
     assert new["schema"] == 3 and "chapters" not in new["memory"] and "prologue" not in new["memory"]
     by = {e["content"]: e for e in MEM.entries(new)}
-    assert by["我们是在雨夜认识的"]["layer"] == "years"
+    assert by["我们是在雨夜认识的"]["layer"] == "events"
     assert by["第二天一起吃了面"]["layer"] == "events"
     assert by["吃面"]["summarized"] is True, "covered by the chapter"
     assert by["她生气了"]["summarized"] is False and by["她生气了"]["quotes"] == ["走开"]
     assert by["和好了"]["layer"] == "now" and by["她生气了"]["layer"] == "days"
-    assert new["requests"] == {"memory_summary": None, "memory_archive": None}
+    assert new["requests"] == {"memory_summary": None, "memory_journal": None}
     assert "last_chapter_turn" not in new["counters"] and new["counters"]["next"]["memory"] == 6
     assert MG.state_v2_to_v3(new) is new, "a schema-3 state passes through"
 
@@ -331,15 +345,16 @@ def the_old_chain_becomes_her_memory():
 
 
 def rounds_come_first_newest_first():
+    """刚刚整层原样放（最新的在前），「这几天」「那些事」的从打分里补。"""
     state, persona = start()
     for i in range(4):
         state = commit(state, persona, at(0.05 * i), player_input="第%d句" % i, quotes=["回%d" % i],
                        ops=[{"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "忙%d" % i}]}])
     MEM.add(state, "days", "conversation", "前几天一起散步", 0.5)
     rows = MEM.inject(state, "", MEM.TOTAL_BRIEF)
-    assert [r["you"] for r in rows[:3]] == ["第3句", "第2句", "第1句"], rows[:3]
+    assert [r["you"] for r in rows[:4]] == ["第3句", "第2句", "第1句", "第0句"], rows[:4]
     assert rows[0]["said"] == ["回3"] and rows[0]["layer"] == "刚刚"
-    assert rows[3]["text"] == "前几天一起散步" and "you" not in rows[3], rows[3:]
+    assert rows[4]["text"] == "前几天一起散步" and "you" not in rows[4], rows[4:]
     assert len(rows) <= MEM.TOTAL_BRIEF
 
 
@@ -356,14 +371,15 @@ def a_cue_brings_back_an_old_memory():
     assert quiet[0]["id"] != sea["id"], "without the cue the two tie and nothing pulls the sea forward"
 
 
-def a_cue_recalls_the_other_recent_rounds():
+def a_cue_only_moves_what_is_not_already_in_now():
+    """刚刚整层都在上下文里了，所以线索只该把「这几天」「那些事」里的东西拉上来。"""
     state, persona = start()
-    sea = MEM.add(state, "now", "conversation", "一起看海捡到了蓝色贝壳", 0.5)
+    sea = MEM.add(state, "days", "summary", "那天一起看海捡到了蓝色贝壳", 0.5)
     for text in ("买菜", "散步", "听歌", "吃饭", "下雨"):
-        MEM.add(state, "now", "conversation", text, 0.5)
-    MEM.maintain(state)
+        MEM.add(state, "days", "summary", text, 0.5)
+    MEM.add(state, "now", "conversation", "刚刚说的一句话", 0.5)
     rounds, picked = MEM.select(state, "还记得蓝色贝壳吗")
-    assert [e["content"] for e in rounds] == ["下雨", "吃饭", "听歌"]
+    assert [e["content"] for e in rounds] == ["刚刚说的一句话"], rounds
     assert picked and picked[0]["id"] == sea["id"], [e["content"] for e in picked]
     ids = [e["id"] for e in rounds + picked]
     assert len(ids) == len(set(ids)) and len(ids) <= MEM.TOTAL_BRIEF
@@ -373,7 +389,7 @@ def a_cue_recalls_the_other_recent_rounds():
 
 def the_threshold_drops_the_faint():
     state, persona = start()
-    faint = MEM.add(state, "years", "chapter", "很久以前的一件小事", 0.0, at={"day": 1, "minute": 0})
+    faint = MEM.add(state, "days", "summary", "很久以前的一件小事", 0.02, at={"day": 1, "minute": 0})
     MEM.touch(faint, faint["t0"], 0.03)
     state["clock"] = {"day": 200, "minute": 0}
     _, picked = MEM.select(state, "", MEM.TOTAL_BRIEF)
@@ -444,13 +460,19 @@ def a_long_absence_keeps_the_day_for_its_summary():
 
 
 def a_busy_day_is_summarised_whole():
-    """回归：一天聊了 26 回合，这几天的容量 20 不能在总结前挤掉其中几回合。"""
+    """回归：一天聊了 26 回合，一条都不能在总结前丢掉。
+
+    刚刚只留 10 条，多出来的逐条移进「今日」，一个字都不少。
+    """
     state, persona = start()
     for i in range(26):
-        state = commit(state, persona, at(0.02 * i), ops=[{"op": "npc_state", "add_conditions": [{"kind": "busy", "text": "忙%d" % i}]}])
+        state = commit(state, persona, at(0.02 * i), remember="第%d件事" % i)
     state = play(state, persona, at(14), ops=[beat(), glance()])
     request = state["requests"]["memory_summary"]
-    assert request and len(request["ids"]) == 26, (request and len(request["ids"]))
+    assert request, "a finished day is asked for"
+    texts = " ".join(e["content"] for e in MEM.sources(state, request))
+    missing = [i for i in range(26) if ("第%d件事" % i) not in texts]
+    assert not missing, "移进今日的那几条也要一个字不少：%s" % missing
 
 
 def the_brief_stays_small_while_a_summary_is_due():
@@ -458,12 +480,12 @@ def the_brief_stays_small_while_a_summary_is_due():
     from rp_soul_engine.projections import context as CX
     state, persona = start()
     for i in range(21):
-        MEM.add(state, "days", "conversation", "那天发生的第%d件事，" % i + "细节" * 55, 0.5, at={"day": 1, "minute": 600})
+        MEM.add(state, "now", "conversation", "那天发生的第%d件事，" % i + "细节" * 55, 0.5, at={"day": 1, "minute": 600})
     for i in range(50):
         MEM.add(state, "events", "summary", "第%d天，" % i + "点滴" * 38, 0.5)
     state["clock"] = {"day": 20, "minute": 600}
     state["requests"]["memory_summary"] = MEM.summary_request(state)
-    state["requests"]["memory_archive"] = MEM.manual_archive_request(state)
+    state["requests"]["memory_journal"] = MEM.manual_journal_request(state)
     brief = CX.brief(state, persona, cue="细节")
     assert brief["size_bytes"] <= 6 * 1024, brief["size_bytes"]
     assert brief["memories"], "memories survive the budget"
@@ -490,7 +512,7 @@ def migrating_in_the_morning_keeps_today_in_the_past():
     for i in range(3):
         new = commit(new, persona, at(0.01 * (i + 1)), summary="新回合%d" % i)
     rounds = [e["content"] for e in MEM.recent_rounds(new)]
-    assert rounds == ["新回合2", "新回合1", "新回合0"], rounds
+    assert rounds[:3] == ["新回合2", "新回合1", "新回合0"], rounds
 
 
 def saving_unchanged_fields_is_not_an_edit():
@@ -513,10 +535,10 @@ def long_ascii_words_are_clipped():
 def a_request_with_nothing_left_is_dropped():
     state, persona = start()
     entry = MEM.add(state, "events", "summary", "那些日子", 0.5)
-    state["requests"]["memory_archive"] = MEM.manual_archive_request(state)
+    state["requests"]["memory_journal"] = MEM.manual_journal_request(state)
     entry["pinned"] = True
     MEM.prune_requests(state)
-    assert state["requests"]["memory_archive"] is None, "an archive of only pinned 那些事 has nothing to write"
+    assert state["requests"]["memory_journal"] is None, "a journal of nothing left has nothing to write"
 
 
 def keywords_are_bigrams():
@@ -527,13 +549,13 @@ def keywords_are_bigrams():
 check("a turn is remembered in 刚刚", a_turn_is_remembered_in_now)
 check("without remember the summary is kept", without_remember_the_summary_is_kept)
 check("importance follows the turn's feelings", importance_follows_the_feelings)
-check("刚刚 lives a day, then moves on", now_lives_a_day_then_moves_on)
-check("刚刚 keeps six", now_keeps_six)
-check("这几天 is forgotten in about three days", days_are_forgotten_in_about_three_days)
-check("那些年 lasts about a year and a half", years_last_about_a_year_and_a_half)
+check("刚刚 keeps the whole day, the summary moves it on", now_keeps_the_whole_day_then_the_summary_moves_it_on)
+check("刚刚 keeps ten and archives the rest", now_keeps_ten_and_archives_the_rest)
+check("这几天 is forgotten in about a month", days_are_forgotten_in_about_a_month)
+check("那些事 never fades", the_events_never_fade)
 check("pinned is never forgotten", pinned_is_never_forgotten)
 check("这几天 over capacity drops the least active", days_capacity_drops_the_least_active)
-check("那些事 overflow moves into 那些年", events_overflow_moves_into_years)
+check("a full 这几天 asks for the journal", a_full_days_layer_asks_for_the_journal)
 check("a stage advance is pinned", a_stage_advance_is_pinned)
 check("only the first promise is a milestone", only_the_first_promise_is_a_milestone)
 check("a turn alone is an experience", an_alone_turn_is_an_experience)
@@ -543,11 +565,11 @@ check("keywords are two-character pieces", keywords_are_bigrams)
 check("a finished day asks for a summary", a_finished_day_asks_for_a_summary)
 check("a summary nobody asked for is refused", a_summary_nobody_asked_for_is_refused)
 check("ended events leave with the summary", ended_events_leave_with_the_summary)
-check("half a month asks for an archive", half_a_month_asks_for_an_archive)
+check("write the month into her journal", a_full_days_layer_asks_for_the_journal)
 check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
 check("the recent rounds come first, newest first", rounds_come_first_newest_first)
 check("a cue brings back an old memory", a_cue_brings_back_an_old_memory)
-check("a cue recalls the other recent rounds", a_cue_recalls_the_other_recent_rounds)
+check("a cue only moves what is not already in now", a_cue_only_moves_what_is_not_already_in_now)
 check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_faint)
 check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)

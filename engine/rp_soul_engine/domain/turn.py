@@ -62,9 +62,11 @@ def commit_fields():
         "quotes": F(S.List(S.Str(1, 80), max_items=3), required=False, default=[],
                     desc="≤3 条对后续有意义的原话，每条 ≤80 字"),
         "memory_summary": F(S.Nullable(S.Str(1, MEM.SUMMARY_MAX)), required=False, default=None,
-                            desc="requests.memory_summary 有值时在记录的第一项必填：用第一人称写那一天对 TA 来说发生了什么、什么感受，相似的事合并并注明次数，≤80 字"),
-        "memory_archive": F(S.Nullable(S.Str(1, MEM.ARCHIVE_MAX)), required=False, default=None,
-                            desc="requests.memory_archive 有值时在记录的第一项必填：把这些日子归成一段篇章，第一人称，提炼里程碑和长期变化，≤60 字"),
+                            desc="requests.memory_summary 有值时在记录的第一项必填：读 memory_summary_sources，把今天写成一篇日记放进「这几天」——第一人称（我）：①今天发生了什么 ②当时的感受 ③保留 1~2 个具体细节，≤100 字"),
+        "memory_journal": F(S.Nullable(S.Str(1, MEM.ARCHIVE_MAX)), required=False, default=None,
+                            desc="requests.memory_journal 有值时在第一项必填：把 memory_journal_sources 这一个月写成一篇日记，第一人称，按日子顺下来，记得感受和变化，≤300 字"),
+        "memory_keep": F(S.List(S.Str(1, 40), max_items=2), required=False, default=[],
+                         desc="可选：这次总结的那一天里，值得一直记着的 0~2 条经历 id；它们会被单独留下来，不随那一天淡掉"),
         "replaces_turn": F(S.Nullable(S.Int(1, 1000000)), required=False, default=None,
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
         "together": F(S.Bool(), required=False, default=True,
@@ -335,7 +337,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     if ctx.beats:
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
     payment = MODULES.run(work, "pay_requests", commit, ctx.turn).get("memory", {})
-    summarized, archived = payment.get("summarized"), payment.get("archived")
+    summarized, journaled = payment.get("summarized"), payment.get("journaled")
     archive = _archive_ended_events(work, ctx.turn) if summarized else []
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
@@ -366,7 +368,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "scene_changed": scene_changed,
         "crossed_day": crossed_day,
         "summarized": summarized["id"] if summarized else None,
-        "archived": archived["id"] if archived else None,
+        "journaled": journaled,
         "remembered": memory_result.get("remembered", []),
         "forgetting": memory_result.get("forgetting", {}),
         "replaced_turn": replaced,

@@ -566,7 +566,7 @@ def the_memory_page_shows_her_memories(s):
     assert data["revision"] == rev and data["counts"]["now"] >= 1, data["counts"]
     mine = [e for e in data["entries"] if e["content"] == "她第一次对我笑"]
     assert mine and mine[0]["layer_label"] == "刚刚" and mine[0]["activity"] == 1.0, data["entries"]
-    assert data["layers"]["years"] == "那些年" and data["capacity"]["days"] == 20
+    assert data["layers"]["events"] == "那些事" and data["capacity"]["days"] == 30
 
 
 def editing_a_memory_marks_it_yours(s):
@@ -607,19 +607,16 @@ def summarize_now_is_paid_by_the_next_commit(s):
     ctx = s.ok("get-context", {"session_id": sid})["context"]
     assert ctx["memory_summary_sources"]["sources"], ctx.get("memory_summary_sources")
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[npc_action(significant=False)]))
-    assert "那些事" in json.dumps(err, ensure_ascii=False), err
+    assert "日记" in json.dumps(err, ensure_ascii=False), err
     play(s, sid, rev, ops=[npc_action(significant=False)], memory_summary="那晚我值夜班，有人陪着，没那么难熬")
-    events = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "events"]
-    assert events and events[0]["content"].startswith("那晚我值夜班"), events
-    archived = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"),
-                                       "expected_revision": s.ok("get-context", {"session_id": sid})["revision"], "kind": "archive"})
-    assert [x["text"] for x in archived["request"]["sources"]] == [events[0]["content"]], archived
+    days = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "days"]
+    assert days and days[0]["content"].startswith("那晚我值夜班"), days
 
 
 def nothing_to_archive_is_refused(s):
     sid, rev, _ = e2e.start(s)
-    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "archive"})
-    assert err["code"] == "INVALID_INPUT" and "没有可以归档" in err["message"], err
+    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "journal"})
+    assert err["code"] == "INVALID_INPUT" and "没有可以写进日记" in err["message"], err
 
 
 def settings_moods_page_lists_her(s):
@@ -748,7 +745,24 @@ check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))
 check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))
+
+
+def the_facts_page_lists_what_is_known(s):
+    """常识库页是只读的：她知道的事列出来，谁知道也写清楚。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[
+        her_fact("secret", "你偷偷看了她的病历", scope="player_only"),
+        her_fact("rain", "昨天下了一整夜的雨", scope="companion_only"),
+    ])
+    data = s.ok("debug-facts", {"session_id": sid})
+    assert data["revision"] == rev and data["count"] == len(data["rows"]) >= 2, data["count"]
+    by_key = {f["key"]: f for f in data["rows"]}
+    assert by_key["secret"]["known_by"] == ["你"], by_key["secret"]
+    assert by_key["rain"]["visibility"] == "private" and "林晚" in by_key["rain"]["known_by"], by_key["rain"]
+
+
 check("the activity page defaults to twenty turns", with_sc(settings_activity_default_limit_is_twenty))
+check("the facts page lists what is known", with_sc(the_facts_page_lists_what_is_known))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
 check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))

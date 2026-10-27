@@ -77,7 +77,7 @@ def finalize_requests(state, crossed_day):
     """Step 5 once per record, after every operation: what the next record pays.
 
     Her daily memory summary (the oldest finished day that is not summarised
-    yet) and, every fifteen days, the archive of 那些事 into 那些年.
+    yet) and, once 这几天 fills up, the month's diary entry.
     """
     MODULES.run(state, "close_record")
     return state["requests"]

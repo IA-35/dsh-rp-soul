@@ -326,7 +326,8 @@ DOMAIN_KEYS = (
     "open_action",
     "quotes",
     "memory_summary",
-    "memory_archive",
+    "memory_journal",
+    "memory_keep",
     "replaces_turn",
     "together",
 )
@@ -345,7 +346,7 @@ def choose_depth(state, results, failed_before=False):
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
     requests = dict(state["requests"])
-    if requests.get("memory_summary") or requests.get("memory_archive") or state["turn"] % 5 == 0:
+    if requests.get("memory_summary") or requests.get("memory_journal") or state["turn"] % 5 == 0:
         return "full"
     return "brief"
 
@@ -409,6 +410,7 @@ def _commit_turn(ctx, payload):
                 raise
             results.append(result)
         _engine_outcomes_last(results)
+        _write_journal(ctx, results)
         turn.close_record(state, results)
         repo.update_session(conn, state, now, turns_since_save=unsaved)
         depth = choose_depth(state, results, failed_before)
@@ -422,6 +424,27 @@ def _commit_turn(ctx, payload):
         }
 
     return session_write(ctx, "commit-turn", payload, handler)
+
+
+def _write_journal(ctx, results):
+    """Write the month's diary to her journal folder, inside the transaction.
+
+    One file per batch: 这几天 fills up, the month is written as a whole, and the
+    entries are cleared, so the ranges never overlap. Only the real commit
+    reaches here (never the undo baseline), so undoing or replaying a record
+    does not write the file twice.
+    """
+    written = [r["journaled"] for r in results if r.get("journaled")]
+    if not written:
+        return
+    folder = paths.journal_dir(ctx.data_dir)
+    os.makedirs(folder, exist_ok=True)
+    for entry in written:
+        first, last = entry["lines"][0]["day"], entry["lines"][-1]["day"]
+        path = os.path.join(folder, "journal-%04d-%04d.md" % (first, last))
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(entry["markdown"])
+        entry["path"] = path
 
 
 def _record_end(state, results):
@@ -492,9 +515,12 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("summarized", "archived", "replaced_turn", "thoughts", "remembered"):
+    for key in ("summarized", "replaced_turn", "thoughts", "remembered"):
         if result.get(key) is not None:
             out[key] = result[key]
+    if result.get("journaled"):
+        out["journaled"] = {"day": result["journaled"]["day"], "lines": len(result["journaled"]["lines"]),
+                            "path": result["journaled"].get("path")}
     return out
 
 
@@ -653,9 +679,9 @@ def _resume(state):
 
     turns = state["memory"]["turns"]
     events = MEM.of_layer(state, "events")
-    years = MEM.of_layer(state, "years")
+    years = MEM.of_layer(state, "days")
     return {
-        # 接着玩时先看她最近记成「那些事」「那些年」的那一条
+        # 接着玩时先看她最近记成那些事的那一条，再是这几天里最新的一条
         "last_event": events[-1]["content"] if events else None,
         "last_chapter": years[-1]["content"] if years else None,
         "recent": [t["summary"] for t in turns[-3:]],
@@ -1129,7 +1155,7 @@ def debug_memories(ctx, payload):
         "revision": state.get("revision", 0),
         "turn": state["turn"],
         "clock_label": CL.label(state["clock"]),
-        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_summary", "memory_archive")},
+        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_summary", "memory_journal")},
         "deletions": repo.memory_deletions(conn, state["session_id"]),
     }
     out.update(MEM.panel(state))
@@ -1197,11 +1223,12 @@ def request_memory(ctx, payload):
             request = MEM.manual_summary_request(state)
             key, what = "memory_summary", "总结"
         else:
-            request = MEM.manual_archive_request(state)
-            key, what = "memory_archive", "归档"
+            request = MEM.manual_journal_request(state)
+            key, what = "memory_journal", "写进日记"
         if request is None:
             raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
                            [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])
+
         state["requests"][key] = request
         return "下一次提交会先做%s（%d 条）" % (what, len(request["ids"])), {"request": MEM.request_view(state, request)}
 
@@ -1342,6 +1369,45 @@ def _activity_row(state, row):
         "responses": responses,
         "relations": relations,
         "thoughts": thoughts,
+    }
+
+
+def debug_facts(ctx, payload):
+    """设置页「常识库」：她知道的事，只读。"""
+    from ..domain import clock as CL
+    from ..domain import facts as FA
+
+    payload = validate(specs.DEBUG_FACTS, payload)
+    conn = ctx.db()
+    session = repo.load_session(conn, payload["session_id"])
+    state = session["state"]
+    facts = FA.of(state)
+    # 名字表：显示「谁知道」时用名字而不是 id
+    names = {state["player_id"]: "你"}
+    for cid, card in (state.get("characters") or {}).items():
+        names[cid] = (card or {}).get("name") or cid
+    rows = []
+    for fact in facts.all():
+        rows.append({
+            "id": fact["id"],
+            "key": fact["key"],
+            "text": fact["text"],
+            "truth": fact["truth"],
+            "visibility": fact["visibility"],
+            "origin": fact["origin"],
+            "turn": fact["turn"],
+            "known_by": [names.get(c, c) for c in fact.get("known_by") or []],
+            "believed_by": [names.get(c, c) for c in fact.get("believed_by") or []],
+            "spreading": bool(fact.get("spreading")),
+            "thought_suppressed": bool(fact.get("thought_suppressed")),
+        })
+    return {
+        "session_id": state["session_id"],
+        "revision": state.get("revision", 0),
+        "turn": state["turn"],
+        "clock_label": CL.label(state["clock"]),
+        "count": len(rows),
+        "rows": rows,
     }
 
 
