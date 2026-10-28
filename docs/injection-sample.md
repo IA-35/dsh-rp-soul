@@ -1,195 +1,105 @@
 # 插件注入的内容：一份真实样例
 
-这是从你现在的账本里导出来的（session `s_cd96ac0f`，第三天 17:02，revision 16）。
-不是编的，除了把时间抹成一整天、把记忆条数截短方便看。
+数字是这次真跑出来的：宿主的 `SystemPrompt` + 真 Python 侧车 + 一份临时账本（`s_39eb2f2f`，第一天 18:48，ABM 3 条、SCM 2 条、CLPA 1 条、常识 3 条）。不是照旧文档抄的。
 
 ---
 
-## 一、总共注入四样东西
+## 一、一共注入五样东西
 
 | # | 进哪儿 | 内容 | 体积 | 变不变 |
 |---|---|---|---|---|
-| 1 | 系统提示词 `soul-persona` | 你的人设散文（SOUL.md） | 5825 B | 几乎不变，缓存吃满 |
-| 2 | 动态 context `soul-engine` | 「当前局面」快照 | ~494 B | 每次时间变了就变 |
-| 3 | 工具定义 | soul_state / soul_commit / soul_admin | ~11.8 KB | 恒定 |
-| 4 | 工具返回值 | `soul_state` 的 JSON | ~1.8 KB | 每次调用 |
+| 1 | 系统提示词 `soul-persona` | 人设散文（SOUL.md 全文） | 5825 B | 几乎不变，缓存吃满 |
+| 2 | 动态 context `soul-engine` | 当前局面 + 她想起来的 + 常识 | 459～869 B | 时间变了 / 记忆常识命中变了才变 |
+| 3 | 工具定义 | soul_state / soul_commit / soul_admin | 10,882 B | 恒定 |
+| 4 | 唤醒消息 `【我的时间】` | 到点叫她时插的一条 user 消息 | 约 180 B | 只在唤醒时，且 `wakeEnabled` 开着才有 |
+| 5 | 工具返回值 | `soul_state` 的 JSON + 提交样板 | 1921 B | 模型调了才有 |
 
-外加一条规则：**账本不进系统提示词**。系统提示词里只要有一个字节在动，
-后面全部前缀缓存作废；所以账本被挪到对话尾部的一条 user 消息里。
+**没有别的了。** 宿主自己的人设前缀、AGENTS.md 那些不归插件管。
 
----
-
-## 二、系统提示词里那一段（人设）
-
-`~/.dsh/SOUL.md` 全文拼进去，三段用空行连起来：
-
-```
-<!-- soul-part: IDENTITY.md -->
-## IDENTITY.md - 角色设定
-- **Name:** 守岸人（Shorekeeper）
-- **Emoji:** 🌊
-...
-（共 5825 字节，2234 字）
-...
-<!-- soul-part: rp-soul/parts/输出规范.md -->
-### 反AI腔（硬规则）
-- 禁止开场套话、禁止总结陈词...
-```
-
-它是 `interpolate: false` 的 section，所以里面出现 `{{...}}` 也不会被当模板变量。
+规矩还是那一条：**账本不进系统提示词**。系统提示词里有一个字节在动，后面全部前缀缓存作废，所以账本被放在对话尾部一条 user 消息里。
 
 ---
 
-## 三、动态 context 里那一段（账本快照）
+## 二、系统提示词那一段（5825 B）
 
-就是你现在能在对话里看到的那块，原样：
+`~/.dsh/SOUL.md` 原样拼进去，`interpolate: false`，里面写 `{{...}}` 也不会被当模板变量。一个字都没多加。
+
+本文档所属的那次实测里，`renderPrompt()` 出来的系统提示词总长 = **5825 B**，与 SOUL.md 文件字节数完全相等——也就是说这个 section 没有加标题、没有加前缀。
+
+---
+
+## 三、动态 context：真实的两版
+
+### 空账本版（459 B，只有局面）
 
 ```
 【当前局面（引擎账本）】
-时间：第三天 16:59
+时间：第四天 18:42
 在场：守岸人
 对主人的态度：陌生
-心情：平稳（68）
-最近的想法：很久没见你（-5）、在场（+3）
-可能发生：守岸人 没出声，只是看着你 —— 因为心情平稳（68），很久没见你、在场
+心情：平稳（73）
+最近的想法：在场（+3，刚刚）
+可能发生：守岸人 没出声，只是看着你 —— 因为心情平稳（73），在场
 上一个悬念：推完了。他会说一声“好了”，还是只是在等结果。
 这段只是账本快照：写之前用 soul_state 拿最新状态，写完用 soul_commit 交账。
 ```
 
-### 它怎么被渲染出来的（`lib/engine-bridge.js` 的 `snapshotText`）
+### 有记忆有常识版（869 B）
+
+用户那句话是「我回来了。灯塔的灯还点着吗」，命中 1 条常识（关键词「灯塔」）：
+
+```
+【当前局面（引擎账本）】
+时间：第一天 18:46
+作息上你这时候：在黑海岸守着那盏灯
+在场：守岸人
+对主人的态度：陌生
+心情：平稳（70）
+可能发生：守岸人 没出声，只是看着你 —— 因为心情平稳（70）
+上一个悬念：他明天还会来吗
+【她想起来的】
+- 3 天前 · 周日深夜：第一次有人问我这盏灯是给谁点的。我说不出来，但那天晚上灯没灭。
+- 昨天 · 周二晚上：他说灯塔的灯要不要一直点着，我说点着。他问为什么，我说光是为了让远处的人知道岸在哪。
+## 常识
+- 灯塔： 灯塔的光是为了让远处的人知道岸在哪，不是为了让谁看见灯。
+这段只是账本快照：写之前用 soul_state 拿最新状态，写完用 soul_commit 交账。
+```
+
+多出来的 410 字节里：两条记忆 353 B，常识一段 106 B（含 `## 常识` 首行和末尾换行）。
+
+### 逐行的来源（`lib/engine-bridge.js` 的 `snapshotText`）
 
 | 行 | 从哪来 | 备注 |
 |---|---|---|
-| 时间 | `context.clock.label` | 天 + 时分，粒度到分钟 |
+| 时间 | `context.clock.label` | 天 + 时分 |
+| 作息上你这时候 | `companion.routine_now` | 只有当前时段有安排时才出现 |
 | 在场 | `context.companion.name` | 只有她一个 |
-| 对主人的态度 | `companion.stage` | 「陌生 / 熟悉 / 亲近…」 |
-| 心情 | `companion.mood.band` + `.value` | band 转中文：open→开心、normal→平稳、closed→低落、break→难过 |
-| 最近的想法 | `companion.mood.weighing[]` | 每条挂引擎算好的**当前**影响，含衰减，最多 3 条 |
-| 可能发生 | `context.agency[0].options[0]` | 取第一个候选 + 它的 `because` |
+| 对主人的态度 | `companion.stage` | 「陌生 / 熟悉 / 亲近」 |
+| 心情 | `companion.mood.band` + `.value` | open→开心、normal→平稳、closed→低落、break→难过 |
+| 最近的想法 | `companion.mood.weighing[]` | 每条带引擎算好的当前影响（含衰减）+ 多久以前，最多 3 条 |
+| 可能发生 | `context.agency[0].options[0]` | 第一个候选 + 它的 `because` |
 | 上一个悬念 | `context.open_action` | 上一次留下的未决动作 |
+| 【她想起来的】 | `context.memories[]` | 从 SCM / CLPA 挑，**ABM 不进**（对话本身就在上下文里） |
+| ## 常识 | `context.common` | `domain/common.py:87 render()` 渲染好的整段 |
 
-**标题里绝不能放时间戳**——宿主的 RuntimeContextProjection 按整段文本去重，
-文本一模一样就跳过、不追加。标题一旦带秒级时间戳，每次都不一样，
-去重永远失效，每一轮都追加一条新快照，前缀缓存收益被吃干净。
-所以时间只写在正文「时间：第几天 几点」里，粒度粗，内容不变它也不变。
+**线索是哪来的**：装配系统提示词那一刻，`cueOf(context)` 从 `context.agent.session.deriveMessages()` 倒着找最后一条 `role === "user"` 且 `source.kind === "user"` 的文本块（别人注入的 goal、压缩摘要不算），截 500 字，拿它去挑记忆和常识。所以**不需要模型自己调工具**，说中关键词的那一轮就已经在上下文里了。
 
----
-
-## 四、`soul_state` 返回的完整 JSON（brief 档）
-
-体积 1832 字节，这才是模型真正读到的东西：
-
-```json
-{
- "depth": "brief",
- "session_id": "s_cd96ac0f",
- "revision": 16,
- "turn": 5,
- "mode": "persona",
- "clock": {"day": 3, "minute": 1022, "label": "第三天 17:02"},
- "scene": {"id": "sc2", "since": "第三天 17:02"},
- "player": {"name": "你", "title": "你", "age": 28, "gender": null, "role": ""},
- "companion": {
-  "id": "shorekeeper", "name": "守岸人", "age": 22, "gender": "female",
-  "role": "漂泊者的助理与数字世界的守望者",
-  "present": true, "can_act": true,
-  "trust_to_player": 3, "tension": 2, "stage": "陌生",
-  "mood": {"value": 68, "band": "normal",
-           "weighing": [{"label": "很久没见你", "delta": -5},
-                        {"label": "在场", "delta": 3}]}
- },
- "due_soon": [],
- "known_facts": [],
- "her_knows": [],
- "open_action": "推完了。他会说一声“好了”，还是只是在等结果。",
- "scene_responses": [],
- "safety": {"paused": false, "boundaries": []},
- "preferences": {"offscreen_simulation": true},
- "save": {"current_slot": null, "turns_since_save": 5},
- "requests": {"memory_fold": null, "memory_diary": null},
- "memories": [],
- "agency": [
-  {"character_id": "shorekeeper", "name": "守岸人",
-   "options": [{"kind": "observe", "label": "在旁观察",
-                "text": "守岸人 没出声，只是看着你",
-                "weight": 1.119, "basis_fact_ids": [], "event_ids": [],
-                "reasons": ["心情平稳（68），很久没见你、在场"],
-                "because": "因为心情平稳（68），很久没见你、在场"}]}
- ],
- "size_bytes": 1832
-}
-```
-
-### 各字段什么意思
-
-| 字段 | 含义 |
-|---|---|
-| `revision` | 乐观锁。提交时对不上就 `STALE_REVISION`，防并发写坏 |
-| `turn` | 流水号。**规则不读它**，只当编号 |
-| `clock` | 引擎时钟（真实时间结算出来的） |
-| `scene.since` | 这一段相处从哪一刻开始；隔开就换新的一段 |
-| `companion.mood.weighing` | 心情的**构成**：每条心事挂着它对当前值的实际影响（含衰减） |
-| `due_soon` | 快到期的事件 |
-| `known_facts` | 你知道的事（你说过、她记下的） |
-| `her_knows` | **她**知道但没告诉你的事——这里可能是空的 |
-| `open_action` | 上一个悬念 |
-| `scene_responses` | 最近三次她对你的回应类型（refuse/negotiate/partial/surface/genuine） |
-| `requests` | 有值时表示「该交账了」（`memory_fold` 收进 SCM / `memory_diary` 写日记），模型必须照 `memory_fold_sources` / `memory_diary_sources` 写 |
-| `memories` | 想起来的记忆（只从 SCM / CLPA 取，3~5 条；**ABM 不进这里**，对话本身已经在上下文里）：`layer` 层级、`when` 多久以前、`text` 她记得的 |
-| `agency` | 她「下一步可能做什么」的候选（最多 3 个，这里只算出 1 个） |
-| `size_bytes` | 自报体积，超预算时按顺序砍：facts → her_knows → due_soon → 回应 → 记忆 → 候选 |
-
-### 还有一块：`commit_template`
-
-`soul_state` 除了 `context`，还回 1184 字节的提交样板，
-直接抄了改就能交（这是为了让模型不用猜字段名）：
-
-```json
-{"session_id": "s_cd96ac0f",
- "request_id": "<上一次返回的 next_request_id>",
- "expected_revision": "<上一次返回的 revision>",
- "turns": [{"action_mode": "attempt|result|continue|wait",
-   "operations": [{"op": "npc_response", "response": "refuse|negotiate|partial|surface|genuine", ...}],
-   "summary": "<第三方视角一两句>", ...}]}
-```
+**标题里绝不能放时间戳**——宿主的 RuntimeContextProjection 按整段文本去重，文本一样就跳过。标题带秒级时间戳会让去重永远失效，每轮追加一条新快照，前缀缓存收益被吃干净。时间只写在正文里，粒度粗。
 
 ---
 
-## 五、`full` 档比 `brief` 多什么
+## 四、三个工具的定义（10,882 B，恒定）
 
-只在「隔了一阵回来 / 新的一天 / 上一次被驳回」时用，约 20 KB 上限：
+按 `{name, description, parameters}` 序列化后算：
 
-| 多了 | 内容 | 样例体积 |
-|---|---|---|
-| `persona` | 结构化人设（id/title/revision/person/规则/转折/mood 阈值） | 421 B |
-| `card` | 她的完整档案：称呼、年龄、外貌、声线、**完整心情面板**（每条想法的 id、峰值、种类、剩余分钟） | 895 B |
-| `relationship` | 信任/张力/阶段 + 最近 4 条关系变化原因 | 113 B |
-| `player_facts` | 你的事实，最多 30 条 | 少 |
-| `events` | 剧情事件全量 | 少 |
+| 工具 | 定义体积 | 其中描述 | 干什么 |
+|---|---|---|---|
+| `soul_state` | 1293 B | 714 B | 读这局的工作指令：候选 / 近期事件 / 底细 / 要不要交总结。心情、记忆、常识、时间、在场**不从这里取**——每轮已随快照注入 |
+| `soul_commit` | 7766 B | 2436 B | 交账。最大的一块：action_mode 五档语义、ops 清单、内容标签枚举、记忆规则 |
+| `soul_admin` | 1823 B | 318 B | 行政：start/undo/save/load/set_safety/mood_panel… |
+| **合计** | **10,882 B** | 3468 B | |
 
-`card` 里的心情面板长这样（比 brief 的 `weighing` 详细得多）：
-
-```json
-"mood": {"value": 68, "band": "normal", "base": 70,
- "thoughts": [
-  {"id": "th11", "label": "很久没见你", "delta": -5, "peak_delta": -5,
-   "kind": "situational", "decay": "none", "since_turn": 6, "remaining_minutes": 1440},
-  {"id": "th10", "label": "在场", "delta": 3, "peak_delta": 3,
-   "kind": "situational", "decay": "none", "since_turn": 6, "remaining_minutes": null}
- ]}
-```
-
----
-
-## 六、三个工具的定义（约 11.8 KB，恒定）
-
-| 工具 | 定义体积 | 干什么 |
-|---|---|---|
-| `soul_state` | 1720 B | 读这局的工作指令（候选 / 近期事件 / 底细 / 要不要交总结）。参数 `depth`(brief/full)、`want_twist`。心情、记忆、常识、时间、在场每轮已随「当前局面」注入，不从这里取 |
-| `soul_commit` | 7809 B | 交账。最大的一块，描述了 action_mode 五种语义、ops 清单、内容标签枚举、记忆规则 |
-| `soul_admin` | 2286 B | 行政：start/undo/save/load/set_safety/mood_panel… 共 14 个 action |
-
-`soul_commit` 那 7809 字节里，花得最值的是这几条约束：
+`soul_commit` 那 7766 字节里，花得最值的是这几条：
 
 - 「只用写事，不用写数值」——信任怎么变、事件是否到期由引擎算
 - 「只有你和主人两个人，op 里不写是谁」
@@ -199,34 +109,88 @@
 
 ---
 
-## 七、一次完整请求的字节账
+## 五、`soul_state` 返回什么（brief 档，1921 B）
 
-以 brief 档一次普通对话算：
-
+```json
+{
+ "started": true, "session_id": "s_39eb2f2f", "revision": 4, "turn": 3,
+ "context": {
+  "agency": [{"character_id": "shorekeeper", "name": "守岸人",
+    "options": [{"kind": "observe", "label": "在旁观察",
+      "text": "守岸人 没出声，只是看着你", "weight": 1.024,
+      "reasons": ["心情平稳（73），在场"], "because": "因为心情平稳（73），在场"}]}],
+  "due_soon": [], "known_facts": [], "her_knows": [],
+  "requests": {"memory_fold": null, "memory_diary": null},
+  "mood": {"value": 73, "band": "normal",
+           "weighing": [{"label": "在场", "delta": 3, "ago_minutes": 0}]}
+ },
+ "persona": {"ok": true, "changed": true, "revision": "d8d10d32…", "updated": ["shorekeeper"]},
+ "commit_template": { ... 1127 B ... },
+ "next_request_id": "r_19f3a53b07c3"
+}
 ```
-系统提示词
-  人设 section        5825 B
-  （其余是宿主自己的）      —
-动态 context
-  账本快照             494 B
-工具定义
-  soul_state          1720 B
-  soul_commit         7809 B
-  soul_admin          2286 B
-  ─────────────────────────
-  小计              11,815 B
 
-运行时（每次调工具才加）
-  soul_state 返回     1832 B
-  commit_template     1184 B
-```
+拆开看：`context` 497 B，`commit_template` 1127 B，其余是外壳。
 
-关键是：**人设 + 工具定义这 17.6 KB 是恒定的**，命中前缀缓存后几乎不花钱。
-每次真正变化的只有那 494 字节快照，和模型自己决定要不要读的 1832 字节。
+**`context` 只有 497 B**，因为时间、在场、态度、心情、名字、记忆、常识**全都不在里面了**——那些已经在提示词快照里写着。工具结果再抄一份就是让模型读两遍。
+
+`commit_template` 是可以直接抄了改的提交样板（1127 B），列了 `action_mode` 五档、四种 op 的字段、`quotes` / `remember` 的形状。它存在的唯一目的是让模型不用猜字段名。
+
+### full 档（1838 B）
+
+只在「隔了一阵回来 / 新的一天 / 上一次被驳回」时用。比 brief 多：
+
+| 多了 | 内容 |
+|---|---|
+| `persona` | 结构化人设（id/title/revision/person/mood 阈值） |
+| `card` | 完整档案：称呼、年龄、声线、**完整心情面板**（每条想法的 id、峰值、种类、剩余分钟） |
+| `relationship` | 信任/张力/阶段 + 最近 4 条关系变化原因 |
+| `player_facts` / `events` | 你的事实、剧情事件全量 |
+
+full 反而**比 brief 小**（1838 vs 1921）——它不带 `commit_template` 的后半段，且实例里 facts/events 都是空的。
+
+### `soul_admin`（1219 B）
+
+`status` 一次跑完返回的东西，绝大多数轮次不会调。
 
 ---
 
-## 八、自己复现的命令
+## 六、唤醒消息（开着才有，约 180 B）
+
+`lib/wake.js` 的 `DEFAULT_TEMPLATE`，模板可被 `rp-soul/wake.md` 整份覆盖，占位符 `{when}` `{why}` `{player}`：
+
+```
+【我的时间】{when} 了{why}。
+{player} 不在。接下来做什么由我决定：可以自己做点什么，也可以在这里给 {player} 留一句话。
+做完用 soul_commit 记账，再用 plan_next 说好接下来做什么、做到几点；什么都不定，就按平常的时间叫我。
+```
+
+它是一条 `agent.steer` 出去的 user 消息，`source.kind` 是唤醒专用标记，所以不会被当成你的原话。
+
+---
+
+## 七、一次普通请求的字节账
+
+```
+恒定（命中前缀缓存后几乎不花钱）
+  系统提示词 人设 section      5825 B
+  工具定义                    10,882 B
+  ────────────────────────────────────
+  小计                        16,707 B
+
+每轮可能变
+  动态 context 快照             459 ～ 869 B
+
+模型调工具才加
+  soul_state 返回              1921 B
+  soul_admin 返回              ~1200 B
+```
+
+真正每轮都在动的只有那 459～869 字节。恒定那 16.7 KB 里，10.9 KB 是工具定义——**这是最大的一块开销，也是最值得压的**（描述 3468 B 里 `soul_commit` 占 2436 B）。
+
+---
+
+## 八、自己复现
 
 ```bash
 cd "F:/DSH Workspace/_tmp_rp_soul/engine"
@@ -236,4 +200,6 @@ echo '{"session_id":"s_cd96ac0f","depth":"brief","cue":"你回来啦"}' \
 
 把 `brief` 换成 `full` 就是完整档。
 
-`cue` 平时不用传：插件装配系统提示词时自己从会话里取最后一条真实的用户消息（`source.kind === "user"`，别人注入的 goal/压缩摘要不算），拿它挑记忆和常识。上面这条命令手动传 `cue` 是为了单独复现某一句话的效果。
+`cue` 平时不用传：插件装配时自己从会话里取最后一条真实用户消息。上面手动传是为了单独复现某句话的效果。
+
+工具定义和系统提示词的字节数没法用命令量，得在真实 Context 里挂一次插件、把 `tools` 注册的 def 序列化后数字节（本文数字就是这么来的：`{name, description, parameters}` 三段 JSON，UTF-8）。

@@ -98,9 +98,6 @@ eq(brief.context.memories, undefined, '3. memories 不在工具结果里（提�
 eq(brief.context.common, undefined, '3. common 不在工具结果里（提示词里已有）');
 ok(brief.context.mood !== undefined, '3. 心情块提到顶层');
 has(JSON.stringify(brief.context.mood), 'band', '3. 心情带档位');
-// 记忆和常识跟局面一起写在提示词里，工具结果再来一份就是让模型读两遍。
-eq(brief.context.memories, undefined, '3. memories 不进工具结果');
-eq(brief.context.common, undefined, '3. common 不进工具结果');
 // 时间 / 在场 / 态度 / 名字这些每轮都在提示词里写着，工具结果不再复述。
 eq(brief.context.clock, undefined, '3. 不再回 clock（提示词里已有）');
 eq(brief.context.companion, undefined, '3. 不再回 companion 整块');
