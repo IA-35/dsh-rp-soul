@@ -322,7 +322,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 每次开始先读。`depth: brief`（~6 KB，日常）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`cue` 传你这句话的原话，引擎拿它挑记忆和秘密；`want_twist` 要转折 |
+| `soul_state` | 读这局的工作指令（`agency` / `due_soon` / `known_facts` / `her_knows` / 总结请求）。`depth: brief`（~6 KB）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`want_twist` 要转折。心情、记忆、常识跟「当前局面」一起每轮自动注入，不从这里取 |
 | `soul_commit` | 写完正文后交账。`operations` 最多 40 条；`summary` ≤120 字；`remember` ≤60 字（她第一人称怎么记）；引擎要把 ABM 收进 SCM 时带 `memory_fold`（≤300 字）、该写日记时带 `memory_diary`（≤300 字）；`memory_keep` 挑 0–2 条进 CLPA |
 | `soul_admin` | 14 个 action：`start` / `status` / `undo` / `save` / `load` / `list` / `delete` / `set_safety` / `set_preferences` / `export` / `import` / `mood_panel` / `drop_thought` / `reset_mapping` |
 

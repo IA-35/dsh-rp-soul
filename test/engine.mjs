@@ -93,9 +93,14 @@ eq(brief.session_id, sessionId, '3. 会话 id 一致');
 ok(brief.context !== undefined && brief.context !== null, '3. 带回 context');
 eq(brief.context.world, undefined, '3. 没有 world 段');
 ok(Array.isArray(brief.context.agency), '3. agency 是数组');
-ok(Array.isArray(brief.context.memories), '3. memories 是数组');
+// 记忆和常识跟着提示词快照走了（装配时按你这句话挑好），工具结果里再来一遍是重复。
+eq(brief.context.memories, undefined, '3. memories 不在工具结果里（提示词里已有）');
+eq(brief.context.common, undefined, '3. common 不在工具结果里（提示词里已有）');
 ok(brief.context.mood !== undefined, '3. 心情块提到顶层');
 has(JSON.stringify(brief.context.mood), 'band', '3. 心情带档位');
+// 记忆和常识跟局面一起写在提示词里，工具结果再来一份就是让模型读两遍。
+eq(brief.context.memories, undefined, '3. memories 不进工具结果');
+eq(brief.context.common, undefined, '3. common 不进工具结果');
 // 时间 / 在场 / 态度 / 名字这些每轮都在提示词里写着，工具结果不再复述。
 eq(brief.context.clock, undefined, '3. 不再回 clock（提示词里已有）');
 eq(brief.context.companion, undefined, '3. 不再回 companion 整块');
@@ -132,13 +137,20 @@ eq(committed.turn, 1, '6. turn 前进到 1');
 ok(committed.revision > revision, '6. revision 递增');
 revision = committed.revision;
 
-// ---- 6b. 记忆：这一回合进了 ABM，但 ABM 不注入（对话本身就在上下文里） ----
+// ---- 6b. 记忆与常识跟着提示词快照走，工具结果里不再重复一遍 ----
 const recalled = await call('soul_state', { cue: '今晚雨真大' });
-const memories = recalled.context?.memories ?? [];
-ok(Array.isArray(memories), '6b. context 带 memories 字段');
-eq(memories.length, 0, '6b. ABM 不进上下文（刚刚说的还在对话里）');
 ok(Array.isArray(recalled.context?.her_knows), '6b. context 带 her_knows');
 eq(recalled.context?.recent, undefined, '6b. 旧的 recent 摘要不再单独给');
+// 记忆和常识由装配钩子按你这句话挑好、写进快照（见 prompt.mjs 第 8 条）。
+eq(recalled.context?.memories, undefined, '6b. memories 不进工具结果（提示词里已有）');
+eq(recalled.context?.common, undefined, '6b. common 不进工具结果（提示词里已有）');
+
+// ---- 6c. 常识库：工具 schema 收得下；注入靠提示词快照，不靠工具结果 ----
+ok(
+  Array.isArray(commitProps.common?.items?.required) && commitProps.common.items.required.includes('key'),
+  '6c. soul_commit 能写 common',
+);
+eq(recalled.context?.common, undefined, '6c. 常识不进工具结果（提示词里已有）');
 
 // ---- 7. stale revision 会被引擎拒，但带当前 revision ----
 const staleClient = tools.get('soul_commit');

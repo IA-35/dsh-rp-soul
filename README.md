@@ -395,7 +395,7 @@ routine:
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 每次开始读上下文（`brief` 约 6 KB；隔了一阵再回来 / 新的一天 / 上一次被驳回用 `full` 约 20 KB）。`cue` 传你这一句话：拿它挑出会被勾起来的记忆和她知道的事。`want_twist` 取转折 |
+| `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结。心情、记忆、常识、时间、在场「当前局面」每轮都已写进上下文，这里不再重复一遍。`want_twist` 取转折 |
 | `soul_commit` | 写完这一次后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。可选的 `remember` 用第一人称写她会怎么记得这一次；引擎要把 ABM 收进 SCM / 写日记时，这次提交带上 `memory_fold` / `memory_diary`（汇总时可加 `memory_keep` 挑 0~2 条进 CLPA）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这次过了多久 |
 | `soul_admin` | 开局（`start`，全局作用域下通常不必手动开）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
 
@@ -423,7 +423,8 @@ routine:
 - **日记**：每晚 23:30 有一次专门为日记的唤醒；引擎给出当天还没写过的 SCM，
   由子代理写成一篇（≤300 字），落盘成 `journal/diary-<日>.md`。23:30 那会儿没人在也会补上前一天。
 - **想起来**：每次上下文的 `memories` 只从 SCM / CLPA 里按 RimTalk 的打分取（brief 3 条 / full 5 条，
-  低于 0.15 不要）：时间远近 + 重要度 + 和线索的重合 + 层级 + Pin / 你改过 + 活跃度。线索是你这句话（`cue`）、
+  低于 0.15 不要）：时间远近 + 重要度 + 和线索的重合 + 层级 + Pin / 你改过 + 活跃度。线索是你这句话
+  （装配时从会话里取最后一条你说的，不需要模型自己调工具）、
   她作息上此刻在做什么、快到期的约定、她心里压着的事。你在 = 社交场景（往事也容易被勾起，30 天窗口），她一个人 = 普通场景（只看最近）。
 - **越想越牢**：被你这句话勾起来的记忆，活跃度回升 0.1、重新开始衰减——常被提起的事不容易淡掉（借自 MemoryBank）。
 - **她知道的事**：上下文的 `her_knows` 给出最多 5 条只有她知道的事（她的秘密、表面配合时的真实打算），按线索优先。

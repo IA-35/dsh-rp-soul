@@ -185,7 +185,7 @@
 
 | 工具 | 定义体积 | 干什么 |
 |---|---|---|
-| `soul_state` | 1720 B | 读账本。参数 `depth`(brief/full)、`cue`(你这句话原话，用来挑记忆)、`want_twist` |
+| `soul_state` | 1720 B | 读这局的工作指令（候选 / 近期事件 / 底细 / 要不要交总结）。参数 `depth`(brief/full)、`want_twist`。心情、记忆、常识、时间、在场每轮已随「当前局面」注入，不从这里取 |
 | `soul_commit` | 7809 B | 交账。最大的一块，描述了 action_mode 五种语义、ops 清单、内容标签枚举、记忆规则 |
 | `soul_admin` | 2286 B | 行政：start/undo/save/load/set_safety/mood_panel… 共 14 个 action |
 
@@ -234,4 +234,6 @@ echo '{"session_id":"s_cd96ac0f","depth":"brief","cue":"你回来啦"}' \
   | python -m rp_soul_engine --data-dir "C:\Users\Administrator\.dsh\rp-soul\engine" get-context
 ```
 
-把 `brief` 换成 `full` 就是完整档。`cue` 决定「被这句话勾起来的往事」那一块挑什么。
+把 `brief` 换成 `full` 就是完整档。
+
+`cue` 平时不用传：插件装配系统提示词时自己从会话里取最后一条真实的用户消息（`source.kind === "user"`，别人注入的 goal/压缩摘要不算），拿它挑记忆和常识。上面这条命令手动传 `cue` 是为了单独复现某一句话的效果。

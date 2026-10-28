@@ -94,6 +94,27 @@ try {
   // 一次超时后把局面整段抽走（那会让她的心情和在场凭空消失）。
   has(engineText(missing), '外部更新后的悬念A', '5. 账本读取失败就沿用上一次的局面');
   has(renderPrompt(missing), persona.prose, '5. 引擎读取失败仍保留人设提示');
+
+  // 最要紧的一条：记忆和常识按「你这一次说的话」挑，不靠模型自己去调工具。
+  // cue 从 agent 的会话里翻最后一条真实的用户消息，装配期就拿到。
+  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: next, [agentB.id]: b }));
+  await client.call('add-common', { request_id: rid(), key: ['deepseek', 'ds'], weight: 0.8, content: 'deepseek 是深度求索旗下的大语言模型。' });
+  const sayTo = (agent, text) => {
+    agent.session = { deriveMessages: () => [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }] };
+  };
+  sayTo(agentA, '我平时用的是 ds 这个模型');
+  has(engineText(await assemble(agentA)), '## 常识', '8. 命中关键词的常识跟着快照注入');
+  has(engineText(await assemble(agentA)), '深度求索', '8. 常识正文也在');
+  sayTo(agentA, '今天下雨了，路上有点堵');
+  hasNot(engineText(await assemble(agentA)), '## 常识', '8. 没命中就不出现');
+  // 注入给模型的上下文（goal、压缩摘要）也是 user 角色，但不是你说的话。
+  agentA.session = {
+    deriveMessages: () => [
+      { role: 'user', source: { kind: 'goal-round' }, content: [{ type: 'text', text: '我平时用的是 ds 这个模型' }] },
+    ],
+  };
+  hasNot(engineText(await assemble(agentA)), '## 常识', '8. 别人注入的上下文不算你说的话');
+  delete agentA.session;
   await fiber.dispose();
 
   // 新建一个干净的引擎目录，验证首次自动开局及两个装配同时发生的情况。
