@@ -83,9 +83,6 @@ SCENE_BREAK_MINUTES = 60
 ACTION_COOLDOWN_MINUTES = 20
 # 心情 open 时放松到这个数（原来是 TURNS 减 1 回合）
 ACTION_COOLDOWN_MINUTES_OPEN = 10
-# 隔这么久（分钟）再开口，上下文里才多出「这段时间」那一块：十几分钟
-# 的空档才是真的空档，一分钟里连发的几句话不该被说成「你不在」。
-SINCE_LAST_MINUTES = 16
 MAX_FIX_ATTEMPTS = 2
 
 # ---------------------------------------------------------------------------

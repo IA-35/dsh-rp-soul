@@ -15,7 +15,10 @@ def project(state, persona, cue, full):
     brief = MO.brief(state, cid)
     mood = {"value": brief["value"], "band": brief["band"]}
     if brief.get("top"):
-        mood["weighing"] = [{"label": row["label"], "delta": row["delta"]} for row in brief["top"]]
+        mood["weighing"] = [
+            {"label": row["label"], "delta": row["delta"], "ago_minutes": row.get("ago_minutes")}
+            for row in brief["top"]
+        ]
     return {"companion": {"mood": mood},
             "card": {"mood": MO.panel(state, cid)} if full else {},
             "persona": {"mood_base": persona["mood_base"], "mood_thresholds": dict(persona["mood_thresholds"])}}

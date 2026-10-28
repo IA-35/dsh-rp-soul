@@ -110,6 +110,10 @@ def brief(state, cid, top=3):
         if delta == 0:
             continue
         row = {"label": thought["label"], "delta": delta}
+        # 多久以前的事了：刚冒出来的念头和昨天留下的分量不一样
+        since = thought.get("since_abs")
+        if since is not None:
+            row["ago_minutes"] = max(0, now - since)
         if thought.get("kind") == "situational":
             row["kind"] = "situational"
         rows.append(row)

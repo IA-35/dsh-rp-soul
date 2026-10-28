@@ -187,7 +187,9 @@ def refreshing_a_thought_updates_its_label(s):
     memories = [t for t in s.ok("debug-mood", {"session_id": sid})["thoughts"] if t["kind"] == "memory"]
     assert len(memories) == 1 and memories[0]["id"] == original["id"], memories
     assert memories[0]["label"] == "误会解开，她释然了" and memories[0]["delta"] == 10, memories
-    assert {"label": "误会解开，她释然了", "delta": 10} in data["context"]["companion"]["mood"]["weighing"]
+    weighing = data["context"]["companion"]["mood"]["weighing"]
+    assert any(w["label"] == "误会解开，她释然了" and w["delta"] == 10 for w in weighing), weighing
+    assert all("ago_minutes" in w for w in weighing), weighing
     s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})
     restored = next(t for t in s.ok("debug-mood", {"session_id": sid})["thoughts"] if t["id"] == original["id"])
     assert restored["label"] == "误会让她难过" and restored["delta"] == -8, restored
@@ -842,50 +844,20 @@ def _wait(s, minutes):
     return minutes
 
 
-def the_gap_shows_what_she_did_apart():
-    """刚聊完时 brief 里没有「这段时间」：连着说的几句话不是空档。"""
-    with Sidecar(DATA) as s:
-        sid, rev, _ = e2e.start(s)
-        rev, _ = play(s, sid, rev)
-        ctx = brief_of(s, sid)
-        assert "since_last" not in ctx, "刚聊完，不该冒出「这段时间」"
-
-
-def the_gap_needs_sixteen_minutes():
-    from rp_soul_engine.projections import context as CX
-    from rp_soul_engine.domain import structure as ST
-    assert ST.SINCE_LAST_MINUTES == 16, ST.SINCE_LAST_MINUTES
+def thoughts_carry_how_long_ago():
+    """心情里每条心事要带「多久以前」：刚冒出的念头和昨天留下的分量不一样。"""
+    from rp_soul_engine.domain import mood as MO
     state = {
-        "characters": {"lin_wan": {"id": "lin_wan", "name": "林晚"},
-                       "player": {"id": "player", "name": "你"}},
-        "relationships": {},
-        "player_id": "player",
-        "clock": {"day": 1, "minute": 600},
-        "memory": {"turns": []},
-        "plan": None,
+        "characters": {"lin_wan": {"id": "lin_wan", "mood": {"base": 50, "thoughts": []}}},
+        "counters": {}, "turn": 0, "clock": {"day": 1, "minute": 600},
     }
-    persona = {}
-    # 差一分钟：没有这一块
-    state["last_player_at"] = "2026-10-26T10:00:00+08:00"
-    state["real_at"] = "2026-10-26T10:15:00+08:00"
-    assert CX.since_last(state, persona) is None, "15 分钟不算空档"
-    state["real_at"] = "2026-10-26T10:16:00+08:00"
-    block = CX.since_last(state, persona)
-    assert block is not None, "16 分钟该有了"
-    assert block["minutes"] == 16, block
-    assert "minutes" in block and "her_routine" in block, block
-    # 没有情绪词
-    text = json.dumps(block, ensure_ascii=False)
-    for word in ("开心", "难过", "生气", "委屈", "失望", "心情"):
-        assert word not in text, "「这段时间」不该写情绪词：%s" % word
-    # 你的安排会带上
-    state["plan"] = {"note": "去诊所拿结果", "until": {"day": 1, "minute": 800}, "set_turn": 1}
-    block = CX.since_last(state, persona)
-    assert block["your_plan"]["note"] == "去诊所拿结果", block
+    MO.add_thought(state, "lin_wan", "很久没见你", -5, "memory", minutes=1200)
+    state["clock"] = {"day": 1, "minute": 700}
+    rows = MO.brief(state, "lin_wan")["top"]
+    assert rows and rows[0]["ago_minutes"] == 100, rows
 
 
-check("the gap shows what she did apart", the_gap_shows_what_she_did_apart)
-check("the gap needs sixteen minutes", the_gap_needs_sixteen_minutes)
+check("thoughts carry how long ago", thoughts_carry_how_long_ago)
 
 
 run("game")

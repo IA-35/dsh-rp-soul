@@ -16,8 +16,6 @@ from ..domain import agency as AG
 from ..domain import clock as CL
 from ..domain import facts as FA
 from ..domain import mood as MO
-from ..domain import ops as OPS
-from ..domain import simulation as SIM
 from ..domain import structure as ST
 from .. import persona as PE
 from ..domain import state as SS
@@ -141,35 +139,6 @@ def _events(state, limit=None):
 ENGINE_TURNS = ("wake",)
 
 
-def since_last(state, persona):
-    """「这段时间」：距你上次开口过了多久，这一段时间她在做什么。
-
-    只在空档够长时出现（ST.SINCE_LAST_MINUTES）。内容全来自账本：她的
-    作息那几段、她说好的安排、上一条你说话时她原本在做什么。不写任何
-    情绪词——她高不高兴由心情条决定，这里只给事实。
-    """
-    if CL.parse_iso_loose(state.get("last_player_at")) is None:
-        return None
-    if CL.parse_iso_loose(state.get("real_at")) is None:
-        return None
-    minutes = CL.real_minutes_between(state.get("last_player_at"), state.get("real_at"))
-    if minutes < ST.SINCE_LAST_MINUTES:
-        return None
-    card = state["characters"][SS.companion(state)]
-    # 你上次说话那一刻：现在的钟往回退这么多分钟，正是那段空档的起点
-    was_clock = CL.add_minutes(state["clock"], -minutes)
-    block = {
-        "minutes": minutes,
-        "hours": round(minutes / 60.0, 1),
-        "her_routine": SIM.routine_between(card, was_clock, state["clock"]),
-        "your_plan": None,
-    }
-    plan = OPS.current_plan(state)
-    if plan is not None and CL.to_abs(plan["until"]) > CL.to_abs(state["clock"]):
-        block["your_plan"] = {"note": plan["note"], "until": CL.label(plan["until"])}
-    return block
-
-
 def brief(state, persona, save=None, cue=""):
     player = state["player_id"]
     pchar = state["characters"][player]
@@ -209,16 +178,13 @@ def brief(state, persona, save=None, cue=""):
         "save": save or {"current_slot": None, "turns_since_save": 0},
         "requests": dict(state["requests"]),
     }
-    apart = since_last(state, persona)
-    if apart is not None:
-        context["since_last"] = apart
     for key in ("pace", "explicitness"):
         if state["preferences"].get(key) != "standard":
             context["preferences"][key] = state["preferences"][key]
     contributed = MODULES.project(state, persona, cue)
     context.update(contributed["context"])
     context["companion"].update(contributed["companion"])
-    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency", "since_last"))
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency"))
     return context
 
 

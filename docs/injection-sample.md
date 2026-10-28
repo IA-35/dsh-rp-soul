@@ -107,7 +107,6 @@
  "preferences": {"offscreen_simulation": true},
  "save": {"current_slot": null, "turns_since_save": 5},
  "requests": {"memory_summary": null, "memory_journal": null},
- "since_last": {"minutes": 2517, "hours": 42.0, "her_routine": [], "your_plan": null},
  "memories": [
   {"layer": "刚刚", "when": "前天 · 深夜",
    "text": "他让我把代码推上去。二十五条，一起上去了，都到了。",
@@ -144,7 +143,6 @@
 | `open_action` | 上一个悬念 |
 | `scene_responses` | 最近三次她对你的回应类型（refuse/negotiate/partial/surface/genuine） |
 | `requests` | 有值时表示「该交总结了」，模型必须照 `memory_summary_sources` 写 |
-| `since_last` | 「这段时间」：距你上次开口 42 小时，她那会儿在做什么。**少于 16 分钟就不出现**，且绝不写情绪词 |
 | `memories` | 记忆条目：`layer` 层级、`when` 什么时候、`text` 她记得的、`you` 你当时说的 |
 | `agency` | 她「下一步可能做什么」的候选（最多 3 个，这里只算出 1 个） |
 | `size_bytes` | 自报体积，超预算时按顺序砍：facts → her_knows → due_soon → 回应 → 记忆 → 候选 |

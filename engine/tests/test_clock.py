@@ -167,21 +167,7 @@ def a_gap_of_a_day_is_still_a_gap():
 check("cooldown is a stretch of minutes", cooldown_is_a_stretch_of_minutes)
 check("a gap of a day is still a gap", a_gap_of_a_day_is_still_a_gap)
 
-def the_gap_reaches_the_context():
-    """隔够久，「这段时间」真的进了 get-context 返回的 brief。"""
-    with game() as (ctx, clock, row):
-        play(ctx, clock, row, "12:00:00", player_input="我出门了")
-        sid = row["session_id"]
-        assert "since_last" not in service.get_context(ctx, {"session_id": sid})["context"], "刚说完不该有"
-        clock.return_value = "2026-10-26T12:15:00+08:00"
-        assert "since_last" not in service.get_context(ctx, {"session_id": sid})["context"], "15 分钟还不够"
-        clock.return_value = "2026-10-26T12:16:00+08:00"
-        block = service.get_context(ctx, {"session_id": sid})["context"]["since_last"]
-        assert block["minutes"] == 16, block
-        assert "her_routine" in block, block
 
-
-check("the gap reaches the context", the_gap_reaches_the_context)
 
 
 def a_session_without_an_anchor_does_not_lose_the_days():
