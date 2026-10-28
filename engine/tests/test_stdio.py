@@ -7,6 +7,7 @@ import shutil
 
 import e2e
 from harness import check, run
+from rp_soul_engine import DB_SCHEMA_VERSION
 from stdio import Sidecar
 
 DATA = e2e.temp_dir()
@@ -111,8 +112,8 @@ def two_identical_calls_both_answer(s):
 def doctor_creates_schema(s):
     data = s.ok("doctor")
     assert data["ok"] is True, data
-    assert data["db"]["schema"] == 4, data
-    assert data["db"]["target_schema"] == 4, data
+    assert data["db"]["schema"] == DB_SCHEMA_VERSION, data
+    assert data["db"]["target_schema"] == DB_SCHEMA_VERSION, data
     assert data["db"]["integrity"] == "ok", data
     again = s.ok("doctor")
     assert again["db"]["report"]["migrated"] is False, again

@@ -425,6 +425,17 @@ responses.set('GET /rp-soul/engine/memories', () => jsonResponse({
       when: '7 天前 · 周三晚上', keywords: [], origin_ids: ['m9'], pinned: true, edited: false, note: '', turn: 0, milestone: ['stage'] },
   ],
 }));
+responses.set('GET /rp-soul/engine/common', () => jsonResponse({
+  ok: true, count: 2, limit: 4, next_request_id: 'cm_x',
+  rows: [
+    { id: 'c1', key: ['ds', 'deepseek'], weight: 0.8, content: 'deepseek 是深度求索旗下的大语言模型。', turn: null, at: null, origin: 'manual' },
+    { id: 'c2', key: ['米饭'], weight: 0.6, content: '他爱吃米饭。', turn: 3, at: null, origin: 'fold' },
+  ],
+}));
+responses.set('POST /rp-soul/engine/common', () => jsonResponse({ ok: true, receipt: '已加上', count: 3, limit: 4, rows: [] }));
+responses.set('PUT /rp-soul/engine/common', () => jsonResponse({ ok: true, receipt: '已改好', count: 2, limit: 4, rows: [] }));
+responses.set('DELETE /rp-soul/engine/common', () => jsonResponse({ ok: true, receipt: '已删除', count: 1, limit: 4, rows: [] }));
+responses.set('PUT /rp-soul/engine/common/limit', () => jsonResponse({ ok: true, receipt: '已改', count: 2, limit: 2, rows: [] }));
 responses.set('PUT /rp-soul/engine/memory', () => jsonResponse({ ok: true, revision: 12, receipt: '已改' }));
 responses.set('DELETE /rp-soul/engine/memory', () => jsonResponse({ ok: true, revision: 12, receipt: '已删除' }));
 responses.set('POST /rp-soul/engine/memory/request', () => jsonResponse({ ok: true, revision: 12, receipt: '下一次提交会先做总结' }));
@@ -469,6 +480,7 @@ eq(tabTree.props['data-tab'], 'persona', '11. 默认停在「人设提示词」�
 has(tabText, '人设提示词', '11. 有「人设提示词」页签');
 has(tabText, '引擎人设', '11. 有「引擎人设」页签');
 has(tabText, '情绪', '11. 有「情绪」页签');
+has(tabText, '常识库', '11. 有「常识库」页签');
 has(tabText, '自主行动记录', '11. 有「自主行动记录」页签');
 has(tabText, '拼接顺序', '11. 人设页仍然渲染原来的内容');
 
@@ -600,8 +612,64 @@ const memReq = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/engi
 ok(memReq !== undefined && memReq.body.kind === 'fold', '11. 立即汇总发 POST kind=fold');
 hasNot(memText, '拼接顺序', '11. 记忆页不渲染人设页内容');
 
+// 切到「常识库」
+findButton(memTree, '常识库').props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const cmnTree = await renderUntil((t) => t.props['data-tab'] === 'facts' && textOf(t).includes('他爱吃米饭'));
+eq(cmnTree.props['data-tab'], 'facts', '11. 切到「常识库」页');
+ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/common') === 0), '11. 常识库读 /engine/common');
+const cmnText = textOf(cmnTree);
+has(cmnText, 'ds、deepseek', '11. 关键词成组显示');
+has(cmnText, 'deepseek 是深度求索旗下的大语言模型。', '11. 列出常识正文');
+has(cmnText, '权重 0.8', '11. 显示权重');
+has(cmnText, '共 2 条', '11. 顶部带条数');
+has(cmnText, '每次注入', '11. 能调注入条数');
+// 添加一条
+const cmnInputs = findAll(cmnTree, (n) => n.type === 'input');
+cmnInputs[0].props.onChange({ target: { value: 'ds, deepseek' } });
+cmnInputs[1].props.onChange({ target: { value: '0.9' } });
+cmnInputs[2].props.onChange({ target: { value: '新的一条。' } });
+for (let i = 0; i < 10; i++) await Promise.resolve();
+calls.length = 0;
+findButton(await renderOnce(), '添加').props.onClick();
+for (let i = 0; i < 30; i++) await Promise.resolve();
+const cmnPost = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/engine/common');
+ok(cmnPost !== undefined, '11. 添加发 POST /engine/common');
+eq(cmnPost.body.key, ['ds', 'deepseek'], '11. POST 把关键词拆成数组');
+eq(cmnPost.body.weight, 0.9, '11. POST 带权重');
+eq(cmnPost.body.content, '新的一条。', '11. POST 带正文');
+// 改一条
+calls.length = 0;
+const cmnTree2 = await renderUntil((t) => t.props['data-tab'] === 'facts' && textOf(t).includes('他爱吃米饭'));
+findAll(cmnTree2, (n) => n.type === 'button' && textOf(n) === '改')[1].props.onClick();
+for (let i = 0; i < 20; i++) await Promise.resolve();
+const cmnEdit = await renderUntil((t) => findAll(t, (n) => n.type === 'input' && n.props.value === '米饭').length === 1);
+ok(cmnEdit !== undefined, '11. 进入编辑态');
+const cmnContent = findAll(cmnEdit, (n) => n.type === 'input' && n.props.value === '他爱吃米饭。')[0];
+ok(cmnContent !== undefined, '11. 编辑态带出原来的正文');
+cmnContent.props.onChange({ target: { value: '他其实爱吃面。' } });
+for (let i = 0; i < 10; i++) await Promise.resolve();
+calls.length = 0;
+findButton(await renderOnce(), '保存').props.onClick();
+for (let i = 0; i < 30; i++) await Promise.resolve();
+const cmnPut = calls.find((c) => c.method === 'PUT' && c.url === '/rp-soul/engine/common');
+ok(cmnPut !== undefined, '11. 保存发 PUT /engine/common');
+eq(cmnPut.body.common_id, 'c2', '11. PUT 带 common_id');
+eq(cmnPut.body.content, '他其实爱吃面。', '11. PUT 带改后的正文');
+eq(cmnPut.body.key, ['米饭'], '11. PUT 把关键词拆成数组');
+// 删一条
+calls.length = 0;
+const cmnTree3 = await renderUntil((t) => t.props['data-tab'] === 'facts' && textOf(t).includes('他爱吃米饭'));
+globalThis.confirm = () => true;
+findAll(cmnTree3, (n) => n.type === 'button' && textOf(n) === '删除')[0].props.onClick();
+for (let i = 0; i < 30; i++) await Promise.resolve();
+const cmnDel = calls.find((c) => c.method === 'DELETE' && c.url === '/rp-soul/engine/common');
+ok(cmnDel !== undefined, '11. 删除发 DELETE /engine/common');
+eq(cmnDel.body.common_id, 'c1', '11. DELETE 带 common_id');
+hasNot(cmnText, '拼接顺序', '11. 常识库页不渲染人设页内容');
+
 // 切到「自主行动记录」
-findButton(memTree, '自主行动记录').props.onClick();
+findButton(cmnTree3, '自主行动记录').props.onClick();
 for (let i = 0; i < 20; i++) await Promise.resolve();
 const actTree = await renderUntil((t) => t.props['data-tab'] === 'activity' && textOf(t).includes('第 3 回合'));
 eq(actTree.props['data-tab'], 'activity', '11. 切到「自主行动记录」页');

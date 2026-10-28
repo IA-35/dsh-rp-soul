@@ -39,8 +39,11 @@ def unpack(blob):
 
 
 def hot(state):
-    """The per-turn blob: the state without its facts."""
-    return {k: v for k, v in state.items() if k != "facts"}
+    """The per-turn blob: the state without its facts.
+
+    常识库也剥掉：它是全局的，不属于这一局，load_session 每次现读。
+    """
+    return {k: v for k, v in state.items() if k not in ("facts", "common")}
 
 
 def _dump(obj):
@@ -255,6 +258,10 @@ def load_session(conn, session_id, with_persona=True):
         if not info["state"].get(key):
             info["state"][key] = info["created_at"]
     info["state"]["facts"] = FactSource(conn, session_id)
+    # 常识库不随这一局存（它跨会话），每次读存档现挂上：注入和模型学新条目
+    # 都要用到，但写回去的时候 hot() 会再剥掉。
+    info["state"]["common"] = load_common(conn)
+    info["state"]["common_limit"] = common_limit(conn)
     if with_persona:
         info["persona"] = unpack(row[len(SESSION_COLUMNS) + 1])
     return info
@@ -647,3 +654,47 @@ def restore_archive(conn, session_id, items, now):
 
 def count_archive(conn, session_id):
     return conn.execute("SELECT COUNT(*) FROM archive WHERE session_id=?", (session_id,)).fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# 常识库（全局：不挂会话，也不进撤销账）
+
+
+COMMON_COLUMNS = "n, id, key, weight, content, turn, at, origin"
+
+
+def _common_row(entry):
+    return (
+        int(entry["id"][1:]),
+        entry["id"],
+        _dump(entry["key"]),
+        float(entry["weight"]),
+        entry["content"],
+        entry.get("turn"),
+        entry.get("at"),
+        entry.get("origin") or "manual",
+    )
+
+
+def load_common(conn):
+    """全部常识，按 id 排。"""
+    rows = conn.execute("SELECT %s FROM common ORDER BY n" % COMMON_COLUMNS).fetchall()
+    return [
+        {"id": r[1], "key": json.loads(r[2]), "weight": r[3], "content": r[4], "turn": r[5], "at": r[6], "origin": r[7]}
+        for r in rows
+    ]
+
+
+def write_common(conn, rows):
+    """整表重写：常识库很小（几十条），不值得为增量维护一份 diff。"""
+    conn.execute("DELETE FROM common")
+    conn.executemany("INSERT OR REPLACE INTO common(%s) VALUES(?,?,?,?,?,?,?,?)" % COMMON_COLUMNS, [_common_row(e) for e in rows])
+
+
+def common_limit(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key='common_limit'").fetchone()
+    return None if row is None else row[0]
+
+
+def set_common_limit(conn, limit):
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('common_limit', ?)", (str(limit),))

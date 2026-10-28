@@ -336,6 +336,7 @@ DOMAIN_KEYS = (
     "memory_fold",
     "memory_diary",
     "memory_keep",
+    "common",
     "replaces_turn",
     "together",
 )
@@ -521,6 +522,13 @@ def _apply_turn(conn, session, state, persona, commit, unsaved, now, undo_base=N
     else:
         repo.save_undo_point_from_session(conn, sid, new_state["turn"])
     repo.write_fact_changes(conn, sid, new_state["turn"], new_state["facts"])
+    if result.get("learned_common"):
+        # 常识库是全局的：这一局总结时学到的东西，下一局也记得。
+        from ..domain import common as CM
+
+        rows = repo.load_common(conn)
+        rows, _touched = CM.merge(rows, result["learned_common"], CM.next_id)
+        repo.write_common(conn, rows)
     repo.trim_undo_points(conn, sid, turn.UNDO_KEEP)
     repo.update_session(conn, new_state, now, turns_since_save=unsaved)
     for item in result["archive"]:
@@ -1522,3 +1530,119 @@ def debug_activity(ctx, payload):
         "counts": {"turns": len(rows), "actions": actions_total, "beats": beats_total},
         "rows": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# 常识库（全局：换会话也记得「ds 是什么」，所以不挂 session_id）
+
+
+def _common_limit(conn):
+    from ..domain import common as CM
+
+    return CM.limit_of(repo.common_limit(conn))
+
+
+def _common_panel(conn):
+    from ..domain import common as CM
+
+    return CM.panel(repo.load_common(conn), _common_limit(conn))
+
+
+def debug_common(ctx, payload):
+    conn = ctx.db()
+    return _common_panel(conn)
+
+
+def _common_write(ctx, command, spec, payload, change):
+    """常识库的写：不挂会话，所以不开 session_write，自己开一个事务。"""
+    from ..domain import common as CM
+
+    payload = validate(spec, payload)
+    conn = ctx.db()
+    digest = digest_of(command, payload)
+    db.begin_write(conn)
+    try:
+        replay = _replay(conn, CREATE_SCOPE, payload["request_id"], digest)
+        if replay is not None:
+            conn.execute("COMMIT")
+            return replay
+        rows = repo.load_common(conn)
+        rows, receipt = change(rows, payload)
+        repo.write_common(conn, rows)
+        response = {"replayed": False, "receipt": receipt, "next_request_id": new_request_id()}
+        response.update(CM.panel(rows, _common_limit(conn)))
+        repo.idem_put(conn, CREATE_SCOPE, payload["request_id"], digest, response, now_iso())
+        conn.execute("COMMIT")
+        return response
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _missing_common(common_id):
+    return AppError(
+        NOT_FOUND,
+        "没有这条常识：%s" % common_id,
+        [detail("$.common_id", "常识不存在", "用 debug-common 看当前条目", NOT_FOUND)],
+    )
+
+
+def add_common(ctx, payload):
+    from ..domain import common as CM
+
+    def change(rows, data):
+        entry = CM.make(CM.next_id(rows), data["key"], data["weight"], data["content"], origin="manual")
+        rows = rows + [entry]
+        return rows, "已加上「%s」" % "、".join(entry["key"])
+
+    return _common_write(ctx, "add-common", specs.ADD_COMMON, payload, change)
+
+
+def edit_common(ctx, payload):
+    from ..domain import common as CM
+
+    def change(rows, data):
+        found = next((e for e in rows if e["id"] == data["common_id"]), None)
+        if found is None:
+            raise _missing_common(data["common_id"])
+        if data.get("key") is not None:
+            found["key"] = CM.normalize_keys(data["key"])
+        if data.get("weight") is not None:
+            found["weight"] = round(float(data["weight"]), 2)
+        if data.get("content") is not None:
+            found["content"] = data["content"].strip()
+        return rows, "已改「%s」" % "、".join(found["key"])
+
+    return _common_write(ctx, "edit-common", specs.EDIT_COMMON, payload, change)
+
+
+def delete_common(ctx, payload):
+    def change(rows, data):
+        found = next((e for e in rows if e["id"] == data["common_id"]), None)
+        if found is None:
+            raise _missing_common(data["common_id"])
+        rows = [e for e in rows if e["id"] != data["common_id"]]
+        return rows, "已删掉「%s」" % "、".join(found["key"])
+
+    return _common_write(ctx, "delete-common", specs.DELETE_COMMON, payload, change)
+
+
+def set_common_limit(ctx, payload):
+    from ..domain import common as CM
+
+    payload = validate(specs.SET_COMMON_LIMIT, payload)
+    conn = ctx.db()
+    db.begin_write(conn)
+    try:
+        limit = CM.limit_of(payload["limit"])
+        repo.set_common_limit(conn, limit)
+        rows = repo.load_common(conn)
+        response = {"replayed": False, "receipt": "每次注入 %d 条" % limit}
+        response.update(CM.panel(rows, limit))
+        conn.execute("COMMIT")
+        return response
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise

@@ -164,6 +164,39 @@ DEBUG_FACTS = _obj({"session_id": F(SESSION_ID)}, "debug-facts")
 
 DELETE_FACT = _obj(dict(session_write_fields(), fact_id=F(S.Id())), "delete-fact")
 
+# ---------------------------------------------------------------------------
+# 常识库（全局，不挂会话）
+
+
+def common_fields():
+    return {
+        "key": F(S.List(S.Str(1, 24), min_items=1, max_items=12),
+                 desc="触发词：这句话里出现任意一个，这条常识就会被想起来"),
+        "weight": F(S.Num(0.0, 1.0), required=False, default=0.5,
+                    desc="权重 0~1：一句话同时命中好几条时，权重高的先注入"),
+        "content": F(S.Str(1, 200), desc="一条常识本身，客观陈述"),
+    }
+
+
+DEBUG_COMMON = _obj({}, "debug-common")
+
+ADD_COMMON = _obj(dict(request_id=F(S.RequestId()), **common_fields()), "add-common")
+
+EDIT_COMMON = _obj(
+    dict(
+        request_id=F(S.RequestId()),
+        common_id=F(S.Id()),
+        key=F(S.Nullable(S.List(S.Str(1, 24), min_items=1, max_items=12)), required=False, default=None),
+        weight=F(S.Nullable(S.Num(0.0, 1.0)), required=False, default=None),
+        content=F(S.Nullable(S.Str(1, 200)), required=False, default=None),
+    ),
+    "edit-common",
+)
+
+DELETE_COMMON = _obj(dict(request_id=F(S.RequestId()), common_id=F(S.Id())), "delete-common")
+
+SET_COMMON_LIMIT = _obj(dict(request_id=F(S.RequestId()), limit=F(S.Int(2, 4))), "set-common-limit")
+
 EDIT_MEMORY = _obj(
     dict(
         session_write_fields(),

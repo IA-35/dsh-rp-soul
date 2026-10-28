@@ -71,6 +71,11 @@ _register("request-memory", APP + "service", "request_memory", "required", "sess
 _register("debug-activity", APP + "service", "debug_activity", "required", "read", "设置页自主行动页：最近若干回合的行动、离屏片段与关系变化", "DEBUG_ACTIVITY")
 _register("debug-facts", APP + "service", "debug_facts", "required", "read", "设置页常识库：她知道的事", "DEBUG_FACTS")
 _register("delete-fact", APP + "service", "delete_fact", "required", "session_write", "设置页常识库：删一条事实（留审计）", "DELETE_FACT")
+_register("debug-common", APP + "service", "debug_common", "none", "read", "设置页常识库：全部常识与注入条数", "DEBUG_COMMON")
+_register("add-common", APP + "service", "add_common", "required", "settings_write", "设置页常识库：加一条常识", "ADD_COMMON")
+_register("edit-common", APP + "service", "edit_common", "required", "settings_write", "设置页常识库：改一条常识", "EDIT_COMMON")
+_register("delete-common", APP + "service", "delete_common", "required", "settings_write", "设置页常识库：删一条常识", "DELETE_COMMON")
+_register("set-common-limit", APP + "service", "set_common_limit", "required", "settings_write", "设置页常识库：改每次注入几条（2~4）", "SET_COMMON_LIMIT")
 
 
 def get(name):

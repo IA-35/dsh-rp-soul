@@ -1,5 +1,6 @@
 """Life-memory lifecycle; the core retains its own turn audit regardless."""
 
+from ..domain import common as CM
 from ..domain import memories as MEM
 from ..errors import INVALID_INPUT
 
@@ -14,7 +15,23 @@ def pay_requests(state, commit, turn):
     if commit.get("memory_diary"):
         diary = MEM.apply_diary(state, state["requests"].get("memory_diary"), commit["memory_diary"])
         state["requests"]["memory_diary"] = None
-    return {"folded": folded, "diary": diary}
+    return {"folded": folded, "diary": diary, "common": _learned(commit, turn, "fold" if folded else "diary")}
+
+
+def _learned(commit, turn, origin):
+    """这次总结 / 写日记里提到的常识。
+
+    只有真的收了 SCM 或写了日记的那一回才算 —— 模型不能靠随手丢一条
+    common 就往全局库里写字。
+    """
+    if not (commit.get("memory_fold") or commit.get("memory_diary")):
+        return []
+    found = []
+    for raw in commit.get("common") or ():
+        item = CM.from_model(raw, turn, origin=origin)
+        if item is not None:
+            found.append(item)
+    return found
 
 
 def after_turn(state, ctx, commit, base):

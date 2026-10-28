@@ -14,6 +14,7 @@ import json
 
 from ..domain import agency as AG
 from ..domain import clock as CL
+from ..domain import common as CM
 from ..domain import facts as FA
 from ..domain import mood as MO
 from ..domain import structure as ST
@@ -184,7 +185,11 @@ def brief(state, persona, save=None, cue=""):
     contributed = MODULES.project(state, persona, cue)
     context.update(contributed["context"])
     context["companion"].update(contributed["companion"])
-    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency"))
+    # 常识库：只放这句话真正命中的那几条，一条都没有就整块不出现。
+    known = CM.select(state.get("common") or (), cue, CM.limit_of(state.get("common_limit")))
+    if known:
+        context["common"] = CM.render(known, cue)
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency", "common"))
     return context
 
 
@@ -363,6 +368,10 @@ def _fit(context, limit, order):
             break
         if isinstance(context.get(key), dict):
             context[key] = {}
+            continue
+        if isinstance(context.get(key), str):
+            # common 是一整段渲染好的文字，没有「留几条」的中间态：要么在要么不在
+            context.pop(key, None)
             continue
         lst = context.get(key)
         if not isinstance(lst, list) or not lst:

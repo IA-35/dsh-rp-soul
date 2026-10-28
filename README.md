@@ -90,8 +90,9 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 ## 设置页
 
-设置 →「角色人设」：顶部六个页签，**人设提示词 / 引擎人设 / 情绪 / 记忆 / 自主行动记录 / 唤醒**。
-页签只影响界面，不影响数据——前五页读的是同一份引擎状态，切换时各自取一次当前这一局；
+设置 →「角色人设」：顶部七个页签，**人设提示词 / 引擎人设 / 情绪 / 记忆 / 常识库 / 自主行动记录 / 唤醒**。
+页签只影响界面，不影响数据——除「常识库」和「唤醒」，其余读的都是同一份引擎状态，
+切换时各自取一次当前这一局；「常识库」是全局的一份表，换哪一局都一样；
 「唤醒」页读的是插件自己的唤醒配置与定时器状态（和时间有关，跟账本无关）。
 
 ### 人设提示词
@@ -140,7 +141,19 @@ RimTalk-ExpandMemory 工作台的简化版：
   卡片越淡说明她记得越模糊（透明度 = 活跃度）；可以按层过滤，按钮上写着每层的数量 / 容量。
 - 点一条看详情、就地改：内容、重要度、活跃度（改了就从这个值重新开始衰减）、关键词、备注、Pin；
   也可以删掉（留一条审计记录）。你改过的记忆在挑选时会被优先想起。
-- 「立即总结」「立即归档」：不用等跨天 / 半个月，下一次提交就先把它们写掉。页面上会提示下一次提交要交什么。
+- 「立即汇总」「立即写日记」：不用等 ABM 满 20 条 / 等到 23:30，下一次提交就先把它们写掉。
+  页面上会提示下一次提交要交什么。
+
+### 常识库
+
+一张**全局共享**的表（不挂在任何一局上，换会话照样在）：每行是「关键词 + 权重 + 一条常识」。
+
+- 一行长这样：关键词 `ds, deepseek`、权重 `0.8`、常识「deepseek 是深度求索旗下的大语言模型」。
+- **只在被提到时才进上下文**：这句话里出现某个关键词，那条常识才被带进去；没提到的完全不占地方。
+  中文按子串比，英文和数字按词边界比——所以 `ds` 不会在 `hands` 里误命中。
+- 一句话命中好几条时按权重从高到低取，取几条在这里调（2~4 条，默认 4）。
+  注入的样子是 `## 常识` 下面一行一条 `- ds： deepseek 是深度求索旗下的大语言模型`。
+- 可以在这里加、改、删；她总结 SCM 和写日记时也可能顺手记下新的（同一组关键词会覆盖旧的那条）。
 
 ### 自主行动记录
 
@@ -201,7 +214,12 @@ RimTalk-ExpandMemory 工作台的简化版：
 | GET | `/rp-soul/engine/memories?session_id=` | 「记忆」页：各层记忆、待交的总结 / 日记、删除审计 |
 | PUT | `/rp-soul/engine/memory` | 改一条记忆 `{session_id, memory_id, revision, content?, importance?, activity?, keywords?, note?, pinned?}` |
 | DELETE | `/rp-soul/engine/memory` | 删一条记忆 `{session_id, memory_id, revision, reason}`（留审计） |
-| POST | `/rp-soul/engine/memory/request` | 立即总结 / 归档 `{session_id, revision, kind: summary|archive}` |
+| POST | `/rp-soul/engine/memory/request` | 立即汇总 / 写日记 `{session_id, revision, kind: fold|diary}` |
+| GET | `/rp-soul/engine/common` | 「常识库」页：全部条目 + 每次注入几条 |
+| POST | `/rp-soul/engine/common` | 加一条 `{key, weight, content}` |
+| PUT | `/rp-soul/engine/common` | 改一条 `{common_id, key?, weight?, content?}` |
+| DELETE | `/rp-soul/engine/common` | 删一条 `{common_id}` |
+| PUT | `/rp-soul/engine/common/limit` | 每次注入几条 `{limit: 2..4}` |
 | DELETE | `/rp-soul/engine/thought` | 手动删一条情绪 `{session_id, npc_id, thought_id, revision, reason}` |
 | GET | `/rp-soul/wake` | 「唤醒」页：配置 + 定时器状态 + 可指定的会话清单 |
 | POST | `/rp-soul/wake` | 改唤醒配置（字段同上表 `配置` 一节） |

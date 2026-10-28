@@ -26,6 +26,7 @@ from .. import schema as S
 from ..errors import INVARIANT_VIOLATION, INVALID_INPUT, AppError, detail, top_code
 from ..jsonio import copy
 from . import clock as CL
+from . import common as CM
 from . import facts as FA
 from . import invariants
 from . import memories as MEM
@@ -67,6 +68,24 @@ def commit_fields():
                           desc="requests.memory_diary 有值时在第一项必填：读 memory_diary_sources，把这一天写成一篇日记（第一人称，按时间顺下来，记得感受和变化，≤300 字）"),
         "memory_keep": F(S.List(S.Str(1, 40), max_items=2), required=False, default=[],
                          desc="可选：这一批里值得一直记着的 0~2 条经历 id；它们会被单独放进 CLPA，不随这一批淡掉"),
+        "common": F(
+            S.List(
+                S.Obj(
+                    {
+                        "key": F(S.List(S.Str(1, CM.KEY_MAX), min_items=1, max_items=CM.KEYS_MAX),
+                                 desc="触发词，命中任意一个就会被想起来；写会用到的叫法（简称、英文名、别名）"),
+                        "weight": F(S.Num(*CM.WEIGHT_RANGE), required=False, default=0.5,
+                                    desc="权重 0~1：同时命中好几条时，权重高的先注入"),
+                        "content": F(S.Str(1, CM.CONTENT_MAX), desc="一条常识本身，客观陈述，不带情绪"),
+                    },
+                    name="common",
+                ),
+                max_items=3,
+            ),
+            required=False,
+            default=[],
+            desc="可选：总结 SCM 或写日记时，顺手记下 0~3 条以后还会用到的客观常识（一个名词、一个简称指代什么）。写在他以前没解释过、以后还会提到的东西上；你们之间的事属于记忆，不要写在这里",
+        ),
         "replaces_turn": F(S.Nullable(S.Int(1, 1000000)), required=False, default=None,
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
         "together": F(S.Bool(), required=False, default=True,
@@ -338,6 +357,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
     payment = MODULES.run(work, "pay_requests", commit, ctx.turn).get("memory", {})
     summarized, journaled = payment.get("summarized"), payment.get("journaled")
+    learned = payment.get("common") or []
     archive = _archive_ended_events(work, ctx.turn) if summarized else []
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
@@ -371,6 +391,8 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "journaled": journaled,
         "remembered": memory_result.get("remembered", []),
         "forgetting": memory_result.get("forgetting", {}),
+        # 模型在这次总结 / 写日记里顺手记下的常识，由 application 写进全局库
+        "learned_common": learned,
         "replaced_turn": replaced,
         "mood": {
             cid: MO.brief(work, cid)

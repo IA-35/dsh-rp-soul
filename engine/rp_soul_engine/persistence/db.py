@@ -363,7 +363,31 @@ def _migrate_to_4(conn):
             conn.execute("UPDATE slots SET state=? WHERE name=?", (repo.pack(migrate.state_v3_to_v4(state)), name))
 
 
-MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3, 4: _migrate_to_4}
+def _migrate_to_5(conn):
+    """Schema 5: 常识库。
+
+    它不属于任何一局（roleplay 换会话也记得「ds 是什么」），所以没有
+    session_id 列，也没有 journal：它不进撤销账。
+    """
+    _exec_script(
+        conn,
+        """
+        CREATE TABLE common (
+            n INTEGER PRIMARY KEY,
+            id TEXT NOT NULL UNIQUE,
+            key TEXT NOT NULL,
+            weight REAL NOT NULL,
+            content TEXT NOT NULL,
+            turn INTEGER,
+            at TEXT,
+            origin TEXT NOT NULL
+        );
+        CREATE INDEX common_weight ON common(weight)
+        """,
+    )
+
+
+MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3, 4: _migrate_to_4, 5: _migrate_to_5}
 
 
 def _now_stamp():

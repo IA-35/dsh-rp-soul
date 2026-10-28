@@ -164,6 +164,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | `domain/settlement.py` | 154 | 时间结算的五步固定顺序 |
 | `domain/simulation.py` | 131 | 时间间隔、离屏请求、给下一条记录的请求 |
 | `domain/facts.py` | 239 | 事实与知识边界（copy-on-write 视图） |
+| `domain/common.py` | 156 | 常识库：关键词匹配、权重排序、渲染（全局共享，纯函数） |
 | `domain/relationship.py` | 162 | 信任 / 张力 / 阶段，两条有向边 |
 | `domain/invariants.py` | 102 | 提交后必须成立的硬规则 |
 | `domain/structure.py` | 240 | 全部枚举与常量（单一来源） |
@@ -171,9 +172,9 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | `domain/clock.py` | 100 | 故事时钟 ↔ 绝对分钟 ↔ 墙钟 |
 | `domain/text.py` | 149 | 关键词抽取与线索匹配 |
 | `domain/meta.py` / `rng.py` | 216 | 元信息、确定性随机 |
-| `projections/context.py` | 382 | 把状态渲染成 brief / full 两档上下文 |
-| `persistence/db.py` | 430 | 建表、迁移（3 版）、备份 |
-| `persistence/repo.py` | 643 | 会话 / 事实 / 存档 / 审计的读写 |
+| `projections/context.py` | 397 | 把状态渲染成 brief / full 两档上下文 |
+| `persistence/db.py` | 480 | 建表、迁移（5 版）、备份 |
+| `persistence/repo.py` | 700 | 会话 / 事实 / 存档 / 审计的读写 |
 | `schema.py` | 338 | 极简 schema 校验器（自带构造器） |
 | `jsonio.py` | 203 | 严格 JSON（拒重复键、NaN、孤立代理对、过深嵌套） |
 | `errors.py` | 112 | 15 个稳定错误码 + 4 个退出码 |
@@ -364,7 +365,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | 引擎人设 | `rp-soul/persona.md` | id / 标题 / 阈值 / 名字 / 称呼 / 年龄 / 性别 / 开局态度 / 身份 / 外貌 / 表里两层语态 / 作息表；可「看 YAML」「校验」 |
 | 情绪 | 她的心情面板 + 阈值 + 删除审计 | 每条 thought 右侧 `×` 手动删（留审计） |
 | 记忆 | ABM / SCM / CLPA 三层 + 待交的汇总 / 日记 + 删除审计 | 改内容 / 重要度 / 活跃度 / 关键词 / 备注 / Pin；删（留审计）；「立即汇总」「立即写日记」 |
-| 常识库 | 她知道的事实（`facts`） | 删（留审计） |
+| 常识库 | 全局的「关键词 + 权重 + 常识」表（`common` 表，不挂会话） | 加 / 改 / 删；每次注入几条（2~4） |
 | 自主行动记录 | 最近 1–50 次的行动、离屏片段、关系变化 | 只读 |
 | 唤醒 | 唤醒配置 + 定时器状态 + 可指定会话 | 总开关 / 目标会话 / 每日次数 / 每日 token / 安静时段 / 想你阈值 |
 
@@ -391,7 +392,10 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | PUT / DELETE | `/engine/memory` | 改 / 删一条记忆 |
 | POST | `/engine/memory/request` | 立即汇总 / 立即写日记 |
 | DELETE | `/engine/thought` | 手动删一条情绪 |
-| GET / DELETE | `/engine/facts` | 常识库：读 / 删一条 |
+| GET / POST | `/engine/common` | 常识库：读全部 / 加一条 |
+| PUT / DELETE | `/engine/common` | 改 / 删一条 |
+| PUT | `/engine/common/limit` | 每次注入几条 |
+| GET / DELETE | `/engine/facts` | 剧情事实（旧页面，已不从设置页进入） |
 | GET | `/engine/activity` | 自主行动记录 |
 | GET / POST | `/wake` | 唤醒配置 |
 | POST | `/wake/now` | 现在叫醒一次 |
@@ -421,9 +425,12 @@ $DSH_HOME/                              # 默认 C:\Users\<你>\.dsh\
 
 **数据目录永不放在插件目录里**——升级会覆盖。node 每次都显式传 `--data-dir`。
 
-SQLite 14 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_points` `idempotency`
-`archive` `slots` `slot_facts` `slot_archive` `commit_failures` `thought_debug` `memory_debug`。
-（`DB_SCHEMA_VERSION = 3`，`STATE_SCHEMA_VERSION = 3`。）
+SQLite 15 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_points` `idempotency`
+`archive` `slots` `slot_facts` `slot_archive` `commit_failures` `thought_debug` `memory_debug` `common`。
+（`DB_SCHEMA_VERSION = 5`，`STATE_SCHEMA_VERSION = 3`。）
+
+`common` 是常识库：全局一张表，不挂 `session_id`——所有会话共用一个库。
+每次注入几条存在 `meta` 的 `common_limit` 里，所以它也跟着是全局的。
 
 ---
 
@@ -452,9 +459,9 @@ SQLite 14 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_poi
 
 | 项 | 状态 |
 |---|---|
-| `docs/time-not-turns.md` 的时间制改造（冷却 / RECENT_TURNS 改分钟） | **方案定稿，一行未动** |
 | 日记 `.md` 的检索注入（按关键词翻日记并进上下文） | 只写不读 |
-| `turn % 5` 换 full 上下文 | 已删，改成「距上次完整上下文 ≥ 15 分钟」 |
+| 旧存档里 `temp/days` 并进 SCM 后活跃度没重算 | 会带着老值开始淡 |
+| 设置页不再展示剧情事实（`facts`） | 引擎内部照用，`/engine/facts` 路由还在 |
 
 ---
 
@@ -466,7 +473,7 @@ dsh plugin add dsh-rp-soul
 
 # 引擎自测（在 engine/ 下）
 python -m rp_soul_engine <<< '{"id":"c1","command":"doctor"}'
-python tests/run_all.py          # 期望 "11/11 files passed"
+python tests/run_all.py          # 期望 "12/12 files passed"
 ```
 
 设置页引擎卡显示「就绪」+ Python 版本，让模型 `soul_admin start` 后能看到这一局。
