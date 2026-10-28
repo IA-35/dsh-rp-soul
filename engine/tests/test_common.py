@@ -83,7 +83,7 @@ def the_setting_is_clamped_to_the_allowed_range():
 def what_is_carried_looks_like_a_short_table():
     rows = [entry("c1", ["ds", "deepseek"], 0.8, "deepseek 是深度求索旗下的大语言模型。")]
     text = CM.render(CM.select(rows, "ds 帮我看看"), "ds 帮我看看")
-    assert text.startswith("## 常识"), text
+    assert text.startswith("### 常识"), text
     assert "\n- ds： deepseek 是深度求索旗下的大语言模型。" in text, text
 
 
@@ -174,7 +174,7 @@ def a_hit_puts_it_into_the_context(s):
     s.ok("commit-turn", body)
     ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "ds 这个模型怎么样"})["context"]
     assert "common" in ctx, sorted(ctx)
-    assert ctx["common"].startswith("## 常识"), ctx["common"]
+    assert ctx["common"].startswith("### 常识"), ctx["common"]
     assert "deepseek 是深度求索旗下的大语言模型。" in ctx["common"], ctx["common"]
 
 

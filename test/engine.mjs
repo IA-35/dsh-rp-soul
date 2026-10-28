@@ -105,7 +105,7 @@ eq(brief.context.present_npcs, undefined, '3. 没有多角色的 present_npcs');
 
 // ---- 4. 提示词快照：读过一次状态后 soul-engine 才有内容 ----
 const snap1 = sections.get('soul-engine').text();
-has(snap1, '当前局面', '4. soul-engine 输出账本');
+has(snap1, '当前现状', '4. soul-engine 输出账本');
 has(snap1, '时间：', '4. 带时间行');
 eq(sections.get('soul-engine').interpolate, false, '4. soul-engine 关闭插值');
 
