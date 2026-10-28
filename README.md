@@ -29,7 +29,7 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
   不用先手动建文件。**已存在的文件绝不会被覆盖**。
 - **引擎（可选）**：结构化字段单独放在 `rp-soul/persona.md`（设置页表单可改），
   只有**你和她两个人**，引擎据此维护**她的情绪（心情条）/ 她对你的关系（信任·张力·阶段）/ 她的自主行动**三本账，
-  外加**她的记忆**（刚刚 / 今日 / 这几天 / 那些事四层，以 RimTalk-ExpandMemory 为主），
+  外加**她的记忆**（刚刚 / 今日 / 这几天 / 那些事，以 RimTalk-ExpandMemory 为底改的），
   由 SQLite 记账、可存档可回滚。人设散文仍原样进系统提示（恒定不变），引擎状态以一段 brief
   作为动态 runtime context 追加在对话尾部（每次只有它那几十字节在变）。
   **首次提示装配就读取账本**：通过 DSH 的异步 `system-prompt/assemble` 钩子等待侧车返回，
@@ -198,7 +198,7 @@ RimTalk-ExpandMemory 工作台的简化版：
 | GET | `/rp-soul/engine/mood?session_id=&npc_id=` | 她的心情面板（值 / 档位 / 阈值 / 条目 / 审计） |
 | GET | `/rp-soul/engine/moods?session_id=` | 「情绪」页：她的心情面板 + 阈值 + 删除审计 |
 | GET | `/rp-soul/engine/activity?session_id=&limit=` | 「自主行动记录」页：最近 N 次（1–50，默认 20） |
-| GET | `/rp-soul/engine/memories?session_id=` | 「记忆」页：四层记忆、待交的总结 / 归档、删除审计 |
+| GET | `/rp-soul/engine/memories?session_id=` | 「记忆」页：各层记忆、待交的总结 / 日记、删除审计 |
 | PUT | `/rp-soul/engine/memory` | 改一条记忆 `{session_id, memory_id, revision, content?, importance?, activity?, keywords?, note?, pinned?}` |
 | DELETE | `/rp-soul/engine/memory` | 删一条记忆 `{session_id, memory_id, revision, reason}`（留审计） |
 | POST | `/rp-soul/engine/memory/request` | 立即总结 / 归档 `{session_id, revision, kind: summary|archive}` |
@@ -383,12 +383,12 @@ routine:
 
 ### 记忆（以 RimTalk-ExpandMemory 为主）
 
-她的记忆像人一样按「时间远近 + 还记不记得」流转，而不是按项目 / 主题建条目。四层照搬 RimTalk：
+她的记忆像人一样按「时间远近 + 还记不记得」流转，而不是按项目 / 主题建条目。三个主层加一个临时层：
 
 | 层 | 每小时衰减 | 容量 | 一直没被想起的话 |
 |---|---|---|---|
-| 刚刚 | 不衰减 | 6 | 满了就把最老的几句拼进「今日」；不重要的小动作 24 小时直接丢 |
-| 今日 | 不衰减 | 40 | 隔天的每日总结把那一整天写成一条，进「这几天」 |
+| 刚刚 | 不衰减 | 10 | 满了就把最老的一条整条挪进「今日」（不概括）；不重要的小动作 24 小时直接丢；隔一小时以上再说话也换新的一段 |
+| 今日（临时） | 不衰减 | 200 | 隔天的每日总结把那一整天写成一条，进「这几天」，这一层随总结腾空 |
 | 这几天 | 0.005 | 30 | 一个月攒满 30 条就汇成当月日记（写进 .md），然后重新数 |
 | 那些事 | 不衰减 | 不限 | 她自己挑出来要一直记着的（每次总结挑 0~2 条 + 里程碑自动进），只有你手动才删 |
 
@@ -480,7 +480,7 @@ mood 是「此刻怎么样」（短期会回落），trust / stage 是「长期�
   迁移前先在数据目录的 `backups/` 里备份一份数据库，迁移失败会自动还原。规则和旧人设文件一样：
   第一个主要角色是她，她的心情、她对你的关系、你们知道的事和约定都保留，其他角色、地点、
   NPC 之间的关系不再保留。旧版导出的存档文件导入时按同一套规则升级。
-  记忆改成四层后（state schema 3）同样自动迁移：原来的章节和前情进「那些事」，
+  记忆换成分层结构后（原 state schema 3 的那次迁移）同样自动迁移：原来的章节和前情进「那些事」，
   最近的摘要进「刚刚 / 这几天」，已经被章节概括过的不会再被要求总结一次；迁移过来的记忆从迁移那一刻开始淡去。
 - **引擎每次至少一次 stdio 往返**（毫秒级）。引擎不可用时不会阻塞对话，只是
   `soul_state` / `soul_commit` / `soul_admin` 会返回「引擎未就绪」并说明原因
