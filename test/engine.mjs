@@ -86,18 +86,20 @@ ok(started.revision >= 1, '2. revision 从 1 起算');
 const sessionId = started.session_id;
 let revision = started.revision;
 
-// ---- 3. soul_state：brief 有账本、无 world ----
+// ---- 3. soul_state：只回她要看的，局面复述留给提示词快照 ----
 const brief = await call('soul_state', {});
 eq(brief.started, true, '3. started=true');
 eq(brief.session_id, sessionId, '3. 会话 id 一致');
 ok(brief.context !== undefined && brief.context !== null, '3. 带回 context');
 eq(brief.context.world, undefined, '3. 没有 world 段');
-ok(typeof brief.context.clock?.label === 'string', '3. clock.label 是字符串');
-eq(brief.context.companion?.name, '林晚', '3. companion 就是她');
-eq(brief.context.companion?.routine_now, '在诊所值夜班', '3. 带上作息里她这会儿在做什么');
-eq(brief.context.present_npcs, undefined, '3. 没有多角色的 present_npcs');
 ok(Array.isArray(brief.context.agency), '3. agency 是数组');
-has(JSON.stringify(brief.context), 'mood', '3. 角色带 mood');
+ok(Array.isArray(brief.context.memories), '3. memories 是数组');
+ok(brief.context.mood !== undefined, '3. 心情块提到顶层');
+has(JSON.stringify(brief.context.mood), 'band', '3. 心情带档位');
+// 时间 / 在场 / 态度 / 名字这些每轮都在提示词里写着，工具结果不再复述。
+eq(brief.context.clock, undefined, '3. 不再回 clock（提示词里已有）');
+eq(brief.context.companion, undefined, '3. 不再回 companion 整块');
+eq(brief.context.present_npcs, undefined, '3. 没有多角色的 present_npcs');
 
 // ---- 4. 提示词快照：读过一次状态后 soul-engine 才有内容 ----
 const snap1 = sections.get('soul-engine').text();
@@ -253,7 +255,7 @@ const low = await call('soul_commit', {
   action_mode: 'continue', player_input: '', operations: causes.map((id, i) => ({ op: 'add_thought', label: '难过' + i, delta: -30, basis_fact_id: id })),
   content_tags: [], summary: '那些事让她很难过。', open_action: '她安静下来。',
 });
-ok(low.committed && low.context.companion.mood.band === 'break', '14b. 她进入难过档');
+ok(low.committed && low.context.mood.band === 'break', '14b. 她进入难过档');
 for (const kind of ['silence', 'seek_comfort', 'change_topic', 'withdraw']) {
   has(tools.get('soul_commit').description, kind, '14b. 工具说明告诉模型怎样提交 ' + kind);
   const expression = await call('soul_commit', {
@@ -261,7 +263,7 @@ for (const kind of ['silence', 'seek_comfort', 'change_topic', 'withdraw']) {
     content_tags: [], summary: '她表达了当下的感受。', open_action: '她还没有缓过来。',
   });
   ok(expression.committed, '14b. 允许轻微表达 ' + kind + '：' + String(expression.error ?? ''));
-  eq(expression.context.companion.mood.band, 'break', '14b. 表达情绪不会自动把她变开心');
+  eq(expression.context.mood.band, 'break', '14b. 表达情绪不会自动把她变开心');
 }
 
 // ---- 15. 切回按会话作用域：两个会话各开各的局 ----
