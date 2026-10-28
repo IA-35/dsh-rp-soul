@@ -103,17 +103,17 @@ try {
     agent.session = { deriveMessages: () => [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }] };
   };
   sayTo(agentA, '我平时用的是 ds 这个模型');
-  has(engineText(await assemble(agentA)), '## 常识', '8. 命中关键词的常识跟着快照注入');
+  has(engineText(await assemble(agentA)), '### 常识', '8. 命中关键词的常识跟着快照注入');
   has(engineText(await assemble(agentA)), '深度求索', '8. 常识正文也在');
   sayTo(agentA, '今天下雨了，路上有点堵');
-  hasNot(engineText(await assemble(agentA)), '## 常识', '8. 没命中就不出现');
+  hasNot(engineText(await assemble(agentA)), '### 常识', '8. 没命中就不出现');
   // 注入给模型的上下文（goal、压缩摘要）也是 user 角色，但不是你说的话。
   agentA.session = {
     deriveMessages: () => [
       { role: 'user', source: { kind: 'goal-round' }, content: [{ type: 'text', text: '我平时用的是 ds 这个模型' }] },
     ],
   };
-  hasNot(engineText(await assemble(agentA)), '## 常识', '8. 别人注入的上下文不算你说的话');
+  hasNot(engineText(await assemble(agentA)), '### 常识', '8. 别人注入的上下文不算你说的话');
   delete agentA.session;
   await fiber.dispose();
 

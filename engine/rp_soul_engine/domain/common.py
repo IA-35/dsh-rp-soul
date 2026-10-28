@@ -91,7 +91,7 @@ def render(entries, cue):
     """
     if not entries:
         return ""
-    lines = ["## 常识"]
+    lines = ["### 常识"]
     for entry in entries:
         key = next((k for k in entry["key"] if k in str(cue or "").lower()), entry["key"][0])
         lines.append("- %s： %s" % (key, entry["content"]))
