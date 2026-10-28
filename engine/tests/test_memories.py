@@ -309,6 +309,34 @@ def half_a_month_asks_for_an_archive():
     assert state["memory"]["last_archive_day"] == 16 and MEM.archive_request(state) is None
 
 
+def a_pinned_milestone_survives_the_summary():
+    """关系推进时自动钉住的那条，不能因为模型没往 memory_keep 里写就被吞掉。"""
+    state, persona = start()
+    state = play(state, persona, at(0), player_input="那晚我们成了朋友")
+    entry = main_entry(state, 1)
+    entry["pinned"] = True                     # 里程碑自动 Pin
+    state = play(state, persona, at(14), ops=[beat(), glance()])
+    assert entry["id"] in state["requests"]["memory_summary"]["ids"]
+    state = play(state, persona, at(14.1), memory_summary="那天下雨他来了")
+    saved = MEM.of_layer(state, "events")
+    assert len(saved) == 1 and saved[0]["content"] == entry["content"], saved
+    assert saved[0]["pinned"] is True, "留下的那条仍然是钉住的"
+
+
+def said_just_before_midnight_stays_in_now():
+    """23:45、23:50 说的话，00:06 交昨天的总结时不该被并走。"""
+    state, persona = start()
+    state["clock"] = {"day": 1, "minute": 23 * 60 + 45}
+    late = MEM.add(state, "now", "conversation", "睡前他说了句晚安", 0.5)["id"]
+    state["clock"] = {"day": 1, "minute": 23 * 60 + 50}
+    MEM.add(state, "now", "conversation", "关灯之后又聊了一会儿", 0.5)
+    state["clock"] = {"day": 2, "minute": 6}
+    assert MEM.summary_request(state) is None, "刚才说的话不能被并进摘要"
+    state["clock"] = {"day": 2, "minute": 66}
+    request = MEM.summary_request(state)
+    assert request and late in request["ids"], "过了一小时才把昨天收进摘要"
+
+
 def the_old_chain_becomes_her_memory():
     from rp_soul_engine import migrate as MG
     state, persona = start()
@@ -563,6 +591,8 @@ check("memory follows undo (commit works on a copy)", memory_follows_undo)
 check("time labels are lifelike", when_label_is_lifelike)
 check("keywords are two-character pieces", keywords_are_bigrams)
 check("a finished day asks for a summary", a_finished_day_asks_for_a_summary)
+check("a pinned milestone survives the summary", a_pinned_milestone_survives_the_summary)
+check("said just before midnight stays in 刚刚", said_just_before_midnight_stays_in_now)
 check("a summary nobody asked for is refused", a_summary_nobody_asked_for_is_refused)
 check("ended events leave with the summary", ended_events_leave_with_the_summary)
 check("write the month into her journal", a_full_days_layer_asks_for_the_journal)

@@ -185,9 +185,24 @@ def write_fact_changes(conn, session_id, turn, view):
 
 
 def revert_turn_facts(conn, session_id, turn):
-    """Put the facts back as they were before `turn` (undo, rewrite)."""
+    """Put the facts back as they were before `turn` (undo, rewrite).
+
+    A fact the settings page deleted by hand is journalled at turn 0 and is
+    gone from `facts`; undoing an older turn that happened to write it must
+    not bring it back, so those ids are skipped.
+    """
+    by_hand = set(
+        row[0]
+        for row in conn.execute(
+            "SELECT j.id FROM fact_journal j WHERE j.session_id=? AND j.turn=0 "
+            "AND NOT EXISTS (SELECT 1 FROM facts f WHERE f.session_id=j.session_id AND f.id=j.id)",
+            (session_id,),
+        )
+    )
     rows = conn.execute("SELECT id, before FROM fact_journal WHERE session_id=? AND turn=?", (session_id, turn)).fetchall()
     for fid, before in rows:
+        if fid in by_hand:
+            continue
         if before is None:
             conn.execute("DELETE FROM facts WHERE session_id=? AND id=?", (session_id, fid))
         else:

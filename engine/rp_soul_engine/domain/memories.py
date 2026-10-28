@@ -6,7 +6,7 @@
     今日 temp    the short-term archive: 刚刚's overflow, verbatim, in order.
                  Does not decay. The next day's daily summary reads all of it
                  (and whatever is still in 刚刚) and folds it into 这几天.
-    这几天 days  the last month of her life; decays 0.006 per hour (about
+    这几天 days  the last month of her life; decays 0.005 per hour (about
                  thirty days to forget). Over thirty, the month is written out
                  to a journal file and the layer starts empty again.
     那些事 events what mattered enough to keep: no decay, no capacity, only
@@ -277,18 +277,26 @@ def _num(entry):
 
 
 ARCHIVE_MAX = 300
+# 跨过午夜后，最近这一小时说的话仍留在「刚刚」：醒来交昨天的总结时，
+# 刚才的对话不该被并进一句摘要、也不该从「最近几轮原话」里消失
+RECENT_KEEP_MINUTES = 60
 
 
 def summary_request(state):
     """The oldest complete day with unsummarised 刚刚/今日 conversations, or None.
 
     "Complete" is a day before today: RimTalk groups by the oldest finished
-    period, so a day still going on is never summarised half-way.
+    period, so a day still going on is never summarised half-way. What was said
+    in the last hour stays in 刚刚 even across midnight, so the recent rounds
+    the model reads are not cut off by the clock turning over.
     """
     today = state["clock"]["day"]
+    now = CL.to_abs(state["clock"])
     days = {}
     for entry in entries(state):
         if entry["layer"] in ("now", "temp") and not entry.get("summarized") and entry["at"]["day"] < today                 and (entry["layer"] == "temp" or entry["type"] in KEEPS):
+            if entry["layer"] == "now" and now - CL.to_abs(entry["at"]) < RECENT_KEEP_MINUTES:
+                continue
             days.setdefault(entry["at"]["day"], []).append(entry["id"])
     if not days:
         return None
@@ -326,13 +334,14 @@ def apply_summary(state, request, text, turn, keep=()):
     """One day of 刚刚/今日 becomes one 这几天 entry; the sources are consumed.
 
     `keep` names the 0~2 entries the model judged worth remembering for good:
-    they are copied into 那些事 before the day is folded away.
+    they are copied into 那些事 before the day is folded away. Pinned entries
+    go there too: a milestone must not depend on the model happening to name it.
     """
     picked = sources(state, request)
     for source in picked:
-        if source["id"] in keep:
+        if source["id"] in keep or source.get("pinned"):
             important = add(state, "events", source["type"], source["content"], source["importance"],
-                            at=dict(source["at"]), turn=turn)
+                            at=dict(source["at"]), turn=turn, pinned=bool(source.get("pinned")))
             important["keywords"] = list(source["keywords"])
             important["origin_ids"] = [source["id"]]
     entry = _merge(state, "days", "summary", text, picked, turn)

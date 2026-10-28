@@ -25,8 +25,14 @@ from . import structure as ST
 from .. import modules as MODULES
 
 
-def tier_for(minutes, crossed_day=False):
-    if minutes >= 60 or crossed_day:
+def tier_for(minutes):
+    """How much the time apart asks, by how long it actually was.
+
+    Crossing midnight is not a gap by itself: if you were talking at 23:50 and
+    again at 00:05 there is nothing she did while you were away, so the day
+    boundary must not turn fifteen minutes into "an hour apart".
+    """
+    if minutes >= 60:
         return "full"
     if minutes >= 16:
         return "brief"
@@ -119,7 +125,7 @@ def advance(state, minutes, turn, hooks=None, to_clock=None, player_absent=False
         "from": before,
         "to": dict(state["clock"]),
         "minutes": minutes,
-        "tier": tier_for(minutes, crossed_day),
+        "tier": tier_for(minutes),
         "crossed_day": crossed_day,
         "steps": ["clock"],
         "scene": None,

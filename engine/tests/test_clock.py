@@ -12,6 +12,7 @@ import e2e
 from harness import check, run
 from rp_soul_engine.application import service
 from rp_soul_engine.application.context import Context
+from rp_soul_engine.domain import settlement as SETTLE
 from rp_soul_engine.persistence import repo
 
 T0 = "2026-10-26T12:00:00+08:00"
@@ -115,10 +116,18 @@ def short_turns_expire_thoughts_and_due_events():
         assert not any(t["label"] == "一时担心" for t in thoughts), thoughts
 
 
+def crossing_midnight_in_fifteen_minutes_is_not_a_gap():
+    """23:50 说完话，00:05 又开口：只过去十五分钟，不能要她补离屏片段。"""
+    assert SETTLE.tier_for(15) == "routine", "a quarter of an hour is a pause, not a gap"
+    assert SETTLE.tier_for(59) == "brief"
+    assert SETTLE.tier_for(60) == "full", "an hour is a real gap"
+
+
 check("four 30-second turns advance two minutes", consecutive_short_turns_accumulate)
 check("read previews never consume the remaining seconds", previews_do_not_consume_remainder)
 check("save/load/undo retain seconds and actual player time", saves_loads_and_undo_keep_the_anchor)
 check("wall-clock rollback never double-counts", clock_rollback_does_not_count_the_same_time_twice)
 check("idempotent replay does not consume seconds", replay_does_not_advance_or_consume_time)
 check("short turns settle expired thoughts and due events", short_turns_expire_thoughts_and_due_events)
+check("crossing midnight in fifteen minutes is not a gap", crossing_midnight_in_fifteen_minutes_is_not_a_gap)
 run("clock")

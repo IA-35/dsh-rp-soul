@@ -808,6 +808,28 @@ def undo_does_not_resurrect_a_deleted_fact(s):
 
 
 check("undo does not resurrect a deleted fact", with_sc(undo_does_not_resurrect_a_deleted_fact))
+
+
+def undo_keeps_a_removed_fact_removed_even_if_it_was_edited(s):
+    """「改过一回合、又在设置页删掉」那条路：这条事实在 journal 里既有第 N 回合
+    的旧版本，也有 turn 0 的删除记录。撤回第 N 回合只能恢复它写过的东西，
+    不能把这条已经从 facts 里拿掉的事实整个插回来。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
+    fid = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["key"] == "rain"][0]["id"]
+    # 第二回合把这条事实的知情范围改了：journal 在这一回合记下 before = 旧版本
+    rev, _ = play(s, sid, rev, ops=[{"op": "reveal_fact", "fact_id": fid}])
+    edited = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["key"] == "rain"][0]
+    assert edited["id"] == fid and "你" in edited["known_by"], edited
+    rev = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": fid})["revision"]
+    assert all(r["id"] != fid for r in s.ok("debug-facts", {"session_id": sid})["rows"])
+    rev = s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})["revision"]
+    still = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
+    assert still == [], still
+
+
+check("undo keeps an edited-then-removed fact removed", with_sc(undo_keeps_a_removed_fact_removed_even_if_it_was_edited))
 check("editing persona.md refreshes the static facts", with_sc(persona_refresh_moves_static_facts))
 check("a renamed persona id still finds her", with_sc(persona_refresh_follows_a_renamed_id))
 check("a started relationship ignores start_stage", with_sc(persona_refresh_leaves_a_started_relationship_alone))
