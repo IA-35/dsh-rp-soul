@@ -1,6 +1,6 @@
 {
   "name": "dsh-rp-soul",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor and a Python roleplay engine (mood / relationships / autonomous action).",
   "type": "module",
   "main": "lib/index.js",
