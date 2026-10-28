@@ -92,7 +92,7 @@ def preview_npc(state, cid, report, persona=None):
     # 她此刻想干什么不来自人设：和在场时用的是同一套候选（agency.candidates）。
     goal = None
     if persona is not None:
-        options = AG.candidates(state, persona, cid, state["turn"] + 1, limit=1)
+        options = AG.candidates(state, persona, cid, state["turn"] + 1, at=state["clock"], limit=1)
         if options:
             goal = options[0].get("text")
     return {

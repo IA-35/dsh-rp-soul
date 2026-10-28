@@ -220,7 +220,7 @@ def _archive(state, picked):
 
 
 def maintain(state):
-    """Archive 刚刚 over ten into 今日, forget the faded, enforce capacities.
+    """Hand this stretch of 刚刚 to 今日, forget the faded, enforce capacities.
 
     Returns what moved/went.
     """
@@ -240,7 +240,24 @@ def maintain(state):
         else:
             keep.append(entry)
     items[:] = keep
-    # 刚刚 over capacity: the oldest move into 今日, one by one
+    # 刚刚 是「这一段相处里的」，不是「最近十条」：开了新的一段（隔了一小时
+    # 以上，或者换了场景），上一段说的整体挪进今日。Pin 住的不动。
+    since = CL.to_abs(state["scene"]["since"]) if state.get("scene") else None
+    # 迁移来的旧存档时钟可能退到 scene.since 之前；那种时候整段都算「这一段」，
+    # 不能凭 «at < since» 把刚拿到的对话全推走。
+    if since is not None and since <= now:
+        stale = [
+            e
+            for e in items
+            if e["layer"] == "now"
+            and not e.get("pinned")
+            and e["type"] in KEEPS
+            and CL.to_abs(e["at"]) < since
+        ]
+        if stale:
+            _archive(state, stale)
+            report["archived"].extend(e["id"] for e in stale)
+    # 这一段里说得再多，也最多留十条（token 预算）：最老的挪进今日
     current = [e for e in items if e["layer"] == "now" and not e.get("pinned") and e["type"] in KEEPS]
     current.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
     spill = current[: max(0, len(current) - CAPACITY["now"])]
@@ -295,7 +312,7 @@ def summary_request(state):
     days = {}
     for entry in entries(state):
         if entry["layer"] in ("now", "temp") and not entry.get("summarized") and entry["at"]["day"] < today                 and (entry["layer"] == "temp" or entry["type"] in KEEPS):
-            if entry["layer"] == "now" and now - CL.to_abs(entry["at"]) < RECENT_KEEP_MINUTES:
+            if now - CL.to_abs(entry["at"]) < RECENT_KEEP_MINUTES:
                 continue
             days.setdefault(entry["at"]["day"], []).append(entry["id"])
     if not days:

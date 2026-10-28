@@ -1,5 +1,9 @@
 """Read helpers over the session state dict. No mutation except id allocation.
 
+`turn` is a ledger sequence number (which commit this is) and is only there for
+undo, slots and log coordinates. No game rule may read it: cooldowns, "recent"
+and refresh cadence are all measured in clock time.
+
 A session state holds only engine-owned facts about the story: the two
 characters (the player slot and her), the relationship between them, facts,
 events, the current stretch of time together (scene), clock, mood thoughts,
@@ -101,11 +105,18 @@ def real_span(state, now):
     return minutes, CL.add_minutes(state["clock"], minutes), settled_at
 
 
-def can_act(state, cid, turn=None, bonus=0):
-    """Whether a significant autonomous action is off cooldown for the next turn."""
-    turn = state["turn"] + 1 if turn is None else turn
-    last = state["counters"]["major_action_turn"].get(cid)
-    return last is None or turn - last >= max(1, ST.COOLDOWN_TURNS - bonus)
+def can_act(state, cid, at=None, bonus=0):
+    """Whether a significant autonomous action is off cooldown by now.
+
+    The cooldown is a stretch of time, not a count of things said: chatty
+    minutes must not eat her one big move any faster than quiet ones.
+    """
+    at = state["clock"] if at is None else at
+    last = (state["counters"].get("major_action_at") or {}).get(cid)
+    if not last:
+        return True
+    wait = ST.ACTION_COOLDOWN_MINUTES_OPEN if bonus else ST.ACTION_COOLDOWN_MINUTES
+    return CL.minutes_between(last, at) >= wait
 
 
 def player_involved(state, event):

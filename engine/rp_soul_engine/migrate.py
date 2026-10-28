@@ -29,7 +29,8 @@ from .jsonio import copy
 
 FROM_SCHEMA = 1
 TO_SCHEMA = 2
-LATEST = 3
+TO_SCHEMA_V3 = 3
+LATEST = 4
 # 旧回合和章节只记了哪一天，不知道几点：一律当作那天中午
 UNKNOWN_MINUTE = 720
 
@@ -210,6 +211,37 @@ def state_v2_to_v3(state):
     requests.pop("prologue", None)
     requests["memory_summary"] = None
     requests["memory_journal"] = None
+    s["schema"] = TO_SCHEMA_V3
+    return s
+
+
+def state_v3_to_v4(state):
+    """A schema-3 state whose rules read the clock instead of counting turns.
+
+    Nothing about the story changes, only where the bookkeeping lives:
+
+    - the cooldown marker becomes a clock instant. An old marker cannot be
+      turned into one, so it is dropped: worst case she may take one big move
+      right after the upgrade;
+    - the write-only offscreen marker goes away;
+    - the full-context marker starts empty, so the next commit gets one;
+    - a fact learned under the old rule ("within the last five commits") gets
+      the current clock as its instant; every other fact gets None and simply
+      does not count as recent.
+    """
+    if not isinstance(state, dict) or state.get("schema") != TO_SCHEMA_V3:
+        return state
+    s = copy(state)
+    counters = s.setdefault("counters", {})
+    counters.pop("major_action_turn", None)
+    counters.pop("offscreen_beat_turn", None)
+    counters["major_action_at"] = {}
+    counters["full_context_at"] = None
+    now = dict(s["clock"])
+    for fact in (s.get("facts") or {}).values():
+        if "at" in fact:
+            continue
+        fact["at"] = dict(now) if (fact.get("turn") or 0) >= s["turn"] - 5 else None
     s["schema"] = LATEST
     return s
 
@@ -218,7 +250,7 @@ def upgrade(state, persona):
     """(state, persona) of any older save, brought to the latest schema."""
     if is_v1(state):
         state, persona = session_v1_to_v2(state, persona)
-    return state_v2_to_v3(state), persona
+    return state_v3_to_v4(state_v2_to_v3(state)), persona
 
 
 def upgrade_state(state, persona):

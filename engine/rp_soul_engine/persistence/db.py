@@ -337,7 +337,33 @@ def _migrate_to_3(conn):
             conn.execute("UPDATE slots SET state=? WHERE name=?", (repo.pack(migrate.state_v2_to_v3(state)), name))
 
 
-MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3}
+def _migrate_to_4(conn):
+    """State schema 3 -> 4: cooldown and "recent" read the clock, not the count.
+
+    No table changes: the markers live inside the state blob. Every session,
+    undo point and slot is rewritten through migrate.state_v3_to_v4.
+    """
+    from .. import migrate
+    from . import repo
+
+    for sid, blob in conn.execute("SELECT session_id, state FROM sessions").fetchall():
+        state = repo.unpack(blob)
+        if state.get("schema") == migrate.TO_SCHEMA_V3:
+            conn.execute("UPDATE sessions SET state=? WHERE session_id=?", (repo.pack(migrate.state_v3_to_v4(state)), sid))
+    for sid, turn, blob in conn.execute("SELECT session_id, turn, state FROM undo_points").fetchall():
+        state = repo.unpack(blob)
+        if state.get("schema") == migrate.TO_SCHEMA_V3:
+            conn.execute(
+                "UPDATE undo_points SET state=? WHERE session_id=? AND turn=?",
+                (repo.pack(migrate.state_v3_to_v4(state)), sid, turn),
+            )
+    for name, blob in conn.execute("SELECT name, state FROM slots").fetchall():
+        state = repo.unpack(blob)
+        if state.get("schema") == migrate.TO_SCHEMA_V3:
+            conn.execute("UPDATE slots SET state=? WHERE name=?", (repo.pack(migrate.state_v3_to_v4(state)), name))
+
+
+MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3, 4: _migrate_to_4}
 
 
 def _now_stamp():

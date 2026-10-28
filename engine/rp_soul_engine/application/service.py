@@ -38,6 +38,7 @@ from ..errors import (
     top_code,
 )
 from ..jsonio import canonical
+from ..domain import clock as CL
 from ..domain import structure as ST
 from ..domain import settlement as SETTLE
 from ..persistence import db, repo
@@ -343,17 +344,26 @@ FAILURE_CODES = (INVALID_INPUT, INVARIANT_VIOLATION, NOT_FOUND, SAFETY_BLOCK)
 SESSION_ID_RE = re.compile(r"s_[a-z0-9]{2,38}")
 
 
+# 隔这么久没给过完整上下文，就给一次（原来是每 5 个回合给一次：
+# 数句子会让聊得快的人一直拿到完整的、聊得慢的一直拿简报）。
+FULL_CONTEXT_MINUTES = 15
+
+
 def choose_depth(state, results, failed_before=False):
     """Full after a failed commit, after a record of several turns, on a new
-    stretch of time together or a new day, every 5 turns, and when her
-    memory archive is due; brief otherwise. A brief context is ~6 KB, a full one ~20 KB."""
+    stretch of time together or a new day, when the last full context is stale,
+    and when her memory archive is due; brief otherwise.
+    A brief context is ~6 KB, a full one ~20 KB."""
     if failed_before or len(results) > 1:
         return "full"
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
     requests = dict(state["requests"])
-    if requests.get("memory_summary") or requests.get("memory_journal") or state["turn"] % 5 == 0:
+    if requests.get("memory_summary") or requests.get("memory_journal"):
+        return "full"
+    last = (state["counters"] or {}).get("full_context_at")
+    if not last or CL.minutes_between(last, state["clock"]) >= FULL_CONTEXT_MINUTES:
         return "full"
     return "brief"
 
@@ -419,8 +429,11 @@ def _commit_turn(ctx, payload):
         _engine_outcomes_last(results)
         _plan_journal(ctx, results)
         turn.close_record(state, results)
-        repo.update_session(conn, state, now, turns_since_save=unsaved)
         depth = choose_depth(state, results, failed_before)
+        if depth == "full":
+            # 一次提交只算一个 revision：记账跟着同一版一起写。
+            state["counters"]["full_context_at"] = dict(state["clock"])
+        repo.update_session(conn, state, now, turns_since_save=unsaved)
         project = CX.full if depth == "full" else CX.brief
         return {
             "revision": state["revision"],

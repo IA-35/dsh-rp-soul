@@ -90,7 +90,9 @@ try {
   ok(cancelled, '5. 已取消的装配不继续加载状态');
   writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: { ...next, session_id: 's_missing' }, [agentB.id]: b }));
   const missing = await assemble(agentA);
-  eq(engineText(missing), '', '5. 账本读取失败不注入旧缓存');
+  // 读失败时沿用上一次的局面：装配链不能为了拿新状态卡住对话，也不能在
+  // 一次超时后把局面整段抽走（那会让她的心情和在场凭空消失）。
+  has(engineText(missing), '外部更新后的悬念A', '5. 账本读取失败就沿用上一次的局面');
   has(renderPrompt(missing), persona.prose, '5. 引擎读取失败仍保留人设提示');
   await fiber.dispose();
 

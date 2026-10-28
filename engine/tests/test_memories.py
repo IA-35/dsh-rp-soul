@@ -103,16 +103,19 @@ def importance_follows_the_feelings():
     assert main_entry(calm, 1)["importance"] == 0.3
 
 
-def now_keeps_the_whole_day_then_the_summary_moves_it_on():
-    """今天的事今天一直在刚刚，每日总结把它变成「这几天」的一条（原文被收走）。"""
+def now_keeps_the_stretch_then_the_summary_moves_it_on():
+    """一段相处里说的都在刚刚；隔了一小时就是新的一段，旧的整段进「今日」。
+
+    但今天的事今天不会进「这几天」：要等第二天的每日总结。
+    """
     state, persona = start()
     state = play(state, persona, at(0))
     first = main_entry(state, 1)["id"]
     action = [e["id"] for e in MEM.entries(state) if e["type"] == "action"][0]
-    state = commit(state, persona, at(1), ops=[beat(), glance()])
-    assert layer_of(state, first) == "now", "still 刚刚 on the day it happened"
+    state = commit(state, persona, at(0.5), ops=[beat(), glance()])
+    assert layer_of(state, first) == "now", "still 刚刚 in the same stretch"
     state = play(state, persona, at(25), ops=[beat(), glance()])   # 次日 21:00，那一天的总结还没写
-    assert layer_of(state, first) == "now", "今天就是今天：超过 24 小时也还在刚刚"
+    assert layer_of(state, first) == "temp", "隔了一整天：离开刚刚，但还在今天这一侧"
     assert layer_of(state, action) is None, "a passing action is dropped"
     assert state["requests"]["memory_summary"], "the finished day asks to be summarised"
     state = play(state, persona, at(26), ops=[beat(), glance()], memory_summary="那天晚上他来了，我们聊到很晚。")
@@ -577,7 +580,7 @@ def keywords_are_bigrams():
 check("a turn is remembered in 刚刚", a_turn_is_remembered_in_now)
 check("without remember the summary is kept", without_remember_the_summary_is_kept)
 check("importance follows the turn's feelings", importance_follows_the_feelings)
-check("刚刚 keeps the whole day, the summary moves it on", now_keeps_the_whole_day_then_the_summary_moves_it_on)
+check("刚刚 keeps the stretch, the summary moves it on", now_keeps_the_stretch_then_the_summary_moves_it_on)
 check("刚刚 keeps ten and archives the rest", now_keeps_ten_and_archives_the_rest)
 check("这几天 is forgotten in about a month", days_are_forgotten_in_about_a_month)
 check("那些事 never fades", the_events_never_fade)
@@ -611,4 +614,34 @@ check("migrating in the morning keeps today in the past", migrating_in_the_morni
 check("saving unchanged fields is not an edit", saving_unchanged_fields_is_not_an_edit)
 check("long ASCII words are clipped", long_ascii_words_are_clipped)
 check("a request with nothing left is dropped", a_request_with_nothing_left_is_dropped)
+
+def a_gap_of_an_hour_starts_a_new_stretch():
+    """「刚刚」是这一段相处里的：隔了一小时再开口，旧的整段进「今日」。
+
+    今天说的还在今天这一侧（不进「这几天」），从上下文里让位即可。
+    """
+    state, persona = start()
+    state = play(state, persona, at(0), remember="他说今晚会来")
+    first = main_entry(state, 1)["id"]
+    assert layer_of(state, first) == "now"
+    assert state["clock"] == {"day": 1, "minute": 1200}, state["clock"]
+    # 一小时后：新的一段
+    state = play(state, persona, at(1), ops=[beat(), glance()])
+    assert layer_of(state, first) == "temp", "隔了一小时，旧的整段让位到「今日」，但还是今天"
+    assert state["counters"].get("major_action_at") is not None
+
+
+def the_stretch_never_moves_today_into_days():
+    """今天的事今天永远在今天这一侧，要等第二天的每日总结。"""
+    state, persona = start()
+    state = play(state, persona, at(0), remember="他说今晚会来")
+    first = main_entry(state, 1)["id"]
+    for gap in (1, 2, 3):   # 都在第一天的 23:00 之前
+        state = play(state, persona, at(gap), ops=[beat(), glance()])
+        assert state["clock"]["day"] == 1, state["clock"]
+        assert layer_of(state, first) == "temp", "第 %s 小时的记录：还在今天" % gap
+
+
+check("a gap of an hour starts a new stretch", a_gap_of_an_hour_starts_a_new_stretch)
+check("the stretch never moves today into days", the_stretch_never_moves_today_into_days)
 run("memories")

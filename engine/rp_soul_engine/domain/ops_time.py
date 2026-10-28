@@ -73,6 +73,5 @@ def op_offscreen_beat(ctx, op, path):
     if ctx.settlements:
         ctx.beats_after_time.add(npc)
     ctx.beats.append({"npc_id": npc, "summary": op["summary"]})
-    state["counters"]["offscreen_beat_turn"][npc] = ctx.turn
     ctx.observable = True
     ctx.applied.append({"op": "offscreen_beat", "npc_id": npc, "summary": op["summary"], "applied": sub_applied})

@@ -111,7 +111,10 @@ class TurnContext:
         npcs = SS.npcs(state)
         self.start_bands = {cid: MO.evaluate(state, cid)[1] for cid in npcs}
         self.start_present = set(state["scene"]["present"])
-        self.start_kinds = {cid: [o["kind"] for o in AG.candidates(state, persona, cid, self.turn)] for cid in npcs}
+        self.start_kinds = {
+            cid: [o["kind"] for o in AG.candidates(state, persona, cid, self.turn, at=state["clock"])]
+            for cid in npcs
+        }
 
     def band(self, cid):
         """The band this turn is judged by."""
@@ -190,6 +193,8 @@ def _note(ctx, key, text, known_by, visibility="private", origin=None):
         "visibility": visibility,
         "origin": origin or ("offscreen" if ctx.in_beat else "observed"),
         "turn": ctx.turn,
+        # 学到的时刻：上下文里「最近知道的」按时间排，不按说了几句。
+        "at": dict(state["clock"]),
         "spreading": False,
         "coord": ctx.fact_coord(),
     }
@@ -359,20 +364,22 @@ def op_npc_action(ctx, op, path):
     elif op["significant"]:
         _candidate_kind(ctx, npc, op, path, errs)
     bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
-    if op["significant"] and not break_band and not SS.can_act(ctx.state, npc, ctx.turn, bonus):
-        last = ctx.state["counters"]["major_action_turn"][npc]
+    if op["significant"] and not break_band and not SS.can_act(ctx.state, npc, ctx.state["clock"], bonus):
+        last = ctx.state["counters"]["major_action_at"][npc]
+        wait = ST.ACTION_COOLDOWN_MINUTES_OPEN if bonus else ST.ACTION_COOLDOWN_MINUTES
+        ready = CL.add_minutes(last, wait)
         errs.append(
             detail(
                 path + ".significant",
-                "%s 在冷却中：第 %d 回合刚有过重大行动" % (ctx.name(npc), last),
-                "第 %d 回合起才能再有重大行动；这回合写成非重大行动" % (last + max(1, ST.COOLDOWN_TURNS - bonus)),
+                "%s 在冷却中：%s 刚有过一次重大行动" % (ctx.name(npc), CL.label(last)),
+                "%s 之后才能再有；这一次写成非重大行动" % CL.label(ready),
                 INVARIANT_VIOLATION,
             )
         )
     if not _flush(ctx, errs):
         return
     if op["significant"]:
-        ctx.state["counters"]["major_action_turn"][npc] = ctx.turn
+        ctx.state["counters"]["major_action_at"][npc] = dict(ctx.state["clock"])
     if ctx.band(npc) in ("closed", "break") and op["kind"] in ST.MOOD_REACTION_KINDS:
         ctx.mood_reactions.add(npc)
     ctx.actors.add(npc)

@@ -70,8 +70,10 @@ def new_session(persona, seed=None, player=None, now=None):
             "memory": 1,
             "boundary": 1,
         },
-        "major_action_turn": {},
-        "offscreen_beat_turn": {},
+        # 上一次重大自主行动的时刻（游戏时钟），冷却按时间算
+        "major_action_at": {},
+        # 上一次给完整上下文的时刻；空 = 下次给完整
+        "full_context_at": None,
         # 已经达成过的里程碑（第一次立约……），只自动 Pin 第一次
         "milestones": [],
     }

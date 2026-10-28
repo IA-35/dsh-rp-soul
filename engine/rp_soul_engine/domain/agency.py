@@ -28,16 +28,23 @@ from . import structure as ST
 
 # Reasons, not story: the text names her and the pending business, nothing
 # else is invented here.
-RECENT_TURNS = 3
+# 「她刚知道的事」是半小时内知道的，不是「最近三句里」知道的。
+RECENT_MINUTES = 30
 NUDGE = 1.0
 
 
-def _recent_facts(state, cid, turn):
-    """Facts this character learned or was told in the last few turns."""
+def _fact_at(fact):
+    at = fact.get("at")
+    return None if at is None else CL.to_abs(at)
+
+
+def _recent_facts(state, cid, now):
+    """Facts this character learned or was told in the last half hour."""
     out = []
     for fid in sorted(SS.info_set(state, cid)):
         fact = state["facts"].get(fid) or {}
-        if turn - (fact.get("turn") or 0) <= RECENT_TURNS:
+        at = _fact_at(fact)
+        if at is not None and now - at <= RECENT_MINUTES:
             out.append(fid)
     return out[:4]
 
@@ -72,8 +79,15 @@ def _band_reason(band, value, weighing):
     return head
 
 
-def score(state, cid, turn):
+def _clock_of(state, at):
+    return state["clock"] if at is None else at
+
+
+def score(state, cid, turn, at=None):
     """[(score, kind, basis_fact_ids, event_ids, reason)] in declaration order.
+
+    `turn` only seeds the deterministic nudge (a replay must land on the same
+    list); every rule below reads the clock, never the count of messages.
 
     `reason` is a short "why" phrase built from state the character can see, so
     the prompt can say why he leans that way instead of only what he leans
@@ -93,7 +107,7 @@ def score(state, cid, turn):
     sick = any(c["kind"] in ST.INCAPACITATING for c in char["status"]["conditions"])
     hour = state["clock"]["minute"] // 60
     late = hour >= 23 or hour < 6
-    recent = _recent_facts(state, cid, turn)
+    recent = _recent_facts(state, cid, CL.to_abs(_clock_of(state, at)))
     pending = _pending_for(state, cid)
     due = _due_soon(state, cid)
     rows = []
@@ -186,16 +200,21 @@ def _text(state, persona, cid, kind, events):
     return "%s 遇到点意外" % name
 
 
-def candidates(state, persona, cid, turn=None, limit=None):
-    """Up to AGENCY_MAX_CANDIDATES proposals, strongest first. Pure."""
+def candidates(state, persona, cid, turn=None, limit=None, at=None):
+    """Up to AGENCY_MAX_CANDIDATES proposals, strongest first. Pure.
+
+    Whether she may make a big move is asked of the clock, so a burst of short
+    messages cannot burn her cooldown in five minutes of wall time.
+    """
     turn = state["turn"] + 1 if turn is None else turn
+    at = _clock_of(state, at)
     limit = limit or ST.AGENCY_MAX_CANDIDATES
     broken = MO.evaluate(state, cid)[1] == "break"
-    if not broken and not SS.can_act(state, cid, turn, MO.open_bonus(state, cid)):
+    if not broken and not SS.can_act(state, cid, at, MO.open_bonus(state, cid)):
         return []
     if not SS.is_npc(state, cid):
         return []
-    rows = score(state, cid, turn)
+    rows = score(state, cid, turn, at)
     if broken:
         rows = [row for row in rows if row[1] in ST.MOOD_REACTION_KINDS]
     rows.sort(key=lambda row: (-row[0], ST.AGENCY_KINDS.index(row[1])))
@@ -240,12 +259,12 @@ def _because(reasons):
     return line if len(line) <= 90 else line[:89] + "…"
 
 
-def brief(state, persona, turn=None):
+def brief(state, persona, turn=None, at=None):
     """What the prompt shows: her strongest candidates, no walls of text."""
     turn = state["turn"] + 1 if turn is None else turn
     rows = []
     for cid in SS.npcs(state):
-        options = candidates(state, persona, cid, turn, limit=2)
+        options = candidates(state, persona, cid, turn, at=at, limit=2)
         if not options:
             continue
         rows.append({

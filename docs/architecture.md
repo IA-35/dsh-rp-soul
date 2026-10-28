@@ -2,7 +2,7 @@
 
 一份读完就知道「这个插件由什么组成、一次对话里谁按什么顺序干了什么、数据存在哪」的文档。
 细节设计另有三份：`docs/memory-design.md`（记忆四层）、`docs/wake-line-design.md`（唤醒线）、
-`docs/time-not-turns.md`（回合→时间的改造方案，**尚未实施**）。
+`docs/time-not-turns.md`（数句话→读时钟的改造方案，**已实施**：规则读时钟，不再数说了几句）。`turn` 字段仍在，只当流水号。
 
 ---
 
@@ -75,13 +75,13 @@ application 层；`domain/` 里没有一处 `open()`。
 ```
 
 **关键约束**：人设放 `section`（进系统提示词前缀），账本快照放**动态 context**（追加在末尾）。
-理由只有一个——上下文缓存按整段前缀的字节哈希命中。账本每回合都变，放进 section 会让整段
-前缀每回合作废；放进动态 context 后系统提示词恒定，每回合新增的只有尾部几十字节。
+理由只有一个——上下文缓存按整段前缀的字节哈希命中。账本每次都在变，放进 section 会让整段
+前缀每次都作废；放进动态 context 后系统提示词恒定，每次新增的只有尾部几十字节。
 
-### 3.2 一回合（模型侧）
+### 3.2 一次对话（模型侧）
 
 ```
-模型：先调 soul_state（brief；隔久了/新的一天/上回合被驳回用 full）
+模型：先调 soul_state（brief；隔久了/新的一天/上一次被驳回用 full）
       → 写正文
       → soul_commit 交账
 ```
@@ -93,13 +93,13 @@ application 层；`domain/` 里没有一处 `open()`。
 
 | # | 步骤 | 代码 |
 |---|---|---|
-| 1 | `replaces_turn`：先撤销被改写的那一回合 | `_replace_base` |
+| 1 | `replaces_turn`：先撤销被改写的那一次 | `_replace_base` |
 | 2 | 记下本记录的请求（她昨天的总结 / 这个月的日记），交由**本记录第一项**支付 | `_apply_turn` 的 `undo_base` |
 | 3 | **时钟按真实时间结算**（走完整的 settlement 五步） | `settlement.advance` |
 | 4 | 按顺序应用操作（最多 40 条） | `OPS.apply_op` |
 | 5 | 检查：离屏片段是否必填、break 档表达、动作模式、亲密标签、安全边界 | `_beat_checks` / `_mode_checks` / `_intimacy_checks` |
 | 6 | 领域不变量校验 | `invariants.check` |
-| 7 | 记账：回合流水、她的记忆（付请求 / 采本回合 / 老化） | `MODULES.run(...)` |
+| 7 | 记账：对话流水、她的记忆（付请求 / 采这次 / 老化） | `MODULES.run(...)` |
 
 `close_record` 在**一条记录的最后一项之后**跑一次，决定「下一条记录要什么」
 （要不要交每日总结、要不要写月度日记）。
@@ -204,17 +204,17 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | `persona_id` / `persona_revision` / `persona_title` | 开局时的人设快照标识 |
 | `mood_base` / `mood_thresholds` | 心情基准与三档阈值 |
 | `player_id` | 永远 `"player"` |
-| `turn` | 回合流水号（**只用于记账编号，不做决策**） |
+| `turn` | 流水号（**只用于记账编号，不做决策**；规则一律读时钟） |
 | `clock` | 故事时钟 `{"day","minute"}` |
 | `real_start` / `real_at` | 开局墙钟（诊断用）/ 结算锚点 |
 | `characters` | 两个角色卡（名字、称呼、年龄、性别、身份、外貌、语态、作息、心情 thoughts） |
 | `relationships` | `{"her>player": {"trust","tension","stage"}}`，只写她这一侧 |
-| `facts` | 事实表：谁知道 / 谁误信 / 可见性 / 来源 / 回合 |
+| `facts` | 事实表：谁知道 / 谁误信 / 可见性 / 来源 / 学到的时刻 `at` |
 | `events` | 剧情事件（**与记忆层的 `events` 是两回事**） |
 | `counters` | id 分配器、`major_action_turn`、`offscreen_beat_turn`、`scene` |
 | `scene` | 当前这段相处：id / 在场者 / 开始时刻 / 本段的互动判定 |
 | `plan` | 她自己定下的下一件事 |
-| `memory` | `turns`（回合流水最近 40 条）、`entries`（四层记忆）、`open_action`、`last_quotes` |
+| `memory` | `turns`（对话流水最近 40 条）、`entries`（四层记忆）、`open_action`、`last_quotes` |
 | `preferences` | 离屏推演开关、节奏、尺度 |
 | `safety` | 暂停状态、硬边界清单 |
 | `requests` | 给下一条记录的请求（`memory_summary` / `memory_journal`） |
@@ -239,7 +239,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 - **活跃度**：`a0 * (1 - rate) ** hours`，`a0` 是上次触碰时的值，`t0` 是那次时刻。
   不逐小时回写，读时现算，所以撤销 / 存档 / 导出天然一致。
 - **被忘掉**：低于 `CLEAN_BELOW = 0.025` 且没 Pin。Pin 的不衰减、不清理、不占容量。
-- **采集不花模型调用**：每回合一条；有 `remember` 用她的第一人称，没有就用 `summary`。
+- **采集不花模型调用**：每次一条；有 `remember` 用她的第一人称，没有就用 `summary`。
 - **打分**：时间远近 + 重要度 × 场景权重 + 关键词重合 + 层级加成 + Pin / 你改过 + 活跃度。
   `brief` 取 15 条（刚刚全放 + 打分补），`full` 取 20 条，低于 0.15 不要。
 - **越想越牢**：被这句话勾起来的记忆活跃度 +0.1（上限 1.0）。
@@ -255,21 +255,21 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 - **她自己选的回应不进她自己的心情**——否则「低落 → 冷回应 → 更低落」会一路滑进崩溃档
 - 每角色最多 20 条（12 记忆 + 8 情境），按原始强度淘汰
 
-档位只做**行为门禁**，不产生精神状态；按结算后、操作前的心情判定并冻结整回合：
+档位只做**行为门禁**，不产生精神状态；按结算后、操作前的心情判定并冻结这一次：
 
 | 档位 | 区间（默认） | 影响 |
 |---|---|---|
 | `open` | ≥ 75 | 允许阶段前进；`significant` 行动冷却 −1 |
 | `normal` | 45–75 | 无额外约束 |
 | `closed` | 25–45 | 驳回 `stage_advance`；`npc_response.note` ≤30 字 |
-| `break` | < 25 | 同上；本回合有简短回应或一种情绪表达即可，重大情绪表达不受冷却限制 |
+| `break` | < 25 | 同上；这次有简短回应或一种情绪表达即可，重大情绪表达不受冷却限制 |
 
 ### 6.3 关系（`domain/relationship.py`）
 
 两条有向边 `"her>player"`。**只写她对你**的一面——你的心情不入库。
 
-- 信任单回合最多变 2（净变化），模型不能拆成两次小操作绕过
-- 阶段前进要证据：本回合你有实际行动（result/attempt）**且**她同回合 `partial`/`genuine`
+- 信任一次最多变 2（净变化），模型不能拆成两次小操作绕过
+- 阶段前进要证据：这次你有实际行动（result/attempt）**且**她同时 `partial`/`genuine`
 - 7 级：`stranger → acquainted → familiar → flirting → testing → intimate → committed`
 
 ### 6.4 自主行动（`domain/agency.py`）
@@ -279,7 +279,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 - 非崩溃档下 `significant: true` 的 `npc_action` **必须**取候选里的 `kind`
 - 候选里的依据事实会对着她的信息集校验，她不能基于不知道的事行动
-- 冷却 `COOLDOWN_TURNS = 3`（**按回合数判，时间制的改造见 `docs/time-not-turns.md`，未实施**）
+- 冷却 `ACTION_COOLDOWN_MINUTES = 20`（心情 open 时 10）：**按真实时间判**，连发三十句也不缩短她的下一次重大行动
 
 ### 6.5 唤醒（`domain/wake.py` + `lib/wake.js`）
 
@@ -287,8 +287,8 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 ```
 到点 → 额度检查 → agent.steer 一条【我的时间】消息进指定会话
-     → 她在那一回合 together: false，过自己的时间，用 plan_next 说好下一步
-     → 回合结束再算下一次
+     → 她在那个时段 together: false，过自己的时间，用 plan_next 说好下一步
+     → 那一次结束再算下一次
 ```
 
 五个理由：`plan`（她的安排）/ `promise`（你们的约定）/ `event`（她自己的事）/
@@ -302,13 +302,13 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 | op | 干什么 | 关键约束 |
 |---|---|---|
-| `npc_response` | 她对你这回合的回应 | `refuse/negotiate/partial/surface/genuine`；`surface` 必须写 `true_intent` |
+| `npc_response` | 她对你这回的回应 | `refuse/negotiate/partial/surface/genuine`；`surface` 必须写 `true_intent` |
 | `npc_action` | 她主动做的事 | `significant: true` 受冷却 + 必须取 agency 候选的 kind |
 | `npc_state` | 她的状况（醉酒、睡着、受伤、外出、忙） | 情绪不在这里改 |
 | `add_thought` | 一条情绪事由 | 必须挂 `basis_fact_id` |
 | `add_fact` | 新增事实 | `scope`：`shared`/`player_only`/`companion_only`/`inner` |
 | `reveal_fact` | 让只有一方知道的事变双方都知道 | 你们必须在一起 |
-| `relationship` | 信任 / 张力 / 阶段 | 单回合信任 ±2；阶段前进要证据 |
+| `relationship` | 信任 / 张力 / 阶段 | 一次信任 ±2；阶段前进要证据 |
 | `event_create` | 约定、截止、风声、机会、伏笔 | 你们之间的约定要你本人授权 |
 | `event_resolve` | 提前结束事件 | 概率事件只能引擎掷骰 |
 | `event_cancel` | 因剧情取消 | — |
@@ -321,7 +321,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 每回合开始先读。`depth: brief`（~6 KB，日常）/ `full`（~20 KB，隔久了/新的一天/上回合被驳回）；`cue` 传你这句话的原话，引擎拿它挑记忆和秘密；`want_twist` 要转折 |
+| `soul_state` | 每次开始先读。`depth: brief`（~6 KB，日常）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`cue` 传你这句话的原话，引擎拿它挑记忆和秘密；`want_twist` 要转折 |
 | `soul_commit` | 写完正文后交账。`operations` 最多 40 条；`summary` ≤120 字；`remember` ≤60 字（她第一人称怎么记）；引擎要总结时带 `memory_summary`（≤100 字）/ `memory_journal`（≤300 字）；`memory_keep` 挑 0–2 条进「那些事」 |
 | `soul_admin` | 14 个 action：`start` / `status` / `undo` / `save` / `load` / `list` / `delete` / `set_safety` / `set_preferences` / `export` / `import` / `mood_panel` / `drop_thought` / `reset_mapping` |
 
@@ -365,7 +365,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | 情绪 | 她的心情面板 + 阈值 + 删除审计 | 每条 thought 右侧 `×` 手动删（留审计） |
 | 记忆 | 四层记忆 + 待交的总结 / 日记 + 删除审计 | 改内容 / 重要度 / 活跃度 / 关键词 / 备注 / Pin；删（留审计）；「立即总结」「立即写日记」 |
 | 常识库 | 她知道的事实（`facts`） | 删（留审计） |
-| 自主行动记录 | 最近 1–50 回合的行动、离屏片段、关系变化 | 只读 |
+| 自主行动记录 | 最近 1–50 次的行动、离屏片段、关系变化 | 只读 |
 | 唤醒 | 唤醒配置 + 定时器状态 + 可指定会话 | 总开关 / 目标会话 / 每日次数 / 每日 token / 安静时段 / 想你阈值 |
 
 ---
@@ -439,7 +439,7 @@ SQLite 14 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_poi
 
 ## 14. 六条硬规则（改代码前必读）
 
-1. **人设进 `section`，账本进 `context`**。把账本挪进 section = 每回合重刷几十 K token 的前缀缓存。
+1. **人设进 `section`，账本进 `context`**。把账本挪进 section = 每次重刷几十 K token 的前缀缓存。
 2. **时间不归模型**。`real_at` 是唯一锚点；离开多久由墙钟算，不是模型写的。
 3. **`state["events"]`（剧情事件）≠ 记忆层 `"events"`（那些事）**。绝不可全局替换。
 4. **domain 层是纯函数**。要写文件、开事务、碰 DB，一律在 application 层。
@@ -454,7 +454,7 @@ SQLite 14 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_poi
 |---|---|
 | `docs/time-not-turns.md` 的时间制改造（冷却 / RECENT_TURNS 改分钟） | **方案定稿，一行未动** |
 | 日记 `.md` 的检索注入（按关键词翻日记并进上下文） | 只写不读 |
-| `turn % 5` 换 full 上下文 | 用户已否决（「刚刚」10 条本来每回合全注入，与回合数无关） |
+| `turn % 5` 换 full 上下文 | 已删，改成「距上次完整上下文 ≥ 15 分钟」 |
 
 ---
 

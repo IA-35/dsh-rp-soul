@@ -18,9 +18,12 @@ Lists are ordered by creation (the number in the id). Facts handed out are
 read-only; a commit changes a fact only through FactView.edit().
 """
 
+from . import clock as CL
+
 from ..jsonio import copy
 
-RECENT_TURNS = 5
+# 「最近」是一条时间线，不是说的话数：这一小时里聊过的事更容易被想起来。
+RECENT_MINUTES = 60
 
 
 def order(fact):
@@ -31,21 +34,32 @@ def knows(fact, cid):
     return cid in fact["known_by"] or cid in fact["believed_by"]
 
 
-def player_score(fact, present_ids, present_names, recent_turn):
-    """Relevance of a fact the player knows, for the bounded context lists."""
+def _at_abs(fact):
+    at = fact.get("at")
+    return None if at is None else CL.to_abs(at)
+
+
+def player_score(fact, present_ids, present_names, now):
+    """Relevance of a fact the player knows, for the bounded context lists.
+
+    `now` is the current clock (or its absolute minute); a fact learned within
+    RECENT_MINUTES of it ranks as recent. Facts without `at` never do: an
+    upgrade cannot guess when they were learned, so it does not pretend.
+    """
     head = fact["key"].split(".", 1)[0]
     score = 0
     if head in present_ids or any(name and name in fact["text"] for name in present_names):
         score += 3
-    if fact["turn"] >= recent_turn:
+    at = _at_abs(fact)
+    if at is not None and now - at <= RECENT_MINUTES:
         score += 2
     if fact["origin"] == "setup" and head == "player":
         score -= 1
     return score
 
 
-def rank_key(present_ids, present_names, recent_turn):
-    return lambda f: (-player_score(f, present_ids, present_names, recent_turn), -f["turn"], order(f))
+def rank_key(present_ids, present_names, now):
+    return lambda f: (-player_score(f, present_ids, present_names, now), -(_at_abs(f) or -1), order(f))
 
 
 class FactsAPI:
@@ -100,9 +114,9 @@ class DictSource(FactsAPI):
     def spreading(self):
         return sorted((f for f in self.facts.values() if f.get("spreading") and f["visibility"] != "inner"), key=order)
 
-    def player_ranked(self, player, present_ids, present_names, recent_turn, limit=None, exclude=()):
+    def player_ranked(self, player, present_ids, present_names, now, limit=None, exclude=()):
         found = [f for f in self.facts.values() if knows(f, player) and f["id"] not in exclude]
-        found.sort(key=rank_key(present_ids, present_names, recent_turn))
+        found.sort(key=rank_key(present_ids, present_names, now))
         return found[:limit] if limit else found
 
 
@@ -186,12 +200,12 @@ class FactView(FactsAPI):
     def spreading(self):
         return self._merge(self.source.spreading(), lambda f: f.get("spreading") and f["visibility"] != "inner")
 
-    def player_ranked(self, player, present_ids, present_names, recent_turn, limit=None, exclude=()):
+    def player_ranked(self, player, present_ids, present_names, now, limit=None, exclude=()):
         skip = set(exclude) | set(self.changed) | set(self.removed)
         wanted = None if limit is None else limit + len(self.changed)
-        found = self.source.player_ranked(player, present_ids, present_names, recent_turn, wanted, tuple(sorted(skip)))
+        found = self.source.player_ranked(player, present_ids, present_names, now, wanted, tuple(sorted(skip)))
         found += [f for fid, f in self.changed.items() if knows(f, player) and fid not in exclude]
-        found.sort(key=rank_key(present_ids, present_names, recent_turn))
+        found.sort(key=rank_key(present_ids, present_names, now))
         return found[:limit] if limit else found
 
     def changed_facts(self):

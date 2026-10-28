@@ -78,7 +78,14 @@ MAX_ADVANCE_MINUTES = 30 * MINUTES_PER_DAY
 # 隔这么久再说话就算新的一段相处（新场景）
 SCENE_BREAK_MINUTES = 60
 
-COOLDOWN_TURNS = 3
+# 重大自主行动的冷却：按真实时间算，不按说了几句话。平常 1-3 分钟一来一回，
+# 20 分钟意味着连续聊一小时她最多主动做 3 件「重大」的事。
+ACTION_COOLDOWN_MINUTES = 20
+# 心情 open 时放松到这个数（原来是 TURNS 减 1 回合）
+ACTION_COOLDOWN_MINUTES_OPEN = 10
+# 隔这么久（分钟）再开口，上下文里才多出「这段时间」那一块：十几分钟
+# 的空档才是真的空档，一分钟里连发的几句话不该被说成「你不在」。
+SINCE_LAST_MINUTES = 16
 MAX_FIX_ATTEMPTS = 2
 
 # ---------------------------------------------------------------------------
