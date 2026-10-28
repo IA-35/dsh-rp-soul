@@ -198,6 +198,30 @@ def routine_wakes_at_next_segment():
     assert "08:00" in pick["why"], pick
 
 
+def the_diary_gets_a_wake_of_its_own():
+    """日记是定时任务：有今天该写的 SCM，23:30 就叫她写。"""
+    from rp_soul_engine.domain import memories as MEM
+    persona, _ = PE.validate(dict(fixture.PERSONA))
+    state = fresh()
+    MEM.add(state, "scm", "summary", "今天一起吃了面", 0.9,
+            at={"day": state["clock"]["day"], "minute": 600})
+    assert state["clock"]["minute"] < MEM.DIARY_MINUTE, "她还早，等着 23:30 那一次"
+    pick, rows = WK.next_wake(state, persona, miss_you_hours=0, routine=False)
+    reasons = [row["reason"] for row in rows]
+    assert "diary" in reasons, reasons
+    row = [r for r in rows if r["reason"] == "diary"][0]
+    assert row["at"]["minute"] == MEM.DIARY_MINUTE, row
+    assert "日记" in row["why"], row
+
+
+def no_diary_wake_when_there_is_nothing_to_write():
+    persona, _ = PE.validate(dict(fixture.PERSONA))
+    state = fresh()
+    state["clock"] = {"day": state["clock"]["day"], "minute": 23 * 60 + 30}
+    _, rows = WK.next_wake(state, persona, miss_you_hours=0, routine=False)
+    assert "diary" not in [row["reason"] for row in rows], rows
+
+
 def quiet_hours_hold_back_everything_but_her_plan():
     state = fresh()
     state["clock"] = {"day": 1, "minute": 60}
@@ -402,8 +426,8 @@ def a_quiet_commit(ops):
         "summary": "她把水杯洗干净。",
         "open_action": "她擦干手。",
         "quotes": [],
-        "memory_summary": None,
-        "memory_journal": None,
+        "memory_fold": None,
+        "memory_diary": None,
         "memory_keep": [],
         "replaces_turn": None,
         "together": True,
@@ -484,6 +508,8 @@ CASES = [
     ("连续唤醒而你未回复不会生成回应想法", repeated_wakes_without_a_reply_do_not_create_response_thoughts),
     ("旧存档没有 plan 也能读", with_sc(old_state_without_plan_still_reads)),
     ("迁移来的存档没有 real_at 也能算", old_state_without_real_at_still_wakes),
+    ("日记有自己的唤醒", the_diary_gets_a_wake_of_its_own),
+    ("没有可写的就不叫醒她写日记", no_diary_wake_when_there_is_nothing_to_write),
     ("安排做完了就清掉", plan_is_dropped_once_it_is_done),
     ("安排没到点就留着", plan_survives_a_turn_that_ends_before_its_time),
 ]

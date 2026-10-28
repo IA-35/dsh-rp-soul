@@ -229,12 +229,13 @@ CONFLICT_TAGS = tuple(tag[0] for tag in TAGS if tag[1] == "conflict")
 # 候选全在账本里算：她的安排、你们的约定、她自己的事、想你了、作息换段。
 # 时间先算成游戏时钟，再按「建局时刻 + 走过的分钟」换算成真实时刻。
 
-WAKE_REASONS = ("plan", "promise", "event", "miss_you", "routine")
+WAKE_REASONS = ("plan", "promise", "event", "miss_you", "diary", "routine")
 WAKE_REASON_LABELS = {
     "plan": "她说好做到的时间",
     "promise": "你们的约定",
     "event": "她自己的事",
     "miss_you": "想你了",
+    "diary": "写日记的时间",
     "routine": "作息换段",
 }
 WAKE_LEAD_MINUTES = 30            # 约定到期前多久叫醒她

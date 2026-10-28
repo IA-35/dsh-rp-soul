@@ -171,6 +171,22 @@ def _clock_at_real(state, moment, now=None):
     return CL.add_minutes(state["clock"], minutes)
 
 
+def _diary_candidate(state):
+    """23:30: the diary is a scheduled task, so it gets a wake of its own."""
+    from . import memories as MEM
+    day, ids = MEM.diary_sources(state)
+    if not ids:
+        return []
+    clock = {"day": day, "minute": MEM.DIARY_MINUTE}
+    if CL.to_abs(clock) <= CL.to_abs(state["clock"]):
+        clock = CL.add_minutes(state["clock"], 1)
+    return [_candidate(
+        "diary", clock,
+        "该把今天写进日记了",
+        day=day, entries=len(ids),
+    )]
+
+
 def _routine_candidates(state, persona):
     routine = (persona or {}).get("routine") or []
     if not routine:
@@ -200,6 +216,7 @@ def candidates(state, persona, miss_you_hours=None, streak=0, routine=True, quie
     rows.extend(_plan_candidates(state))
     rows.extend(_event_candidates(state))
     rows.extend(_miss_you_candidates(state, hours, streak, now, last_wake_at))
+    rows.extend(_diary_candidate(state))
     if routine:
         rows.extend(_routine_candidates(state, persona))
     out = []

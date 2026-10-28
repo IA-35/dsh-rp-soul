@@ -76,6 +76,8 @@ def new_session(persona, seed=None, player=None, now=None):
         "full_context_at": None,
         # 已经达成过的里程碑（第一次立约……），只自动 Pin 第一次
         "milestones": [],
+        # 最近一次把 SCM 写进日记的那一天；空 = 还没写过
+        "last_diary_day": None,
     }
     state = {
         "schema": STATE_SCHEMA_VERSION,
@@ -104,7 +106,7 @@ def new_session(persona, seed=None, player=None, now=None):
         # 她自己定下的下一件事：{"note": "去洗澡", "until": {"day","minute"}, "set_turn": N}
         # 旧存档没有这个键，读的地方一律用 .get("plan")
         "plan": None,
-        # turns：回合流水（最近 40 条）；entries：她的记忆（四层，见 domain/memories.py）
+        # turns：回合流水（最近 40 条）；entries：她的记忆（ABM / SCM / CLPA，见 domain/memories.py）
         "memory": {"turns": [], "last_quotes": [], "open_action": "", "entries": []},
         "preferences": {
             "offscreen_simulation": True,
@@ -112,7 +114,7 @@ def new_session(persona, seed=None, player=None, now=None):
             "explicitness": "standard",
         },
         "safety": {"paused": False, "boundaries": []},
-        "requests": {"memory_summary": None, "memory_journal": None},
+        "requests": {"memory_fold": None, "memory_diary": None},
         "undo_floor": 0,
         "session_id": None,
     }

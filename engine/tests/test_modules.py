@@ -68,15 +68,15 @@ def an_implementation_can_be_replaced_at_one_registration():
 
 def memory_validation_stays_inside_the_atomic_turn():
     state, pack = fresh()
-    entry = memories.add(state, "days", "conversation", "你留下了一把伞。", 0.8)
-    state["requests"]["memory_summary"] = {"day": 1, "ids": [entry["id"]]}
+    entry = memories.add(state, "scm", "conversation", "你留下了一把伞。", 0.8)
+    state["requests"]["memory_fold"] = {"ids": [entry["id"]]}
     before = copy.deepcopy(state)
     try:
         turn.commit_turn(state, pack, commit_body(), now=T0)
     except AppError as err:
-        assert "日记" in str(err), str(err)
+        assert "SCM" in str(err), str(err)
     else:
-        raise AssertionError("pending memory summary must be validated")
+        raise AssertionError("pending fold must be validated")
     assert state == before
 
 

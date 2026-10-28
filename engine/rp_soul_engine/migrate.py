@@ -169,15 +169,12 @@ def _entry(state, layer, kind, text, importance, day, a0_at, turn=0, **extra):
 
 
 def state_v2_to_v3(state):
-    """A schema-2 state with her memory in four layers. Pure; other schemas pass through.
+    """A schema-2 state with her memory in three layers. Pure; other schemas pass through.
 
     - the rolling turn log stays (`memory.turns`); each turn also becomes an
-      entry: today's latest six in 刚刚, the rest in 这几天. Turns a chapter
-      already covered count as summarised, so no daily summary repeats them;
-    - every chapter and the prologue become 那些事 entries: they are the things
-      worth keeping for good, and 那些事 no longer fades;
-    - the chapter / prologue requests become memory_summary / memory_journal
-      (recomputed when the next record closes).
+      entry: today's latest twenty in ABM, the rest in SCM;
+    - every chapter and the prologue become CLPA entries: they are the things
+      worth keeping for good, and CLPA never fades.
     """
     if not isinstance(state, dict) or state.get("schema") != TO_SCHEMA:
         return state
@@ -195,22 +192,24 @@ def state_v2_to_v3(state):
     now = CL.to_abs(s["clock"])
     if prologue:
         first_day = min([c.get("day") or 1 for c in chapters] or [1])
-        _entry(s, "events", "summary", prologue, 0.6, first_day, now)
+        _entry(s, "clpa", "summary", prologue, 0.6, first_day, now)
     for chapter in chapters:
-        _entry(s, "events", "summary", chapter.get("summary") or "", 0.5, chapter.get("day") or 1, now,
+        _entry(s, "clpa", "summary", chapter.get("summary") or "", 0.5, chapter.get("day") or 1, now,
                turn=chapter.get("to_turn") or 0)
     turns = [t for t in memory.get("turns") or [] if isinstance(t, dict) and (t.get("summary") or "").strip()]
-    today = [t for t in turns if t.get("day") == s["clock"]["day"]][-MEM.CAPACITY["now"]:]
+    today = [t for t in turns if t.get("day") == s["clock"]["day"]][-MEM.CAPACITY["abm"]:]
     for item in turns:
-        layer = "now" if item in today else "days"
+        layer = "abm" if item in today else "scm"
         _entry(s, layer, "conversation", item["summary"], 0.3, item.get("day") or 1, now,
                turn=item.get("turn") or 0, quotes=list(item.get("quotes") or [])[:3],
                summarized=(item.get("turn") or 0) <= covered)
     requests = s.setdefault("requests", {})
     requests.pop("chapter_summary", None)
     requests.pop("prologue", None)
-    requests["memory_summary"] = None
-    requests["memory_journal"] = None
+    requests.pop("memory_summary", None)
+    requests.pop("memory_journal", None)
+    requests["memory_fold"] = None
+    requests["memory_diary"] = None
     s["schema"] = TO_SCHEMA_V3
     return s
 

@@ -188,7 +188,7 @@ DELETE_MEMORY = _obj(
 )
 
 REQUEST_MEMORY = _obj(
-    dict(session_write_fields(), kind=F(S.Enum("summary", "journal"), desc="summary 立即总结 / journal 立即把这个月写进日记")),
+    dict(session_write_fields(), kind=F(S.Enum("fold", "diary"), desc="fold 立即把 ABM 收进 SCM / diary 立即写今天的日记")),
     "request-memory",
 )
 

@@ -333,8 +333,8 @@ DOMAIN_KEYS = (
     "remember",
     "open_action",
     "quotes",
-    "memory_summary",
-    "memory_journal",
+    "memory_fold",
+    "memory_diary",
     "memory_keep",
     "replaces_turn",
     "together",
@@ -360,7 +360,7 @@ def choose_depth(state, results, failed_before=False):
     if result["scene_changed"] or result["crossed_day"]:
         return "full"
     requests = dict(state["requests"])
-    if requests.get("memory_summary") or requests.get("memory_journal"):
+    if requests.get("memory_fold") or requests.get("memory_diary"):
         return "full"
     last = (state["counters"] or {}).get("full_context_at")
     if not last or CL.minutes_between(last, state["clock"]) >= FULL_CONTEXT_MINUTES:
@@ -454,14 +454,13 @@ def _plan_journal(ctx, results):
     所以这里只算路径、挂到 ctx 上，由 session_write 在 COMMIT 之后调用
     _flush_journal 落盘 —— 文件写失败只是少一份日记，回合照样算数。
     """
-    written = [r["journaled"] for r in results if r.get("journaled")]
+    written = [r["diary"] for r in results if r.get("diary")]
     if not written:
         return
     folder = paths.journal_dir(ctx.data_dir)
     pending = ctx.__dict__.setdefault("_journal_pending", [])
     for entry in written:
-        first, last = entry["lines"][0]["day"], entry["lines"][-1]["day"]
-        path = os.path.join(folder, "journal-%04d-%04d.md" % (first, last))
+        path = os.path.join(folder, "diary-%04d.md" % entry["day"])
         entry["path"] = path
         pending.append((path, entry["markdown"]))
 
@@ -554,12 +553,12 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("summarized", "replaced_turn", "thoughts", "remembered"):
+    for key in ("folded", "replaced_turn", "thoughts", "remembered"):
         if result.get(key) is not None:
             out[key] = result[key]
-    if result.get("journaled"):
-        out["journaled"] = {"day": result["journaled"]["day"], "lines": len(result["journaled"]["lines"]),
-                            "path": result["journaled"].get("path")}
+    if result.get("diary"):
+        out["diary"] = {"day": result["diary"]["day"], "entries": len(result["diary"]["ids"]),
+                        "path": result["diary"].get("path")}
     return out
 
 
@@ -717,12 +716,12 @@ def _resume(state):
     from ..domain import memories as MEM
 
     turns = state["memory"]["turns"]
-    events = MEM.of_layer(state, "events")
-    years = MEM.of_layer(state, "days")
+    kept = MEM.of_layer(state, "clpa")
+    recent = MEM.of_layer(state, "scm")
     return {
-        # 接着玩时先看她最近记成那些事的那一条，再是这几天里最新的一条
-        "last_event": events[-1]["content"] if events else None,
-        "last_chapter": years[-1]["content"] if years else None,
+        # 接着玩时先看 CLPA 里她最看重的那一条，再是 SCM 里最新的一条
+        "last_event": kept[-1]["content"] if kept else None,
+        "last_chapter": recent[-1]["content"] if recent else None,
         "recent": [t["summary"] for t in turns[-3:]],
         "last_quotes": list(state["memory"].get("last_quotes") or []),
         "open_action": state["memory"].get("open_action") or "",
@@ -1200,7 +1199,7 @@ def debug_memories(ctx, payload):
         "revision": state.get("revision", 0),
         "turn": state["turn"],
         "clock_label": CL.label(state["clock"]),
-        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_summary", "memory_journal")},
+        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_fold", "memory_diary")},
         "deletions": repo.memory_deletions(conn, state["session_id"]),
     }
     out.update(MEM.panel(state))
@@ -1264,12 +1263,12 @@ def request_memory(ctx, payload):
     from ..domain import memories as MEM
 
     def change(conn, state, payload, now):
-        if payload["kind"] == "summary":
-            request = MEM.manual_summary_request(state)
-            key, what = "memory_summary", "总结"
+        if payload["kind"] == "fold":
+            request = MEM.manual_fold_request(state)
+            key, what = "memory_fold", "收进 SCM"
         else:
-            request = MEM.manual_journal_request(state)
-            key, what = "memory_journal", "写进日记"
+            request = MEM.diary_request(state)
+            key, what = "memory_diary", "写日记"
         if request is None:
             raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
                            [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])

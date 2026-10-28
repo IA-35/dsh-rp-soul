@@ -565,10 +565,10 @@ def the_memory_page_shows_her_memories(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[npc_action()], remember="她第一次对我笑")
     data = s.ok("debug-memories", {"session_id": sid})
-    assert data["revision"] == rev and data["counts"]["now"] >= 1, data["counts"]
+    assert data["revision"] == rev and data["counts"]["abm"] >= 1, data["counts"]
     mine = [e for e in data["entries"] if e["content"] == "她第一次对我笑"]
-    assert mine and mine[0]["layer_label"] == "刚刚" and mine[0]["activity"] == 1.0, data["entries"]
-    assert data["layers"]["events"] == "那些事" and data["capacity"]["days"] == 30
+    assert mine and mine[0]["layer_label"] == "ABM" and mine[0]["activity"] == 1.0, data["entries"]
+    assert data["layers"]["clpa"] == "CLPA" and data["capacity"]["scm"] == 50
 
 
 def editing_a_memory_marks_it_yours(s):
@@ -603,22 +603,22 @@ def deleting_a_memory_leaves_an_audit(s):
 def summarize_now_is_paid_by_the_next_commit(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[npc_action()], remember="今天陪她值了夜班")
-    out = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "summary"})
+    out = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
     rev = out["revision"]
     assert out["request"]["sources"][0]["text"] == "今天陪她值了夜班", out
     ctx = s.ok("get-context", {"session_id": sid})["context"]
-    assert ctx["memory_summary_sources"]["sources"], ctx.get("memory_summary_sources")
+    assert ctx["memory_fold_sources"]["sources"], ctx.get("memory_fold_sources")
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[npc_action(significant=False)]))
-    assert "日记" in json.dumps(err, ensure_ascii=False), err
-    play(s, sid, rev, ops=[npc_action(significant=False)], memory_summary="那晚我值夜班，有人陪着，没那么难熬")
-    days = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "days"]
-    assert days and days[0]["content"].startswith("那晚我值夜班"), days
+    assert "SCM" in json.dumps(err, ensure_ascii=False), err
+    play(s, sid, rev, ops=[npc_action(significant=False)], memory_fold="那晚我值夜班，有人陪着，没那么难熬")
+    scm = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "scm"]
+    assert scm and scm[0]["content"].startswith("那晚我值夜班"), scm
 
 
 def nothing_to_archive_is_refused(s):
     sid, rev, _ = e2e.start(s)
-    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "journal"})
-    assert err["code"] == "INVALID_INPUT" and "没有可以写进日记" in err["message"], err
+    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "diary"})
+    assert err["code"] == "INVALID_INPUT" and "没有可以写日记的记忆" in err["message"], err
 
 
 def settings_moods_page_lists_her(s):

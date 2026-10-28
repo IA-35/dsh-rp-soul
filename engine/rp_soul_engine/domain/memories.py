@@ -1,16 +1,19 @@
-"""Her memory: four layers that age with real time (after RimTalk-ExpandMemory).
+"""Her memory: three layers that age with real time (after RimTalk-ExpandMemory).
 
-    刚刚 now     what just happened; does not decay. Up to ten; over ten the
-                 oldest are archived, as they are, into 今日. A passing action,
-                 never promoted, is dropped after 24 hours.
-    今日 temp    the short-term archive: 刚刚's overflow, verbatim, in order.
-                 Does not decay. The next day's daily summary reads all of it
-                 (and whatever is still in 刚刚) and folds it into 这几天.
-    这几天 days  the last month of her life; decays 0.005 per hour (about
-                 thirty days to forget). Over thirty, the month is written out
-                 to a journal file and the layer starts empty again.
-    那些事 events what mattered enough to keep: no decay, no capacity, only
-                 you delete them.
+    ABM   what just happened; does not decay, never enters the context (the
+          conversation itself is already there). Up to twenty; past that, or
+          after an hour of quiet, a subagent folds the batch into one SCM
+          entry and ABM starts over empty. A passing action, never promoted,
+          is dropped after 24 hours.
+    SCM   the situation memory that outlives one conversation; decays 0.005
+          per hour (about thirty days). Up to fifty; over fifty the least
+          active go first. This is what gets recalled into the context, three
+          to five entries at a time.
+    日记  the diary: one file per day, written at 23:30 by a subagent from
+          that day's SCM. It lives on disk, not in the state, and is never
+          shown as a layer.
+    CLPA  what she decided matters for good: no decay, no capacity, only you
+          edit or delete them.
 
 Activity follows ``activity *= 1 - rate`` every hour (RimTalk). Instead of
 writing that back every hour, an entry keeps the activity it had when it was
@@ -21,7 +24,7 @@ no per-turn rewrites, so undo, slots and exports stay consistent for free.
 An entry below CLEAN_BELOW that is not pinned is forgotten. Pinned entries do
 not decay, are never cleaned and never count against a layer's capacity.
 
-Capture costs no model call: every committed turn leaves one entry in 刚刚
+Capture costs no model call: every committed turn leaves one entry in ABM
 (her first-person ``remember`` line when the turn has one, else the summary),
 an offscreen beat leaves an "experience", a minor action leaves an "action".
 """
@@ -31,20 +34,27 @@ import math
 from . import clock as CL
 from .text import keywords, cue_keywords, KEYWORDS_MAX, KEYWORD_LEN
 
-LAYERS = ("now", "temp", "days", "events")
-LAYER_LABELS = {"now": "刚刚", "temp": "今日", "days": "这几天", "events": "那些事"}
-DECAY = {"now": 0.0, "temp": 0.0, "days": 0.005, "events": 0.0}
-# None = unlimited: 那些事 is only ever emptied by you
-CAPACITY = {"now": 10, "temp": 200, "days": 30, "events": None}
+# 日记不在这里：它落盘成文件，不进 state
+LAYERS = ("abm", "scm", "clpa")
+LAYER_LABELS = {"abm": "ABM", "scm": "SCM", "clpa": "CLPA"}
+DECAY = {"abm": 0.0, "scm": 0.005, "clpa": 0.0}
+# None = unlimited: CLPA is only ever emptied by you
+CAPACITY = {"abm": 20, "scm": 50, "clpa": None}
+# 闲置这么久还没满，也要把 ABM 收成一条 SCM
+ABM_IDLE_MINUTES = 60
+# 日记是定时任务：每天这个点之后、且今天还没写过，才要一篇
+DIARY_MINUTE = 23 * 60 + 30
 NOW_LIFESPAN_MINUTES = 24 * 60
 CLEAN_BELOW = 0.025
 TYPES = ("conversation", "experience", "action", "summary")
-# 留在「刚刚」里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
+# 留在 ABM 里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
 CONTENT_MAX = 300
 YOU_MAX = 60
-# 每日总结的正文长度
-SUMMARY_MAX = 100
+# 一条 SCM 的正文长度（一批 ABM 合成一条）
+SUMMARY_MAX = 300
+# 一篇日记的正文长度
+DIARY_MAX = 300
 
 
 def entries(state):
@@ -53,14 +63,25 @@ def entries(state):
 
 
 def normalize_legacy(state):
-    """Old saves: 那些年 is gone, and the monthly request is no longer an archive."""
+    """Old saves: the layer names changed, the entries move with them.
+
+    now → abm, temp and days → scm (temp was the day's holding place, which SCM
+    now is), events / years / chapter → clpa. The pending summary and journal
+    requests are dropped: neither exists as a thing the model must write now.
+    """
     memory = state.get("memory") or {}
+    renamed = {"now": "abm", "temp": "scm", "days": "scm", "events": "clpa",
+               "years": "clpa", "chapter": "clpa"}
     for entry in memory.get("entries") or []:
-        if entry.get("layer") in ("years", "chapter"):
-            entry["layer"] = "events"
+        entry["layer"] = renamed.get(entry.get("layer"), entry.get("layer"))
     requests = state.get("requests") or {}
-    if "memory_archive" in requests:
-        requests["memory_journal"] = requests.pop("memory_archive")
+    # 只清旧名字。memory_fold / memory_diary 是现在的请求，每次读存档都要留着，
+    # 顺手 pop 掉的话「立即汇总」会在下一次 get-context 时凭空消失。
+    for key in ("memory_summary", "memory_journal", "memory_archive"):
+        requests.pop(key, None)
+    for key in ("memory_fold", "memory_diary"):
+        requests.setdefault(key, None)
+    state["requests"] = requests
     return state
 
 
@@ -69,8 +90,8 @@ def of_layer(state, layer):
 
 
 def activity(entry, now):
-    """Current activity at absolute minute `now` (pinned and 刚刚 do not decay)."""
-    if entry.get("pinned") or entry["layer"] == "now":
+    """Current activity at absolute minute `now` (pinned and ABM do not decay)."""
+    if entry.get("pinned") or entry["layer"] == "abm":
         return entry["a0"]
     hours = max(0, now - entry["t0"]) / 60.0
     return entry["a0"] * (1.0 - DECAY[entry["layer"]]) ** hours
@@ -163,13 +184,13 @@ def _milestones(ctx):
 
 
 def capture(state, ctx, commit):
-    """Leave this turn's entries in 刚刚. Returns the entries added."""
+    """Leave this turn's entries in ABM. Returns the entries added."""
     added = []
     milestones = _milestones(ctx)
     content = (commit.get("remember") or "").strip() or commit["summary"]
     kind = "conversation" if ctx.together else "experience"
     main = add(
-        state, "now", kind, content, importance_of(ctx), turn=ctx.turn,
+        state, "abm", kind, content, importance_of(ctx), turn=ctx.turn,
         quotes=list(commit.get("quotes") or [])[:3],
         you=(commit.get("player_input") or "").strip()[:YOU_MAX],
         remember=bool((commit.get("remember") or "").strip()),
@@ -183,10 +204,10 @@ def capture(state, ctx, commit):
             if name == "first_promise" and name not in seen:
                 seen.append(name)
     for beat in ctx.beats:
-        added.append(add(state, "now", "experience", beat["summary"], 0.3, turn=ctx.turn))
+        added.append(add(state, "abm", "experience", beat["summary"], 0.3, turn=ctx.turn))
     for item in ctx.applied:
         if item.get("op") == "npc_action" and not item.get("significant") and item.get("action"):
-            added.append(add(state, "now", "action", item["action"], 0.2, turn=ctx.turn))
+            added.append(add(state, "abm", "action", item["action"], 0.2, turn=ctx.turn))
     return added
 
 
@@ -194,42 +215,51 @@ def capture(state, ctx, commit):
 # maintenance: once per commit, after capture
 
 
-def _awaiting_summary(entry):
-    """A conversation or experience of 刚刚 / 今日 / 这几天 no daily summary has covered yet.
+def _awaiting_fold(entry):
+    """An ABM entry whose batch has not been folded into SCM yet.
 
-    RimTalk summarises every in-game day on the hour, so 这几天 never fades
-    before its day is written down. Here the summary waits for the next commit,
-    which may come days later: until its day is summarised such an entry is
-    neither forgotten nor pushed out by capacity, or a long absence would erase
-    the day before you left without a trace.
+    While it waits it is neither forgotten nor pushed out by capacity: the
+    fold is what turns it into something she keeps, and losing it first would
+    erase the last hour before you went quiet.
     """
-    if entry["layer"] == "temp":
-        return not entry.get("summarized")
-    return entry["layer"] in ("now", "days") and entry["type"] in KEEPS and not entry.get("summarized")
+    return entry["layer"] == "abm" and entry["type"] in KEEPS and not entry.get("summarized")
 
 
-def _archive(state, picked):
-    """The oldest 刚刚 lines move into 今日 one by one, exactly as they are.
+def abm_batch(state):
+    """The ABM entries due to be folded into one SCM, or None.
 
-    Nothing is merged and no model is asked: 今日 is only a holding place until
-    the next day's daily summary reads the whole day at once.
+    Two triggers, RimTalk's: the layer is full (twenty), or it has been quiet
+    for an hour. A passing action is never part of a batch -- it either expired
+    or it is still fresh, and it is not worth an SCU.
     """
-    for entry in picked:
-        entry["layer"] = "temp"
-    return picked
+    now = CL.to_abs(state["clock"])
+    # 这一回合刚记下的那几条不算：一批是「之前说过的话」。把它们算进来的话，
+    # 停一小时再开口时最新的一条正好是刚说的，闲置永远凑不满一小时。
+    waiting = [e for e in entries(state) if e["layer"] == "abm" and e["type"] in KEEPS
+               and e.get("turn") != state["turn"]]
+    # 钉住的不占名额，但照样随这批一起收走（apply_fold 把它送进 CLPA）
+    pool = [e for e in waiting if not e.get("pinned")]
+    if not pool:
+        return None
+    idle = now - max(CL.to_abs(e["at"]) for e in waiting) >= ABM_IDLE_MINUTES
+    if len(pool) < CAPACITY["abm"] and not idle:
+        return None
+    return {"ids": [e["id"] for e in sorted(waiting, key=lambda e: (CL.to_abs(e["at"]), _num(e)))]}
 
 
 def maintain(state):
-    """Hand this stretch of 刚刚 to 今日, forget the faded, enforce capacities.
+    """Forget the faded, enforce capacities, drop the expired actions.
 
-    Returns what moved/went.
+    ABM is emptied by the fold, not here: a batch that is due stays untouched
+    until apply_fold turns it into an SCM entry.
+    Returns what went.
     """
     now = CL.to_abs(state["clock"])
-    report = {"moved": [], "forgotten": [], "dropped": [], "archived": []}
+    report = {"forgotten": [], "dropped": []}
     items = entries(state)
     keep = []
     for entry in items:
-        if entry["layer"] != "now":
+        if entry["layer"] != "abm":
             keep.append(entry)
             continue
         if entry["type"] in KEEPS or entry.get("pinned"):
@@ -240,47 +270,19 @@ def maintain(state):
         else:
             keep.append(entry)
     items[:] = keep
-    # 刚刚 是「这一段相处里的」，不是「最近十条」：开了新的一段（隔了一小时
-    # 以上，或者换了场景），上一段说的整体挪进今日。Pin 住的不动。
-    since = CL.to_abs(state["scene"]["since"]) if state.get("scene") else None
-    # 迁移来的旧存档时钟可能退到 scene.since 之前；那种时候整段都算「这一段」，
-    # 不能凭 «at < since» 把刚拿到的对话全推走。
-    if since is not None and since <= now:
-        stale = [
-            e
-            for e in items
-            if e["layer"] == "now"
-            and not e.get("pinned")
-            and e["type"] in KEEPS
-            and CL.to_abs(e["at"]) < since
-        ]
-        if stale:
-            _archive(state, stale)
-            report["archived"].extend(e["id"] for e in stale)
-    # 这一段里说得再多，也最多留十条（token 预算）：最老的挪进今日
-    current = [e for e in items if e["layer"] == "now" and not e.get("pinned") and e["type"] in KEEPS]
-    current.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)))
-    spill = current[: max(0, len(current) - CAPACITY["now"])]
-    if spill:
-        _archive(state, spill)
-        report["archived"].extend(e["id"] for e in spill)
-    # forgotten (not before its day is summarised; 那些事 never fades)
-    faded = [e for e in items if e["layer"] in ("days",) and not e.get("pinned") and not _awaiting_summary(e)
+    # forgotten: SCM ages out; CLPA never fades, ABM is emptied by the fold
+    faded = [e for e in items if e["layer"] == "scm" and not e.get("pinned")
              and activity(e, now) < CLEAN_BELOW]
     for entry in faded:
         items.remove(entry)
         report["forgotten"].append(entry["id"])
-    # 今日 / 这几天 over capacity: the least active goes (not what awaits its summary)
-    for layer in ("temp", "days"):
-        limit = CAPACITY[layer]
-        if limit is None:
-            continue
-        pool = [e for e in items if e["layer"] == layer and not e.get("pinned") and not _awaiting_summary(e)]
-        counted = sum(1 for e in items if e["layer"] == layer and not e.get("pinned"))
-        pool.sort(key=lambda e: (activity(e, now), CL.to_abs(e["at"]), _num(e)))
-        for entry in pool[: max(0, counted - limit)]:
-            items.remove(entry)
-            report["forgotten"].append(entry["id"])
+    # SCM over capacity: the least active goes
+    limit = CAPACITY["scm"]
+    pool = [e for e in items if e["layer"] == "scm" and not e.get("pinned")]
+    pool.sort(key=lambda e: (activity(e, now), CL.to_abs(e["at"]), _num(e)))
+    for entry in pool[: max(0, len(pool) - limit)]:
+        items.remove(entry)
+        report["forgotten"].append(entry["id"])
     return report
 
 
@@ -289,44 +291,8 @@ def _num(entry):
 
 
 # ---------------------------------------------------------------------------
-# daily summary: today's 刚刚 + 今日 fold into one 这几天 line, and the day is
-# written into the journal file
-
-
-ARCHIVE_MAX = 300
-# 跨过午夜后，最近这一小时说的话仍留在「刚刚」：醒来交昨天的总结时，
-# 刚才的对话不该被并进一句摘要、也不该从「最近几轮原话」里消失
-RECENT_KEEP_MINUTES = 60
-
-
-def summary_request(state):
-    """The oldest complete day with unsummarised 刚刚/今日 conversations, or None.
-
-    "Complete" is a day before today: RimTalk groups by the oldest finished
-    period, so a day still going on is never summarised half-way. What was said
-    in the last hour stays in 刚刚 even across midnight, so the recent rounds
-    the model reads are not cut off by the clock turning over.
-    """
-    today = state["clock"]["day"]
-    now = CL.to_abs(state["clock"])
-    days = {}
-    for entry in entries(state):
-        if entry["layer"] in ("now", "temp") and not entry.get("summarized") and entry["at"]["day"] < today                 and (entry["layer"] == "temp" or entry["type"] in KEEPS):
-            if now - CL.to_abs(entry["at"]) < RECENT_KEEP_MINUTES:
-                continue
-            days.setdefault(entry["at"]["day"], []).append(entry["id"])
-    if not days:
-        return None
-    day = min(days)
-    return {"day": day, "ids": days[day]}
-
-
-def archive_request(state):
-    """这几天 is full: the whole month goes into the journal file and is cleared."""
-    ids = [e["id"] for e in entries(state) if e["layer"] == "days"]
-    if len(ids) < CAPACITY["days"]:
-        return None
-    return {"ids": ids}
+# folding: a batch of ABM becomes one SCM entry (the subagent writes the text);
+# the diary is a file written at 23:30 from the day's SCM
 
 
 def sources(state, request):
@@ -347,63 +313,94 @@ def _merge(state, layer, kind, text, picked, turn):
     return entry
 
 
-def apply_summary(state, request, text, turn, keep=()):
-    """One day of 刚刚/今日 becomes one 这几天 entry; the sources are consumed.
+def apply_fold(state, request, text, turn, keep=()):
+    """A batch of ABM becomes one SCM entry; the batch is consumed.
 
-    `keep` names the 0~2 entries the model judged worth remembering for good:
-    they are copied into 那些事 before the day is folded away. Pinned entries
-    go there too: a milestone must not depend on the model happening to name it.
+    SCM is where a conversation outlives itself, so the entry keeps the time it
+    happened: `at` is the batch's latest moment, and `when_label` turns that
+    back into 「三小时前」 when it is recalled.
+
+    `keep` names the 0~2 entries the subagent judged worth remembering for
+    good: they are copied into CLPA before the batch is cleared. Pinned entries
+    go there too -- a milestone must not depend on a model happening to name it.
     """
     picked = sources(state, request)
     for source in picked:
         if source["id"] in keep or source.get("pinned"):
-            important = add(state, "events", source["type"], source["content"], source["importance"],
+            important = add(state, "clpa", source["type"], source["content"], source["importance"],
                             at=dict(source["at"]), turn=turn, pinned=bool(source.get("pinned")))
             important["keywords"] = list(source["keywords"])
             important["origin_ids"] = [source["id"]]
-    entry = _merge(state, "days", "summary", text, picked, turn)
+    entry = _merge(state, "scm", "summary", text, picked, turn)
     gone = set(e["id"] for e in picked)
     entries(state)[:] = [e for e in entries(state) if e["id"] not in gone]
     return entry
 
 
-def apply_archive(state, request, text, turn):
-    """The month's 这几天 become one journal file; the entries are cleared.
+def manual_fold_request(state):
+    """「立即汇总」: the whole ABM, without waiting for it to fill up or go quiet."""
+    ids = [e["id"] for e in entries(state) if e["layer"] == "abm" and e["type"] in KEEPS
+           and not e.get("pinned")]
+    return {"ids": ids} if ids else None
 
-    Nothing new is added to memory: the written file is the record, and 这几天
-    starts over from empty. The returned `lines` are what the file is built from.
+
+def diary_sources(state):
+    """The earliest day's SCM that the diary has not taken yet (no clock check).
+
+    Not just today: if 23:30 passed while nobody was talking, the day it was
+    due for is still owed, and writing it tomorrow must not lose it.
     """
-    picked = [e for e in sources(state, request) if e["layer"] == "days"]
-    lines = [{"day": e["at"]["day"], "text": e["content"]} for e in sorted(picked, key=lambda e: (CL.to_abs(e["at"]), _num(e)))]
-    gone = set(e["id"] for e in picked)
-    entries(state)[:] = [e for e in entries(state) if e["id"] not in gone]
-    return {"gone": sorted(gone), "text": text, "lines": lines, "day": state["clock"]["day"]}
+    today = state["clock"]["day"]
+    written = (state.get("counters") or {}).get("last_diary_day") or 0
+    pool = [e for e in entries(state)
+            if e["layer"] == "scm" and not e.get("pinned") and e["at"]["day"] <= today]
+    if not pool:
+        return None, []
+    day = min(e["at"]["day"] for e in pool)
+    if day <= written:
+        return None, []
+    return day, [e["id"] for e in sorted(pool, key=lambda e: (CL.to_abs(e["at"]), _num(e)))
+                 if e["at"]["day"] == day]
 
 
-def journal_markdown(state, text, lines):
-    """One month's 这几天 written the way she would keep a diary."""
-    first, last = lines[0]["day"], lines[-1]["day"]
-    body = ["# %s" % text, "", "> %s — %s" % (_day_text(state, first), _day_text(state, last)), ""]
-    body.extend("- **%s** %s" % (_day_text(state, line["day"]), line["text"]) for line in lines)
-    return "\n".join(body) + "\n"
+def diary_request(state):
+    """What the 23:30 diary still has to write, once per day.
+
+    A scheduled task, not a nightly deadline the model owes on its first word:
+    before 23:30 nothing is asked for, and a day already written is not asked
+    for again even if later turns add more to it.
+    """
+    if state["clock"]["minute"] < DIARY_MINUTE:
+        return None
+    day, ids = diary_sources(state)
+    return {"day": day, "ids": ids} if ids else None
+
+
+def apply_diary(state, request, text):
+    """Mark today's SCM as written into the diary; nothing is removed.
+
+    The diary is a file, not a layer: SCM keeps what it has (it ages out on its
+    own), and each entry only learns which day it was written down for, so the
+    next 23:30 does not write the same day twice.
+    """
+    day = request["day"]
+    written = []
+    for entry in sources(state, request):
+        entry["diary_day"] = day
+        written.append(entry["id"])
+    state["counters"]["last_diary_day"] = day
+    return {"day": day, "text": text, "ids": written,
+            "markdown": diary_markdown(state, text, day)}
+
+
+def diary_markdown(state, text, day=None):
+    """One day's diary, written the way she would keep one."""
+    return "# %s\n\n%s\n" % (_day_text(state, day if day is not None else state["clock"]["day"]), text)
 
 
 def _day_text(state, day):
     weekday = _weekday(state, day)
     return "第 %d 天%s" % (day, " · " + weekday if weekday else "")
-
-
-def manual_summary_request(state):
-    """「立即总结」: everything not yet summarised in 刚刚 / 今日, today included."""
-    ids = [e["id"] for e in entries(state) if e["layer"] in ("now", "temp") and not e.get("summarized")
-           and (e["layer"] == "temp" or e["type"] in KEEPS)]
-    return {"day": state["clock"]["day"], "ids": ids} if ids else None
-
-
-def manual_journal_request(state):
-    """「立即归档」: every summarised 这几天 entry, without waiting to fill up."""
-    ids = [e["id"] for e in entries(state) if e["layer"] == "days"]
-    return {"ids": ids} if ids else None
 
 
 def find(state, memory_id):
@@ -456,14 +453,12 @@ def remove(state, memory_id):
 
 
 def prune_requests(state):
-    """Drop a pending summary / journal whose sources are all gone (deleted on
-    the settings page), so the model is never asked to write one from nothing."""
+    """Drop a pending fold / diary whose sources are all gone (deleted on the
+    settings page), so nothing is written from an empty batch."""
     requests = state["requests"]
-    if requests.get("memory_summary") and not sources(state, requests["memory_summary"]):
-        requests["memory_summary"] = None
-    journal = requests.get("memory_journal")
-    if journal and not [e for e in sources(state, journal) if e["layer"] == "days"]:
-        requests["memory_journal"] = None
+    for key in ("memory_fold", "memory_diary"):
+        if requests.get(key) and not sources(state, requests[key]):
+            requests[key] = None
 
 
 BRIEF_SOURCES = 12
@@ -471,7 +466,7 @@ BRIEF_SOURCE_TEXT = 30
 
 
 def request_view(state, request, compact=False):
-    """What the model reads to write a summary or archive: the sources, in order."""
+    """What the model reads to write a fold or a diary: the sources, in order."""
     if not request:
         return None
     picked = sources(state, request)
@@ -497,12 +492,11 @@ def request_view(state, request, compact=False):
 # ---------------------------------------------------------------------------
 # injection: quota harvesting (RimTalk's UnifiedMemoryInjector + DynamicMemoryInjection)
 
-# 刚刚整层原样放（十轮），其余全从所有层里打分取
-ROUNDS = CAPACITY["now"]
-TOTAL_BRIEF = 15                # brief 6 KB：刚刚十条 + 打分补五条
-TOTAL_FULL = 20                 # maxInjectedMemories
+# 只从 SCM 取几条最相关的。ABM 不注入：这段对话本身就在上下文里。
+SCM_BRIEF = 3                   # brief 6 KB：三条
+SCM_FULL = 5                    # 完整上下文：五条
 THRESHOLD = 0.15                # memoryScoreThreshold
-LAYER_BONUS = {"now": 1.0, "temp": 0.85, "days": 0.7, "events": 0.5}
+LAYER_BONUS = {"abm": 1.0, "scm": 0.85, "clpa": 0.5}
 LAYER_WEIGHT = 0.2
 PINNED_BONUS = 0.5
 EDITED_BONUS = 0.3
@@ -548,46 +542,44 @@ def score(entry, now, cue_keys, scene):
     return value
 
 
-def recent_rounds(state, count=ROUNDS):
-    """The latest conversations / experiences still in 刚刚, newest first."""
-    pool = [e for e in entries(state) if e["layer"] == "now" and e["type"] in KEEPS]
-    pool.sort(key=lambda e: (CL.to_abs(e["at"]), _num(e)), reverse=True)
-    return pool[:count]
+def select(state, cue="", total=SCM_BRIEF):
+    """The SCM lines worth carrying into this turn, best first.
 
-
-def select(state, cue="", total=TOTAL_BRIEF):
-    """(rounds, picked): the recent rounds as they are, then the best-scored of the rest."""
+    ABM is not read here: whatever was just said is already in the conversation,
+    so recalling it would only repeat the transcript. CLPA competes on the same
+    scale but carries a small layer bonus, so a milestone beats a passing
+    afternoon when the numbers are close.
+    """
     now = CL.to_abs(state["clock"])
     scene = "together" if (cue or "").strip() else "alone"
-    rounds = recent_rounds(state)
-    taken = set(e["id"] for e in rounds)
     cue_keys = cue_keywords(state, cue)
     scored = []
     for entry in entries(state):
-        if entry["id"] in taken or entry["type"] == "action":
+        if entry["layer"] == "abm" or entry["type"] == "action":
+            continue
+        # 快淡光的不提：光靠层级加分也过得了阈值，那样阈值就形同虚设
+        if not entry.get("pinned") and activity(entry, now) < CLEAN_BELOW:
             continue
         value = score(entry, now, cue_keys, scene)
         if value >= THRESHOLD:
             scored.append((value, entry))
     scored.sort(key=lambda pair: (-pair[0], -CL.to_abs(pair[1]["at"]), -_num(pair[1])))
-    return rounds, [entry for _value, entry in scored[: max(0, total - len(rounds))]]
+    return [entry for _value, entry in scored[: max(0, total)]]
 
 
 def _clip(text):
     return text if len(text) <= TEXT_MAX else text[: TEXT_MAX - 1] + "…"
 
 
-def inject(state, cue="", total=TOTAL_BRIEF):
-    """What the context carries: the rounds (with your words and her quotes), then the recalled."""
-    rounds, picked = select(state, cue, total)
+def inject(state, cue="", total=SCM_BRIEF):
+    """What the context carries: a few recalled SCM / CLPA lines, each with its age.
+
+    The age is the point: 「三天前」 and 「一小时前」 weigh differently to her, and
+    a line with no time on it reads as if it happened just now.
+    """
     rows = []
-    for entry in rounds + picked:
+    for entry in select(state, cue, total):
         item = {"layer": LAYER_LABELS[entry["layer"]], "when": when_label(state, entry["at"]), "text": _clip(entry["content"])}
-        if entry in rounds:
-            if entry.get("you"):
-                item["you"] = entry["you"]
-            if entry.get("quotes"):
-                item["said"] = list(entry["quotes"])
         if entry.get("pinned"):
             item["pinned"] = True
         rows.append(item)
@@ -605,7 +597,7 @@ def reinforce(state, ids):
     wanted = set(ids)
     touched = []
     for entry in entries(state):
-        if entry["id"] in wanted and entry["layer"] != "now":
+        if entry["id"] in wanted and entry["layer"] != "abm":
             touch(entry, now, min(1.0, activity(entry, now) + RECALL_BOOST))
             touched.append(entry["id"])
     return touched

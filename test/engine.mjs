@@ -132,12 +132,11 @@ eq(committed.turn, 1, '6. turn 前进到 1');
 ok(committed.revision > revision, '6. revision 递增');
 revision = committed.revision;
 
-// ---- 6b. 记忆：这一回合留在「刚刚」，soul_state 带 cue 能读到 ----
+// ---- 6b. 记忆：这一回合进了 ABM，但 ABM 不注入（对话本身就在上下文里） ----
 const recalled = await call('soul_state', { cue: '今晚雨真大' });
 const memories = recalled.context?.memories ?? [];
-ok(Array.isArray(memories) && memories.length >= 1, '6b. context 带 memories');
-eq(memories[0].text, '他冒着雨进来，问我忙不忙，我心里松了一下', '6b. 第一人称的 remember 成了她的记忆');
-eq(memories[0].layer, '刚刚', '6b. 在「刚刚」这一层');
+ok(Array.isArray(memories), '6b. context 带 memories 字段');
+eq(memories.length, 0, '6b. ABM 不进上下文（刚刚说的还在对话里）');
 ok(Array.isArray(recalled.context?.her_knows), '6b. context 带 her_knows');
 eq(recalled.context?.recent, undefined, '6b. 旧的 recent 摘要不再单独给');
 

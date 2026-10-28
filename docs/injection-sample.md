@@ -106,16 +106,8 @@
  "safety": {"paused": false, "boundaries": []},
  "preferences": {"offscreen_simulation": true},
  "save": {"current_slot": null, "turns_since_save": 5},
- "requests": {"memory_summary": null, "memory_journal": null},
- "memories": [
-  {"layer": "刚刚", "when": "前天 · 深夜",
-   "text": "他让我把代码推上去。二十五条，一起上去了，都到了。",
-   "you": "推送代码到远端吧", "said": ["推送代码到远端吧"]},
-  {"layer": "刚刚", "when": "前天 · 深夜",
-   "text": "他半夜在找一个提交，我告诉他没丢，只是没推上去。",
-   "you": "改动（提交 dbbeddf）  这个改动怎么被丢弃了？",
-   "said": ["改动（提交 dbbeddf）这个改动怎么被丢弃了？"]}
- ],
+ "requests": {"memory_fold": null, "memory_diary": null},
+ "memories": [],
  "agency": [
   {"character_id": "shorekeeper", "name": "守岸人",
    "options": [{"kind": "observe", "label": "在旁观察",
@@ -142,8 +134,8 @@
 | `her_knows` | **她**知道但没告诉你的事——这里可能是空的 |
 | `open_action` | 上一个悬念 |
 | `scene_responses` | 最近三次她对你的回应类型（refuse/negotiate/partial/surface/genuine） |
-| `requests` | 有值时表示「该交总结了」，模型必须照 `memory_summary_sources` 写 |
-| `memories` | 记忆条目：`layer` 层级、`when` 什么时候、`text` 她记得的、`you` 你当时说的 |
+| `requests` | 有值时表示「该交账了」（`memory_fold` 收进 SCM / `memory_diary` 写日记），模型必须照 `memory_fold_sources` / `memory_diary_sources` 写 |
+| `memories` | 想起来的记忆（只从 SCM / CLPA 取，3~5 条；**ABM 不进这里**，对话本身已经在上下文里）：`layer` 层级、`when` 多久以前、`text` 她记得的 |
 | `agency` | 她「下一步可能做什么」的候选（最多 3 个，这里只算出 1 个） |
 | `size_bytes` | 自报体积，超预算时按顺序砍：facts → her_knows → due_soon → 回应 → 记忆 → 候选 |
 

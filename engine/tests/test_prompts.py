@@ -22,27 +22,27 @@ def _text(path):
 
 
 def the_two_lengths_agree_everywhere():
-    summary = MEM.SUMMARY_MAX
-    archive = MEM.ARCHIVE_MAX
+    fold = MEM.SUMMARY_MAX
+    diary = MEM.DIARY_MAX
     fields = TU.commit_fields()
-    for key, limit in (("memory_summary", summary), ("memory_journal", archive)):
+    for key, limit in (("memory_fold", fold), ("memory_diary", diary)):
         spec = fields[key].spec
         spec = getattr(spec, "inner", spec)          # Nullable 包了一层
         assert spec.max_len == limit, "%s 的 max_len 是 %r，应是 %d" % (key, spec.max_len, limit)
 
     bridge = _text("lib/engine-bridge.js")
-    assert "≤%d 字" % summary in bridge, "桥接层的日总结字数跟 SUMMARY_MAX=%d 对不上" % summary
-    assert "≤%d 字" % archive in bridge, "桥接层的月日记字数跟 ARCHIVE_MAX=%d 对不上" % archive
+    assert "≤%d 字" % fold in bridge, "桥接层的 ABM 汇总字数跟 SUMMARY_MAX=%d 对不上" % fold
+    assert "≤%d 字" % diary in bridge, "桥接层的日记字数跟 DIARY_MAX=%d 对不上" % diary
 
     errors = _text("engine/rp_soul_engine/modules/memory.py")
-    assert "≤%d 字" % summary in errors, "报错文案的日总结字数对不上"
-    assert "≤%d 字" % archive in errors, "报错文案的月日记字数对不上"
+    assert "≤%d 字" % fold in errors, "报错文案的 ABM 汇总字数对不上"
+    assert "≤%d 字" % diary in errors, "报错文案的日记字数对不上"
 
 
 def the_documentation_agrees():
     doc = _text("docs/memory-design.md")
-    assert "≤%d 字" % MEM.SUMMARY_MAX in doc or "%d 字" % MEM.SUMMARY_MAX in doc, "文档里的日总结字数对不上"
-    assert "≤%d 字" % MEM.ARCHIVE_MAX in doc or "%d 字" % MEM.ARCHIVE_MAX in doc, "文档里的月日记字数对不上"
+    assert "≤%d 字" % MEM.SUMMARY_MAX in doc or "%d 字" % MEM.SUMMARY_MAX in doc, "文档里的 ABM 汇总字数对不上"
+    assert "≤%d 字" % MEM.DIARY_MAX in doc or "%d 字" % MEM.DIARY_MAX in doc, "文档里的日记字数对不上"
 
 
 def the_layer_names_in_prose_are_real():
@@ -51,7 +51,7 @@ def the_layer_names_in_prose_are_real():
     for path in ("engine/rp_soul_engine/modules/memory.py", "lib/engine-bridge.js"):
         text = _text(path)
         for quoted in re.findall(r"「([^」]{2,4})」", text):
-            if quoted in ("那几天", "这几天", "刚刚", "今日", "那些事"):
+            if quoted in ("ABM", "SCM", "CLPA", "刚刚", "今日", "那些事", "这几天"):
                 assert quoted in names, "%s 里提到「%s」，但它不是一层" % (path, quoted)
 
 

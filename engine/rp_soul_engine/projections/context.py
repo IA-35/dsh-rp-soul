@@ -291,11 +291,11 @@ def _template(state, body):
     turn["open_action"] = "<停在哪个未决动作>"
     turn["quotes"] = ["<本回合值得记住的原话，原样一句，<=80 字；没有就删掉这条>"]
     turn["remember"] = "<可选：TA 会怎么记得这件事，第一人称、带感受，<=60 字；不写就删掉这条>"
-    if dict(state["requests"]).get("memory_summary"):
-        turn["memory_summary"] = "<读 memory_summary_sources，把今天写成日记放进「这几天」：第一人称（我），今天发生了什么、当时的感受、1~2 个具体细节，<=100 字>"
-    if dict(state["requests"]).get("memory_journal"):
-        turn["memory_journal"] = "<读 memory_journal_sources，第一人称把这一个月写成日记：按日子顺下来，感受和变化，<=300 字>"
-        turn["memory_keep"] = ["<可选：这一天里值得一直记着的 0~2 条经历 id，没有就删掉这条>"]
+    if dict(state["requests"]).get("memory_fold"):
+        turn["memory_fold"] = "<读 memory_fold_sources，把这一批收成一条 SCM：第一人称（我），发生了什么、当时的感受，留下带得住的细节，<=300 字>"
+        turn["memory_keep"] = ["<可选：值得一直记着的 0~2 条经历 id（会进 CLPA），没有就删掉这条>"]
+    if dict(state["requests"]).get("memory_diary"):
+        turn["memory_diary"] = "<读 memory_diary_sources，把这一天写成一篇日记：第一人称（我），按时间顺下来，感受和变化，<=300 字>"
     return {
         "session_id": state["session_id"],
         "request_id": "<上一次返回的 next_request_id>",

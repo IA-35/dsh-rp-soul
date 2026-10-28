@@ -1,7 +1,7 @@
 # dsh-rp-soul 全景
 
 一份读完就知道「这个插件由什么组成、一次对话里谁按什么顺序干了什么、数据存在哪」的文档。
-细节设计另有三份：`docs/memory-design.md`（记忆四层）、`docs/wake-line-design.md`（唤醒线）、
+细节设计另有三份：`docs/memory-design.md`（记忆 ABM/SCM/CLPA + 日记）、`docs/wake-line-design.md`（唤醒线）、
 `docs/time-not-turns.md`（数句话→读时钟的改造方案，**已实施**：规则读时钟，不再数说了几句）。`turn` 字段仍在，只当流水号。
 
 ---
@@ -155,7 +155,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | `application/doctor.py` | 80 | 环境体检 + 首次初始化（幂等） |
 | `modules/*.py` | 145 | 四个职责模块 + 固定注册表 `REGISTRY` |
 | `domain/turn.py` | 391 | 提交主流程、commit schema |
-| `domain/memories.py` | 653 | 她的记忆：四层、采集、衰减、打分、注入 |
+| `domain/memories.py` | 662 | 她的记忆：ABM/SCM/CLPA、采集、衰减、打分、注入 |
 | `domain/mood.py` | 383 | 心情条与行为门禁 |
 | `domain/ops.py` | 857 | 12 个 op 的定义与实现 |
 | `domain/ops_time.py` | 78 | `offscreen_beat`（离屏片段）单独放这里 |
@@ -214,13 +214,13 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | `counters` | id 分配器、`major_action_turn`、`offscreen_beat_turn`、`scene` |
 | `scene` | 当前这段相处：id / 在场者 / 开始时刻 / 本段的互动判定 |
 | `plan` | 她自己定下的下一件事 |
-| `memory` | `turns`（对话流水最近 40 条）、`entries`（四层记忆）、`open_action`、`last_quotes` |
+| `memory` | `turns`（对话流水最近 40 条）、`entries`（ABM/SCM/CLPA 三层）、`open_action`、`last_quotes` |
 | `preferences` | 离屏推演开关、节奏、尺度 |
 | `safety` | 暂停状态、硬边界清单 |
-| `requests` | 给下一条记录的请求（`memory_summary` / `memory_journal`） |
+| `requests` | 给下一次提交的请求（`memory_fold` / `memory_diary`） |
 | `undo_floor` / `session_id` | 撤销下限、本会话 id |
 
-> ⚠️ **命名陷阱**：`state["events"]` 是剧情事件；记忆层的 `"events"`（那些事）是另一个东西。
+> ⚠️ **命名陷阱**：`state["events"]` 是剧情事件，跟记忆层没有任何关系（记忆三层是 `abm` / `scm` / `clpa`）。
 > 全局搜 `events` 时务必分清。
 
 ---
@@ -231,17 +231,17 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 | 层 | 内部名 | 每小时衰减 | 容量 | 怎么离开 |
 |---|---|---|---|---|
-| 刚刚 | `now` | 不衰减 | 10 | 满了把最老的**原样**移进「今日」；不重要的小动作 24 小时后直接丢 |
-| 今日 | `temp` | 不衰减 | 200 | 隔天的每日总结把整天折成一条进「这几天」 |
-| 这几天 | `days` | 0.005 | 30 | 满 30 条 → 汇成当月日记写 `.md` → 清空重数 |
-| 那些事 | `events` | 不衰减 | 不限 | 只有你手动删 |
+| ABM | `abm` | 不衰减 | 20 | 满 20 条或搁置 1 小时 → 子代理收成一条进 SCM，本层清空；不重要的小动作 24 小时后直接丢 |
+| SCM | `scm` | 0.005 | 50 | 约一个月淡光；满 50 淘汰最不活跃的；**绝不清空** |
+| CLPA | `clpa` | 不衰减 | 不限 | 只有你手动删改 |
+| 日记 | 落盘文件 | — | — | 每晚 23:30 把当天 SCM 写成 `journal/diary-<日>.md`，不删 SCM |
 
 - **活跃度**：`a0 * (1 - rate) ** hours`，`a0` 是上次触碰时的值，`t0` 是那次时刻。
   不逐小时回写，读时现算，所以撤销 / 存档 / 导出天然一致。
 - **被忘掉**：低于 `CLEAN_BELOW = 0.025` 且没 Pin。Pin 的不衰减、不清理、不占容量。
 - **采集不花模型调用**：每次一条；有 `remember` 用她的第一人称，没有就用 `summary`。
 - **打分**：时间远近 + 重要度 × 场景权重 + 关键词重合 + 层级加成 + Pin / 你改过 + 活跃度。
-  `brief` 取 15 条（刚刚全放 + 打分补），`full` 取 20 条，低于 0.15 不要。
+  **ABM 不进上下文**（对话本身已经在里面），只从 SCM / CLPA 里取：`brief` 3 条、`full` 5 条，低于 0.15 不要。
 - **越想越牢**：被这句话勾起来的记忆活跃度 +0.1（上限 1.0）。
 
 ### 6.2 心情（`domain/mood.py`）
@@ -322,7 +322,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | 工具 | 什么时候用 |
 |---|---|
 | `soul_state` | 每次开始先读。`depth: brief`（~6 KB，日常）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`cue` 传你这句话的原话，引擎拿它挑记忆和秘密；`want_twist` 要转折 |
-| `soul_commit` | 写完正文后交账。`operations` 最多 40 条；`summary` ≤120 字；`remember` ≤60 字（她第一人称怎么记）；引擎要总结时带 `memory_summary`（≤100 字）/ `memory_journal`（≤300 字）；`memory_keep` 挑 0–2 条进「那些事」 |
+| `soul_commit` | 写完正文后交账。`operations` 最多 40 条；`summary` ≤120 字；`remember` ≤60 字（她第一人称怎么记）；引擎要把 ABM 收进 SCM 时带 `memory_fold`（≤300 字）、该写日记时带 `memory_diary`（≤300 字）；`memory_keep` 挑 0–2 条进 CLPA |
 | `soul_admin` | 14 个 action：`start` / `status` / `undo` / `save` / `load` / `list` / `delete` / `set_safety` / `set_preferences` / `export` / `import` / `mood_panel` / `drop_thought` / `reset_mapping` |
 
 **驳回规则**：带 `path` 与原因，模型最多重试 2 次；两次都不行就改正文，不要绕过。
@@ -363,7 +363,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | 人设提示词 | `files` 清单 + 各文件元信息 + 合成预览 | 增删文件、调顺序、编辑正文、分隔符、字节上限、总开关 |
 | 引擎人设 | `rp-soul/persona.md` | id / 标题 / 阈值 / 名字 / 称呼 / 年龄 / 性别 / 开局态度 / 身份 / 外貌 / 表里两层语态 / 作息表；可「看 YAML」「校验」 |
 | 情绪 | 她的心情面板 + 阈值 + 删除审计 | 每条 thought 右侧 `×` 手动删（留审计） |
-| 记忆 | 四层记忆 + 待交的总结 / 日记 + 删除审计 | 改内容 / 重要度 / 活跃度 / 关键词 / 备注 / Pin；删（留审计）；「立即总结」「立即写日记」 |
+| 记忆 | ABM / SCM / CLPA 三层 + 待交的汇总 / 日记 + 删除审计 | 改内容 / 重要度 / 活跃度 / 关键词 / 备注 / Pin；删（留审计）；「立即汇总」「立即写日记」 |
 | 常识库 | 她知道的事实（`facts`） | 删（留审计） |
 | 自主行动记录 | 最近 1–50 次的行动、离屏片段、关系变化 | 只读 |
 | 唤醒 | 唤醒配置 + 定时器状态 + 可指定会话 | 总开关 / 目标会话 / 每日次数 / 每日 token / 安静时段 / 想你阈值 |
@@ -387,9 +387,9 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | GET | `/engine/persona-file` | 读 `persona.md` 原文 / 表单 |
 | GET | `/engine/session` | 读该局上下文（`depth=brief\|full`） |
 | GET | `/engine/mood` `/engine/moods` | 心情面板 |
-| GET | `/engine/memories` | 四层记忆 + 请求 + 审计 |
+| GET | `/engine/memories` | ABM / SCM / CLPA 三层 + 请求 + 审计 |
 | PUT / DELETE | `/engine/memory` | 改 / 删一条记忆 |
-| POST | `/engine/memory/request` | 立即总结 / 立即写日记 |
+| POST | `/engine/memory/request` | 立即汇总 / 立即写日记 |
 | DELETE | `/engine/thought` | 手动删一条情绪 |
 | GET / DELETE | `/engine/facts` | 常识库：读 / 删一条 |
 | GET | `/engine/activity` | 自主行动记录 |
@@ -441,7 +441,7 @@ SQLite 14 张表：`meta` `sessions` `facts` `fact_journal` `turn_log` `undo_poi
 
 1. **人设进 `section`，账本进 `context`**。把账本挪进 section = 每次重刷几十 K token 的前缀缓存。
 2. **时间不归模型**。`real_at` 是唯一锚点；离开多久由墙钟算，不是模型写的。
-3. **`state["events"]`（剧情事件）≠ 记忆层 `"events"`（那些事）**。绝不可全局替换。
+3. **`state["events"]`（剧情事件）≠ 记忆层名**。记忆三层是 `abm` / `scm` / `clpa`，绝不可全局替换。
 4. **domain 层是纯函数**。要写文件、开事务、碰 DB，一律在 application 层。
 5. **提交全有或全无**。校验不过就整份丢弃，绝不做「部分生效」。
 6. **她是活人不是状态机**。心情低 ≠ 敌意；她的回应不进她自己的心情；自主行动必须有事实依据。

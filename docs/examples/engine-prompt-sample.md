@@ -118,8 +118,8 @@
     "turns_since_save": 1
   },
   "requests": {
-    "memory_summary": null,
-    "memory_journal": null
+    "memory_fold": null,
+    "memory_diary": null
   },
   "memories": [
     {

@@ -410,16 +410,18 @@ responses.set('GET /rp-soul/engine/activity', () => jsonResponse({
 responses.set('DELETE /rp-soul/engine/thought', () => jsonResponse({ ok: true, revision: 8 }));
 responses.set('GET /rp-soul/engine/memories', () => jsonResponse({
   ok: true, session_id: 's_test01', revision: 11, turn: 3, clock_label: '第三天 21:30',
-  counts: { now: 1, days: 1, events: 0, years: 1 }, capacity: { now: 6, days: 20, events: 50, years: 50 },
-  layers: { now: '刚刚', days: '这几天', events: '那些事', years: '那些年' },
-  requests: { memory_summary: { day: 2, sources: [{ id: 'm2', when: '昨天 · 周二晚上', text: '下雨那天' }] }, memory_archive: null },
-  deletions: [{ turn: 2, memory_id: 'm0', layer: 'days', content: '不想记得的事', reason: '设置页手动删除', created_at: 'x' }],
+  counts: { abm: 2, scm: 1, clpa: 1 }, capacity: { abm: 20, scm: 50, clpa: null },
+  layers: { abm: 'ABM', scm: 'SCM', clpa: 'CLPA' },
+  requests: { memory_fold: { sources: [{ id: 'm2', when: '昨天 · 周二晚上', text: '下雨那天' }] }, memory_diary: null },
+  deletions: [{ turn: 2, memory_id: 'm0', layer: 'scm', content: '不想记得的事', reason: '设置页手动删除', created_at: 'x' }],
   entries: [
-    { id: 'm3', layer: 'now', layer_label: '刚刚', type: 'conversation', content: '他今晚又来了', importance: 0.3, activity: 1,
+    { id: 'm3', layer: 'abm', layer_label: 'ABM', type: 'conversation', content: '他今晚又来了', importance: 0.3, activity: 1,
       when: '今天 · 周三晚上', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, you: '我来了', quotes: ['坐吧'] },
-    { id: 'm2', layer: 'days', layer_label: '这几天', type: 'conversation', content: '下雨那天', importance: 0.5, activity: 0.4,
+    { id: 'm4', layer: 'abm', layer_label: 'ABM', type: 'action', content: '她推过来一杯热水', importance: 0.3, activity: 1,
+      when: '今天 · 周三晚上', keywords: [], origin_ids: [], pinned: false, edited: false, note: '', turn: 3 },
+    { id: 'm2', layer: 'scm', layer_label: 'SCM', type: 'summary', content: '下雨那天', importance: 0.5, activity: 0.4,
       when: '昨天 · 周二晚上', keywords: ['下雨'], origin_ids: [], pinned: false, edited: false, note: '', turn: 2 },
-    { id: 'm1', layer: 'years', layer_label: '那些年', type: 'chapter', content: '我们是在雨夜认识的', importance: 0.6, activity: 0.9,
+    { id: 'm1', layer: 'clpa', layer_label: 'CLPA', type: 'summary', content: '我们是在雨夜认识的', importance: 0.6, activity: 0.9,
       when: '7 天前 · 周三晚上', keywords: [], origin_ids: ['m9'], pinned: true, edited: false, note: '', turn: 0, milestone: ['stage'] },
   ],
 }));
@@ -561,11 +563,11 @@ const memTree = await renderUntil((t) => t.props['data-tab'] === 'memory' && tex
 eq(memTree.props['data-tab'], 'memory', '11. 切到「记忆」页');
 ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/memories') === 0), '11. 记忆页读 /engine/memories');
 const memText = textOf(memTree);
-has(memText, '他今晚又来了', '11. 列出「刚刚」');
-has(memText, '你说：我来了', '11. 刚刚的条目带你说的话');
-has(memText, '我们是在雨夜认识的', '11. 「那些年」篇章带');
-has(memText, '这几天 1/20', '11. 层过滤按钮带数量/容量');
-has(memText, '每日总结（1 条）', '11. 提示下一次提交要交的总结');
+has(memText, '他今晚又来了', '11. 列出 ABM');
+has(memText, '你说：我来了', '11. ABM 的条目带你说的话');
+has(memText, '我们是在雨夜认识的', '11. CLPA 篇章带');
+has(memText, 'SCM 1/50', '11. 层过滤按钮带数量/容量');
+has(memText, '收进 SCM（1 条）', '11. 提示下一次提交要收的那批');
 has(memText, '不想记得的事', '11. 删除审计');
 has(memText, '活跃度 40%', '11. 显示活跃度');
 // 点一条 → 详情 → 改内容 → 保存
@@ -590,12 +592,12 @@ eq(memPut.body.revision, 11, '11. PUT 用面板里的 revision');
 eq(memPut.body.keywords, undefined, '11. 没改的关键词不送（原样送回会被当成你改过）');
 eq(memPut.body.importance, undefined, '11. 没改的重要度不送');
 eq(memPut.body.pinned, undefined, '11. 没改的 Pin 不送');
-// 立即总结
+// 立即汇总
 calls.length = 0;
-findButton(memEdited, '立即总结').props.onClick();
+findButton(memEdited, '立即汇总').props.onClick();
 for (let i = 0; i < 30; i++) await Promise.resolve();
 const memReq = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/engine/memory/request');
-ok(memReq !== undefined && memReq.body.kind === 'summary', '11. 立即总结发 POST kind=summary');
+ok(memReq !== undefined && memReq.body.kind === 'fold', '11. 立即汇总发 POST kind=fold');
 hasNot(memText, '拼接顺序', '11. 记忆页不渲染人设页内容');
 
 // 切到「自主行动记录」
