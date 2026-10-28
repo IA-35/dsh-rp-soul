@@ -248,6 +248,12 @@ def load_session(conn, session_id, with_persona=True):
         raise _missing_session(session_id)
     info = dict(zip(SESSION_COLUMNS, row[: len(SESSION_COLUMNS)]))
     info["state"] = MEM.normalize_legacy(_check_state(unpack(row[len(SESSION_COLUMNS)]), "session %s" % session_id))
+    # 老存档的 state 里没有时间锚点（写它们的代码是后来才有的），而续写全靠它们
+    # 算「过了多久」：缺一个，整局就从此刻重新起算，中间那几天被静默吃掉。
+    # 会话的 created_at 是唯一还留着的真实时刻，拿它补。
+    for key in ("real_start", "real_at"):
+        if not info["state"].get(key):
+            info["state"][key] = info["created_at"]
     info["state"]["facts"] = FactSource(conn, session_id)
     if with_persona:
         info["persona"] = unpack(row[len(SESSION_COLUMNS) + 1])

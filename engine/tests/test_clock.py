@@ -182,4 +182,23 @@ def the_gap_reaches_the_context():
 
 
 check("the gap reaches the context", the_gap_reaches_the_context)
+
+
+def a_session_without_an_anchor_does_not_lose_the_days():
+    """老存档的 state 里没有 real_at：拿 created_at 补，中间那几天不能白丢。"""
+    with game() as (ctx, clock, row):
+        play(ctx, clock, row, "12:00:00")
+        sid = row["session_id"]
+        conn = ctx.db()
+        blob = repo.unpack(conn.execute("SELECT state FROM sessions WHERE session_id=?", (sid,)).fetchone()[0])
+        for key in ("real_at", "real_start"):
+            blob.pop(key, None)
+        conn.execute("UPDATE sessions SET state=? WHERE session_id=?", (repo.pack(blob), sid))
+        conn.execute("UPDATE sessions SET created_at=? WHERE session_id=?", (T0, sid))
+        conn.commit()
+        loaded = repo.load_session(conn, sid)["state"]
+        assert loaded["real_at"] == T0 and loaded["real_start"] == T0, loaded.get("real_at")
+
+
+check("a session without an anchor does not lose the days", a_session_without_an_anchor_does_not_lose_the_days)
 run("clock")

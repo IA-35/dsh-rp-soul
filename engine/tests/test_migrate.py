@@ -248,8 +248,11 @@ def an_old_database_is_migrated_and_playable():
         assert ctx["companion"]["stage"] == "熟络", ctx["companion"]
         known = [f["text"] for f in ctx["known_facts"]]
         assert "你迟到了一个钟头" in known and "周奕欠了赌债" not in known, known
+        # 老存档没有 real_at，load_session 用 created_at 补上；隔了这么久回来，
+        # 引擎要一段离屏片段才肯收账 —— 这正是新语义，写在测试里守。
         body = e2e.commit({"session_id": "s_old00001", "revision": ctx["revision"]},
-                          ops=[{"op": "npc_action", "action": "她把病历合上。"}])
+                          ops=[{"op": "offscreen_beat", "summary": "她值完了夜班，把灯关掉。"},
+                               {"op": "npc_action", "action": "她把病历合上。"}])
         turn = s.ok("commit-turn", body)
         assert turn["turn"] == 4, turn
         undone = s.ok("undo-turn", {"session_id": "s_old00001", "request_id": e2e.rid("r_u"),
