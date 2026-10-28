@@ -209,13 +209,16 @@ def brief(state, persona, save=None, cue=""):
         "save": save or {"current_slot": None, "turns_since_save": 0},
         "requests": dict(state["requests"]),
     }
+    apart = since_last(state, persona)
+    if apart is not None:
+        context["since_last"] = apart
     for key in ("pace", "explicitness"):
         if state["preferences"].get(key) != "standard":
             context["preferences"][key] = state["preferences"][key]
     contributed = MODULES.project(state, persona, cue)
     context.update(contributed["context"])
     context["companion"].update(contributed["companion"])
-    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency"))
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency", "since_last"))
     return context
 
 

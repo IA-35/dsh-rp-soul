@@ -166,45 +166,20 @@ def a_gap_of_a_day_is_still_a_gap():
 
 check("cooldown is a stretch of minutes", cooldown_is_a_stretch_of_minutes)
 check("a gap of a day is still a gap", a_gap_of_a_day_is_still_a_gap)
+
+def the_gap_reaches_the_context():
+    """隔够久，「这段时间」真的进了 get-context 返回的 brief。"""
+    with game() as (ctx, clock, row):
+        play(ctx, clock, row, "12:00:00", player_input="我出门了")
+        sid = row["session_id"]
+        assert "since_last" not in service.get_context(ctx, {"session_id": sid})["context"], "刚说完不该有"
+        clock.return_value = "2026-10-26T12:15:00+08:00"
+        assert "since_last" not in service.get_context(ctx, {"session_id": sid})["context"], "15 分钟还不够"
+        clock.return_value = "2026-10-26T12:16:00+08:00"
+        block = service.get_context(ctx, {"session_id": sid})["context"]["since_last"]
+        assert block["minutes"] == 16, block
+        assert "her_routine" in block, block
+
+
+check("the gap reaches the context", the_gap_reaches_the_context)
 run("clock")
-
-
-
-# ---------------------------------------------------------------------------
-# 时间制：规则读时钟，不读说了几句话
-
-
-def _cooldown_state(at_minute, last_minute):
-    return {
-        "clock": {"day": 1, "minute": at_minute},
-        "counters": {"major_action_at": {"lin_wan": {"day": 1, "minute": last_minute}}},
-        "player_id": "player",
-        "characters": {"lin_wan": {"id": "lin_wan"}},
-    }
-
-
-def cooldown_is_a_stretch_of_minutes():
-    """20 分钟里连发 30 句只允许一次重大行动，第 21 分钟才可以。"""
-    from rp_soul_engine.domain import state as SS
-    from rp_soul_engine.domain import structure as ST
-    assert SS.can_act(_cooldown_state(600, 600), "lin_wan") is False, "刚做完，不能马上再来"
-    wait = ST.ACTION_COOLDOWN_MINUTES
-    assert SS.can_act(_cooldown_state(600 + wait - 1, 600), "lin_wan") is False, "差一分钟还不行"
-    assert SS.can_act(_cooldown_state(600 + wait, 600), "lin_wan") is True, "够了就行"
-    # 心情 open 时更短
-    short = ST.ACTION_COOLDOWN_MINUTES_OPEN
-    assert SS.can_act(_cooldown_state(600 + short, 600), "lin_wan", bonus=1) is True, "open 档更短"
-    assert SS.can_act(_cooldown_state(600 + short, 600), "lin_wan") is False, "平常档还要等"
-    # 说多少句都不影响：时钟没动就不行
-    chatty = _cooldown_state(600, 600)
-    chatty["turn"] = 999
-    assert SS.can_act(chatty, "lin_wan") is False, "聊得再多也不缩短冷却"
-
-
-def a_gap_of_a_day_is_still_a_gap():
-    from rp_soul_engine.domain import state as SS
-    state = _cooldown_state(60, 600)
-    state["clock"] = {"day": 2, "minute": 60}
-    assert SS.can_act(state, "lin_wan") is True, "隔了一天当然可以"
-
-
