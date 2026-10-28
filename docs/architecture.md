@@ -235,7 +235,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 | ABM | `abm` | 不衰减 | 20 | 满 20 条或搁置 1 小时 → 子代理收成一条进 SCM，本层清空；不重要的小动作 24 小时后直接丢 |
 | SCM | `scm` | 0.005 | 50 | 约一个月淡光；满 50 淘汰最不活跃的；**绝不清空** |
 | CLPA | `clpa` | 不衰减 | 不限 | 只有你手动删改 |
-| 日记 | 落盘文件 | — | — | 每晚 23:30 把当天 SCM 写成 `journal/diary-<日>.md`，不删 SCM |
+| 日记 | 落盘文件 | — | — | 每晚 23:30 把当天 SCM 写成 `journal/<session_id>/diary-<日>.md`，不删 SCM |
 
 - **活跃度**：`a0 * (1 - rate) ** hours`，`a0` 是上次触碰时的值，`t0` 是那次时刻。
   不逐小时回写，读时现算，所以撤销 / 存档 / 导出天然一致。
@@ -419,7 +419,7 @@ $DSH_HOME/                              # 默认 C:\Users\<你>\.dsh\
 │       ├── engine.db                   # SQLite：会话、事实、日志、存档、撤销点
 │       ├── backups/                    # 迁移前自动备份
 │       ├── exports/                    # 导出
-│       ├── journal/                    # 她的日记：journal-<起>-<止>.md
+│       ├── journal/                    # 她的日记：<session_id>/diary-<日>.md
 │       └── logs/                       # 内部错误
 ```
 

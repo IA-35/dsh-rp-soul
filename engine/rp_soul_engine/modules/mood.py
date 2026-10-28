@@ -5,7 +5,7 @@ from ..domain import mood as MO, state as SS
 
 def settle(state, report, turn, player_absent):
     report["expired_thoughts"] = MO.settle(state, turn)
-    if report["minutes"] > 0 or player_absent:
+    if report["minutes"] > 0 or player_absent or state.get("together", True) != (not player_absent):
         MO.refresh_situational(state, turn, gap=report["minutes"], player_absent=player_absent)
         report["steps"].append("mood")
 

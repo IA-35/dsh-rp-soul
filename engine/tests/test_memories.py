@@ -333,6 +333,20 @@ def the_same_day_is_not_written_twice():
     assert MEM.diary_request(state) is None, "一天只写一次，后加的不再补"
 
 
+def written_scm_does_not_block_the_next_days_diary():
+    state, persona = start()
+    MEM.add(state, "scm", "summary", "第一天一起吃面", 0.9)
+    state["clock"]["minute"] = MEM.DIARY_MINUTE
+    MEM.apply_diary(state, MEM.diary_request(state), "第一天你来了。")
+    for day in (2, 3):
+        state["clock"] = {"day": day, "minute": MEM.DIARY_MINUTE}
+        today = MEM.add(state, "scm", "summary", "今天也一起吃了饭", 0.8)
+        request = MEM.diary_request(state)
+        assert request and request["day"] == day and request["ids"] == [today["id"]], request
+        MEM.apply_diary(state, request, "今天又见到你了。")
+        assert MEM.diary_request(state) is None
+
+
 def an_empty_day_asks_for_nothing():
     state, persona = start()
     assert MEM.diary_request(state) is None
@@ -568,6 +582,7 @@ check("a day of SCM asks for a diary after 23:30", a_day_of_scm_asks_for_a_diary
 check("the diary keeps SCM and remembers the day", the_diary_keeps_scm_and_remembers_the_day)
 check("a day missed at 23:30 is still owed tomorrow", a_day_missed_at_2330_is_still_owed_tomorrow)
 check("the same day is not written twice", the_same_day_is_not_written_twice)
+check("written SCM does not block the next day's diary", written_scm_does_not_block_the_next_days_diary)
 check("an empty day asks for nothing", an_empty_day_asks_for_nothing)
 check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
 check("the most relevant SCM lines come back", the_most_relevant_scm_lines_come_back)

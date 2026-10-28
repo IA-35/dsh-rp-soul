@@ -353,12 +353,10 @@ def diary_sources(state):
     today = state["clock"]["day"]
     written = (state.get("counters") or {}).get("last_diary_day") or 0
     pool = [e for e in entries(state)
-            if e["layer"] == "scm" and not e.get("pinned") and e["at"]["day"] <= today]
+            if e["layer"] == "scm" and not e.get("pinned") and written < e["at"]["day"] <= today]
     if not pool:
         return None, []
     day = min(e["at"]["day"] for e in pool)
-    if day <= written:
-        return None, []
     return day, [e["id"] for e in sorted(pool, key=lambda e: (CL.to_abs(e["at"]), _num(e)))
                  if e["at"]["day"] == day]
 

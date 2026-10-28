@@ -428,7 +428,7 @@ def _commit_turn(ctx, payload):
                 raise
             results.append(result)
         _engine_outcomes_last(results)
-        _plan_journal(ctx, results)
+        _plan_journal(ctx, sid, results)
         turn.close_record(state, results)
         depth = choose_depth(state, results, failed_before)
         if depth == "full":
@@ -447,7 +447,7 @@ def _commit_turn(ctx, payload):
     return session_write(ctx, "commit-turn", payload, handler)
 
 
-def _plan_journal(ctx, results):
+def _plan_journal(ctx, session_id, results):
     """排好月份日记的落盘任务，真正写文件留到 COMMIT 之后。
 
     分层：DB 是事务性的，文件系统不是。写在 COMMIT 之前的话，事务一回滚就留下
@@ -458,7 +458,7 @@ def _plan_journal(ctx, results):
     written = [r["diary"] for r in results if r.get("diary")]
     if not written:
         return
-    folder = paths.journal_dir(ctx.data_dir)
+    folder = os.path.join(paths.journal_dir(ctx.data_dir), session_id)
     pending = ctx.__dict__.setdefault("_journal_pending", [])
     for entry in written:
         path = os.path.join(folder, "diary-%04d.md" % entry["day"])
@@ -472,13 +472,9 @@ def _flush_journal(ctx):
     if not pending:
         return
     ctx._journal_pending = []
-    folder = paths.journal_dir(ctx.data_dir)
-    try:
-        os.makedirs(folder, exist_ok=True)
-    except OSError:
-        return
     for path, markdown in pending:
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(markdown)
         except OSError:

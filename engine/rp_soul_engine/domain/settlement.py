@@ -44,7 +44,8 @@ def preview(state, now):
     work = FA.working_copy(state)
     minutes, clock, settled_at = SS.real_span(work, now)
     work["real_at"] = settled_at
-    advance(work, minutes, work["turn"] + 1, to_clock=clock)
+    advance(work, minutes, work["turn"] + 1, to_clock=clock,
+            player_absent=not work.get("together", True))
     return work
 
 

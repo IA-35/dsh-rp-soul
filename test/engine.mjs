@@ -285,6 +285,20 @@ const scopeStatus2 = await call('soul_admin', { action: 'status' });
 eq(scopeStatus2.scope, 'session', '15. status 报按会话作用域');
 await checkWakeReveal(exec, '15b. 按会话作用域');
 
+// full 的底细和事件在 Python 里换了字段名，工具裁剪后仍要能读到。
+const fullSetup = await call('soul_commit', {
+  action_mode: 'result', player_input: '门锁密码是7319。', operations: [
+    { op: 'add_fact', key: 'door.code', text: '门锁密码是7319', scope: 'shared', origin: 'observed' },
+    { op: 'event_create', kind: 'deadline', title: '整理病历', with_player: false, in_minutes: 120, dedupe_key: 'clinic.paperwork' },
+  ], content_tags: [], summary: '她记住了门锁密码，还有病历要整理。', open_action: '她准备整理病历。',
+});
+ok(fullSetup.committed, '15c. 记下双方事实和近期事件：' + String(fullSetup.error ?? ''));
+for (const depth of ['brief', 'full']) {
+  const state = await call('soul_state', { depth });
+  ok(state.context.known_facts?.some((f) => f.text === '门锁密码是7319'), '15c. ' + depth + ' 保留双方事实');
+  ok(state.context.due_soon?.some((e) => e.title === '整理病历'), '15c. ' + depth + ' 保留近期事件');
+}
+
 // ---- 16. 人设为空时 start 明确报错（不静默开局） ----
 writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'global' }), 'utf8');
 writeFileSync(join(home, 'SOUL.md'), '   \n', 'utf8');

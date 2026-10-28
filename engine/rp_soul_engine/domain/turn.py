@@ -344,6 +344,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     # -- bookkeeping --------------------------------------------------------
     work["turn"] = ctx.turn
     work["revision"] = state["revision"] + 1
+    work["together"] = ctx.together
     memory = work["memory"]
     entry = {
         "turn": ctx.turn,
@@ -356,9 +357,9 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     if ctx.beats:
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
     payment = MODULES.run(work, "pay_requests", commit, ctx.turn).get("memory", {})
-    summarized, journaled = payment.get("summarized"), payment.get("journaled")
+    folded, diary = payment.get("folded"), payment.get("diary")
     learned = payment.get("common") or []
-    archive = _archive_ended_events(work, ctx.turn) if summarized else []
+    archive = _archive_ended_events(work, ctx.turn) if folded else []
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
     if overflow:
@@ -387,8 +388,8 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "time_settled": span,
         "scene_changed": scene_changed,
         "crossed_day": crossed_day,
-        "summarized": summarized["id"] if summarized else None,
-        "journaled": journaled,
+        "folded": folded["id"] if folded else None,
+        "diary": diary,
         "remembered": memory_result.get("remembered", []),
         "forgetting": memory_result.get("forgetting", {}),
         # 模型在这次总结 / 写日记里顺手记下的常识，由 application 写进全局库
