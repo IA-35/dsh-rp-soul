@@ -95,7 +95,6 @@ MOOD_RANGE = (0, 100)
 MOOD_BASE = 50
 MOOD_THRESHOLDS = {"open": 75, "closed": 45, "break": 25}
 MOOD_BANDS = ("open", "normal", "closed", "break")
-MOOD_MAX_THOUGHTS = 20
 MOOD_MAX_MEMORY = 12
 MOOD_MAX_SITUATIONAL = 8
 THOUGHT_DELTA_RANGE = (-30, 15)
@@ -181,11 +180,11 @@ AGENCY_GOAL_KINDS = {
 # ---------------------------------------------------------------------------
 # 通用字符串（用于自检/文档，不含任何世界专属词）
 
-def generic_strings():
-    """Every display string of the generic layer."""
-    out = list(STAGE_LABELS.values()) + list(RESPONSE_LABELS.values())
-    out += list(MOOD_BANDS)
-    return out
+def seq_of(item_id, prefix):
+    """数字序，不是字符串序：「e10」排在「e9」后面。"""
+    digits = item_id[len(prefix):] if item_id.startswith(prefix) else item_id
+    return int(digits) if digits.isdigit() else 0
+
 
 
 # ---------------------------------------------------------------------------

@@ -1409,7 +1409,7 @@ def _mood_rows(state, persona):
             "tension": edge.get("tension"),
             "stage": edge.get("stage"),
             "stage_label": SS.stage_label(edge["stage"]) if edge.get("stage") else "",
-            "can_act": panel["band"] == "break" or SS.can_act(state, cid),
+            "can_act": SS.can_act(state, cid),
         })
     return {"thresholds": thresholds, "npcs": rows}
 

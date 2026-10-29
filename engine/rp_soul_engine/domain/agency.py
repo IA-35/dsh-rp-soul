@@ -50,7 +50,8 @@ def _recent_facts(state, cid, now):
 
 
 def _pending_for(state, cid):
-    return sorted(e["id"] for e in state["events"].values() if e["state"] == "pending" and cid in e["participants"])
+    return sorted((e["id"] for e in state["events"].values() if e["state"] == "pending" and cid in e["participants"]),
+                  key=lambda one: ST.seq_of(one, "e"))
 
 
 def _due_soon(state, cid):
@@ -209,8 +210,9 @@ def candidates(state, persona, cid, turn=None, limit=None, at=None):
     turn = state["turn"] + 1 if turn is None else turn
     at = _clock_of(state, at)
     limit = limit or ST.AGENCY_MAX_CANDIDATES
+    # break 档与 open 档的冷却差别由 can_act 一并回答，这里只留筛选要用
     broken = MO.evaluate(state, cid)[1] == "break"
-    if not broken and not SS.can_act(state, cid, at, MO.open_bonus(state, cid)):
+    if not SS.can_act(state, cid, at):
         return []
     if not SS.is_npc(state, cid):
         return []

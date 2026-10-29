@@ -143,7 +143,6 @@ def change(ctx, a, b, trust_delta, tension_delta, stage_advance, stage_retreat_t
         record["evidence"] = why
     current["history"].append(record)
     del current["history"][:-HISTORY_CAP]
-    ctx.relationship_reasons.append(reason)
     return {
         "from": a,
         "to": b,

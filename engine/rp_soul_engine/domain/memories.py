@@ -268,16 +268,6 @@ def note_exchange(state, said, reply, turn=None, together=True, at=None):
 # maintenance: once per commit, after capture
 
 
-def _awaiting_fold(entry):
-    """An ABM entry whose batch has not been folded into SCM yet.
-
-    While it waits it is neither forgotten nor pushed out by capacity: the
-    fold is what turns it into something she keeps, and losing it first would
-    erase the last hour before you went quiet.
-    """
-    return entry["layer"] == "abm" and entry["type"] in KEEPS and not entry.get("summarized")
-
-
 def abm_batch(state):
     """The ABM entries due to be folded into one SCM, or None.
 
@@ -292,9 +282,11 @@ def abm_batch(state):
     # 会推进，它们全带着同一个 turn 号，按「本回合」排除的话永远收不进 SCM。
     waiting = [e for e in entries(state) if e["layer"] == "abm" and e["type"] in KEEPS
                and (e.get("exchanged") or e.get("turn") != state["turn"])]
-    # 钉住的不占名额，但照样随这批一起收走（apply_fold 把它送进 CLPA）
+    # 钉住的不占名额，但照样随这批一起收走（apply_fold 把它送进 CLPA）。
+    # 判空要用 waiting 而不是 pool：只剩里程碑时也得按闲置收走，否则它们
+    # 永远留在 ABM 里，而 maintain 又把 pinned 一律 keep，哪一层都不回收。
     pool = [e for e in waiting if not e.get("pinned")]
-    if not pool:
+    if not waiting:
         return None
     idle = now - max(CL.to_abs(e["at"]) for e in waiting) >= ABM_IDLE_MINUTES
     if len(pool) < CAPACITY["abm"] and not idle:
@@ -705,7 +697,7 @@ def when_label(state, at):
     """
     weekday = _weekday(state, at["day"])
     clock = CL.hm(at["minute"])
-    start = CL.parse_iso(state.get("real_start"))
+    start = CL.parse_iso_loose(state.get("real_start"))
     if start is not None:
         date = start.date() + datetime.timedelta(days=at["day"] - 1)
         stamp = "%d.%d" % (date.month, date.day)
@@ -732,7 +724,7 @@ WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日"
 
 
 def _weekday(state, day):
-    start = CL.parse_iso(state.get("real_start"))
+    start = CL.parse_iso_loose(state.get("real_start"))
     if start is None:
         return ""
     return WEEKDAYS[(start.weekday() + day - 1) % 7]

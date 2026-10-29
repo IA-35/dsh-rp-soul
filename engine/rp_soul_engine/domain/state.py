@@ -105,13 +105,23 @@ def real_span(state, now):
     return minutes, CL.add_minutes(state["clock"], minutes), settled_at
 
 
-def can_act(state, cid, at=None, bonus=0):
+def can_act(state, cid, at=None, bonus=None):
     """Whether a significant autonomous action is off cooldown by now.
 
     The cooldown is a stretch of time, not a count of things said: chatty
     minutes must not eat her one big move any faster than quiet ones.
+
+    One answer, asked in one place: break 档不受冷却限制（那时她压不住，
+    不是排期问题），open 档冷却短一些。这两条原本散在 ops / agency /
+    context 里各写一遍，谁先问谁后问会给出不一样的结果。
     """
+    from . import mood as MO  # mood 反过来 import state，只能到这里再取
+
     at = state["clock"] if at is None else at
+    if MO.evaluate(state, cid)[1] == "break":
+        return True
+    if bonus is None:
+        bonus = MO.open_bonus(state, cid)
     last = (state["counters"].get("major_action_at") or {}).get(cid)
     if not last:
         return True

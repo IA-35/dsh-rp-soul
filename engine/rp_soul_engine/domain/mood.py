@@ -96,7 +96,7 @@ def open_bonus(state, cid):
 def sorted_thoughts(mood, now):
     """Thoughts by effect size (strongest first), ties by id: deterministic."""
     items = [(thought, current_delta(thought, now)) for thought in mood.get("thoughts") or []]
-    items.sort(key=lambda pair: (-abs(pair[1]), pair[0]["id"]))
+    items.sort(key=lambda pair: (-abs(pair[1]), _seq(pair[0]["id"])))
     return items
 
 
@@ -153,6 +153,12 @@ def _next_id(state, cid):
     value = counters.get(cid, 1)
     counters[cid] = value + 1
     return "th%d" % value
+
+
+def _seq(thought_id):
+    """Digit order, not string order: "th10" comes after "th2", not before."""
+    digits = thought_id[2:] if thought_id.startswith("th") else thought_id
+    return int(digits) if digits.isdigit() else 0
 
 
 def _find(mood, label=None, source_fact_id=None):
@@ -217,7 +223,7 @@ def _enforce_cap(mood, now):
         same = [t for t in thoughts if t["kind"] == kind]
         if len(same) <= cap:
             continue
-        same.sort(key=lambda t: (abs(current_delta(t, now)), t["since_turn"], t["id"]))
+        same.sort(key=lambda t: (abs(current_delta(t, now)), t["since_turn"], _seq(t["id"])))
         doomed = set(t["id"] for t in same[: len(same) - cap])
         mood["thoughts"] = [t for t in thoughts if t["id"] not in doomed]
         thoughts = mood["thoughts"]

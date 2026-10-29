@@ -57,8 +57,8 @@ def _companion_brief(state, cid, turn):
         "gender": char["gender"],
         "role": char["public_role"],
         "present": SS.is_present(state, cid),
-        "can_act": (MO.evaluate(state, cid)[1] == "break")
-        or SS.can_act(state, cid, state["clock"], MO.open_bonus(state, cid)),
+        # break 档与 open 档的差别由 can_act 一并回答
+        "can_act": SS.can_act(state, cid, state["clock"]),
         "trust_to_player": to_player.get("trust", 0),
         "tension": to_player.get("tension", 0),
         "stage": SS.stage_label(to_player.get("stage", "stranger")),
@@ -119,7 +119,7 @@ def her_knows(state, cue="", limit=LIMITS["her_knows"]):
 
 def _events(state, limit=None):
     pending = [e for e in state["events"].values() if e["state"] == "pending"]
-    pending.sort(key=lambda e: (CL.to_abs(e["due"]), e["id"]))
+    pending.sort(key=lambda e: (CL.to_abs(e["due"]), ST.seq_of(e["id"], "e")))
     now = CL.to_abs(state["clock"])
     out = []
     for event in pending[:limit] if limit else pending:

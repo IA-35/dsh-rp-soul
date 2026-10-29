@@ -87,13 +87,11 @@ class TurnContext:
         self.settlements = []
         self.roll_index = 0
         self.responses = {}
-        self.actors = set()
         self.observable = False
         self.trust_start = {}
         self.stage_pairs = set()
         self.hooks = hooks or {}
         self.in_beat = None
-        self.relationship_reasons = []
         self.fact_index = 0
         self.event_index = 0
         self.beats = []
@@ -102,7 +100,6 @@ class TurnContext:
         self.required_beats = []
         self.beat_candidates = set()
         self.thoughts = []
-        self.debug_removed = []
         self.mood_reactions = set()
 
     def capture_start(self):
@@ -305,7 +302,6 @@ def op_npc_response(ctx, op, path):
             "%s的真实打算：%s" % (ctx.name(npc), op["true_intent"]), [npc],
         )
     ctx.responses.setdefault(npc, []).append(op["response"])
-    ctx.actors.add(npc)
     ctx.observable = True
     _note(
         ctx, "%s.response.t%d" % (npc, ctx.turn),
@@ -364,7 +360,8 @@ def op_npc_action(ctx, op, path):
     elif op["significant"]:
         _candidate_kind(ctx, npc, op, path, errs)
     bonus = MO.open_bonus(ctx.state, npc) if op["significant"] else 0
-    if op["significant"] and not break_band and not SS.can_act(ctx.state, npc, ctx.state["clock"], bonus):
+    # break 档不受冷却限制，这条判断统一由 can_act 回答
+    if op["significant"] and not SS.can_act(ctx.state, npc, ctx.state["clock"], bonus):
         last = ctx.state["counters"]["major_action_at"][npc]
         wait = ST.ACTION_COOLDOWN_MINUTES_OPEN if bonus else ST.ACTION_COOLDOWN_MINUTES
         ready = CL.add_minutes(last, wait)
@@ -382,7 +379,6 @@ def op_npc_action(ctx, op, path):
         ctx.state["counters"]["major_action_at"][npc] = dict(ctx.state["clock"])
     if ctx.band(npc) in ("closed", "break") and op["kind"] in ST.MOOD_REACTION_KINDS:
         ctx.mood_reactions.add(npc)
-    ctx.actors.add(npc)
     ctx.observable = True
     # The log in the settings page reads this back, so the action text has to
     # be recorded here: the operation itself is not stored.
@@ -566,7 +562,9 @@ def op_relationship(ctx, op, path):
         _mood_guard(ctx, a, "stage_advance", path + ".stage_advance", errs)
     if not _flush(ctx, errs):
         return
-    before = SS.edge(ctx.state, a, b) or {}
+    # 拷一份：REL.change 就地改 state 里那条关系，不拷的话 before 和 after
+    # 是同一个 dict，前后永远相等 —— 阶段推进的事实和想法会静默丢掉。
+    before = dict(SS.edge(ctx.state, a, b) or {})
     record, problems = REL.change(
         ctx, a, b, op["trust_delta"], op["tension_delta"],
         op["stage_advance"], op["stage_retreat_to"], op["reason"], path,
@@ -594,7 +592,6 @@ def op_relationship(ctx, op, path):
         if thought is not None:
             ctx.thoughts.append({"npc_id": a, "thought": thought})
     ctx.observable = True
-    ctx.relationship_reasons.append(op["reason"])
     ctx.applied.append({
         "op": "relationship", "from": a, "to": b,
         "trust": after.get("trust"), "tension": after.get("tension"), "stage": after.get("stage"),

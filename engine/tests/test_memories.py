@@ -149,6 +149,18 @@ def passing_actions_do_not_bloat_abm():
     assert request and len(request["ids"]) == MEM.CAPACITY["abm"], request
 
 
+def a_pinned_entry_alone_still_gets_folded():
+    """只剩里程碑也照样收：钉住的不该在 ABM 里一留就是永远。"""
+    state, persona = start()
+    entry = MEM.add(state, "abm", "experience", "你们第一次一起看完了一场雨", 0.9)
+    entry["pinned"] = True
+    state["turn"] = 5
+    # 搁置一小时：那一刻该把这一批收走了
+    state["clock"] = CL.add_minutes(state["clock"], 61)
+    request = MEM.abm_batch(state)
+    assert request and request["ids"] == [entry["id"]], request
+
+
 def a_full_abm_asks_to_be_folded():
     """ABM 满 20 条就要收成一条 SCM。"""
     state, persona = start()
@@ -654,6 +666,7 @@ check("importance follows the turn's feelings", importance_follows_the_feelings)
 check("ABM is never injected", abm_is_never_injected)
 check("a passing action is dropped after a day", a_passing_action_is_dropped_after_a_day)
 check("passing actions do not bloat ABM", passing_actions_do_not_bloat_abm)
+check("a pinned entry alone still gets folded", a_pinned_entry_alone_still_gets_folded)
 check("a full ABM asks to be folded", a_full_abm_asks_to_be_folded)
 check("a quiet hour asks to be folded", a_quiet_hour_asks_to_be_folded)
 check("the fold makes one SCM and clears the batch", the_fold_makes_one_scm_and_clears_the_batch)
