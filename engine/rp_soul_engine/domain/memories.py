@@ -211,6 +211,46 @@ def capture(state, ctx, commit):
     return added
 
 
+SAID_MAX = 120
+REPLY_MAX = 120
+
+
+def _said(text, limit):
+    one = " ".join((text or "").split())
+    return one if len(one) <= limit else one[: limit - 1] + "…"
+
+
+def note_exchange(state, said, reply, turn=None, together=True, at=None):
+    """A turn remembered straight from the exchange, without the model.
+
+    RimTalk's rule: the memory comes from the event being intercepted, not from
+    the model volunteering to write one down. So the host hands over what was
+    actually said on both sides and this writes the ABM entry itself.
+
+    Returns (entry, duplicate). A duplicate is the same exchange already noted
+    (the host re-fires on a retried turn), and adds nothing.
+    """
+    said = _said(said, SAID_MAX)
+    reply = _said(reply, REPLY_MAX)
+    if not said and not reply:
+        return None, False
+    # 「你：… 她：…」：她说的话是这段记忆的主体，你的话是触发它的那半句
+    if said and reply:
+        content = "你：%s 她：%s" % (said, reply)
+    else:
+        content = said or reply
+    for entry in entries(state):
+        if entry["layer"] == "abm" and entry["type"] in KEEPS and entry["content"] == content:
+            return entry, True
+    entry = add(
+        state, "abm", "conversation" if together else "experience", content, 0.4,
+        at=at, turn=turn,
+        you=said[:YOU_MAX],
+        exchanged=True,
+    )
+    return entry, False
+
+
 # ---------------------------------------------------------------------------
 # maintenance: once per commit, after capture
 

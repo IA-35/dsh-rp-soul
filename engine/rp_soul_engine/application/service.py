@@ -1263,6 +1263,43 @@ def delete_memory(ctx, payload):
     return _memory_write(ctx, "delete-memory", specs.DELETE_MEMORY, payload, change)
 
 
+def note_turn(ctx, payload):
+    """Remember this exchange without the model having to commit a turn.
+
+    The host fires this when a turn ends. Nothing here advances the clock or
+    the turn counter -- that stays the model's job through commit-turn -- so
+    an unplayed exchange is remembered without ageing the ledger.
+    """
+    from .. import modules as MODULES
+    from ..domain import memories as MEM
+
+    payload = validate(specs.NOTE_TURN, payload)
+
+    def handler(conn, session, now):
+        state = session["state"]
+        said = payload["said"].strip()
+        reply = payload["reply"].strip()
+        entry, duplicate = MEM.note_exchange(
+            state, said, reply, turn=state["turn"],
+            together=bool(state.get("together", True)),
+        )
+        if entry is None:
+            return {"revision": state.get("revision", 0), "turn": state["turn"],
+                    "noted": False, "receipt": "这一轮没有可记的话"}
+        if duplicate:
+            return {"revision": state.get("revision", 0), "turn": state["turn"],
+                    "noted": False, "receipt": "这一轮已经记过了"}
+        # 记进 ABM 之后，「该收了」的判断要跟着更新：不重算的话要等到下一次
+        # 模型交账才会提示，而模型不交账正是这个命令存在的理由。
+        MODULES.run(state, "close_record")
+        state["revision"] = state.get("revision", 0) + 1
+        repo.update_session(conn, state, now)
+        return {"revision": state["revision"], "turn": state["turn"], "noted": True,
+                "receipt": "记住了", "memory": MEM.row(state, entry)}
+
+    return session_write(ctx, "note-turn", payload, handler)
+
+
 def request_memory(ctx, payload):
     from ..domain import memories as MEM
 

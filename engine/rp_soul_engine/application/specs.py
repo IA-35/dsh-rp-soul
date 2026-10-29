@@ -220,6 +220,15 @@ DELETE_MEMORY = _obj(
     "delete-memory",
 )
 
+NOTE_TURN = _obj(
+    dict(
+        session_write_fields(),
+        said=F(S.Str(0, 500), desc="主人这一轮说的话（宿主从会话里取的原文）"),
+        reply=F(S.Str(0, 2000), desc="TA这一轮说的话（宿主从会话里取的原文）"),
+    ),
+    "note-turn",
+)
+
 REQUEST_MEMORY = _obj(
     dict(session_write_fields(), kind=F(S.Enum("fold", "diary"), desc="fold 立即把 ABM 收进 SCM / diary 立即写今天的日记")),
     "request-memory",

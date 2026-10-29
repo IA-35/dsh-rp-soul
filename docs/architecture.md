@@ -86,6 +86,10 @@ application 层；`domain/` 里没有一处 `open()`。
       → 写正文
       → soul_commit 交账
 ```
+```
+宿主：回合结束（agent/turn-stopping）→ note-turn 把这一问一答写进 ABM
+      （模型这一轮交过账就跳过；记账失败不抛，绝不因此判这一轮出错）
+```
 
 ### 3.3 一次 soul_commit 在引擎内部
 

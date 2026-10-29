@@ -511,6 +511,37 @@ def mentioning_it_makes_it_stronger():
 # 审查发现的问题（回归测试）
 
 
+def an_exchange_is_noted_without_the_model():
+    """模型不交账也要记：宿主把两边的原话递过来，这里自己写成一条 ABM。"""
+    state, persona = start()
+    entry, duplicate = MEM.note_exchange(state, "灯还亮着吗", "亮着。你回来晚了。", turn=state["turn"])
+    assert entry is not None and not duplicate, (entry, duplicate)
+    assert entry["layer"] == "abm" and entry["type"] == "conversation", entry
+    assert entry["content"] == "你：灯还亮着吗 她：亮着。你回来晚了。", entry["content"]
+    assert entry["you"] == "灯还亮着吗", entry["you"]
+    assert entry["exchanged"] is True, entry
+    # 同一条再说一次不算新的一条：宿主会在重试时重发
+    again, duplicate = MEM.note_exchange(state, "灯还亮着吗", "亮着。你回来晚了。", turn=state["turn"])
+    assert duplicate and again["id"] == entry["id"], (again["id"], entry["id"])
+    assert len(MEM.of_layer(state, "abm")) == 1, MEM.of_layer(state, "abm")
+
+
+def an_alone_exchange_is_an_experience():
+    """她一个人醒着的时候没有「你说的话」，那条要落成 experience。"""
+    state, _persona = start()
+    entry, _duplicate = MEM.note_exchange(state, "", "她把灯芯剪短了一截。", turn=state["turn"], together=False)
+    assert entry is not None and entry["type"] == "experience", entry
+    assert entry["content"] == "她把灯芯剪短了一截。", entry["content"]
+
+
+def an_empty_exchange_writes_nothing():
+    """一句话都没有就别写：空白条目会白占 ABM 的位置。"""
+    state, _persona = start()
+    entry, duplicate = MEM.note_exchange(state, "   ", "", turn=state["turn"])
+    assert entry is None and not duplicate, (entry, duplicate)
+    assert MEM.of_layer(state, "abm") == [], MEM.of_layer(state, "abm")
+
+
 def a_busy_day_stays_whole_until_the_fold():
     """一天聊了 26 回合，收进 SCM 之前一条都不能丢。"""
     state, persona = start()
@@ -608,6 +639,9 @@ check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_
 check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)
 check("mentioning it makes it stronger", mentioning_it_makes_it_stronger)
+check("an exchange is noted without the model", an_exchange_is_noted_without_the_model)
+check("an alone exchange is an experience", an_alone_exchange_is_an_experience)
+check("an empty exchange writes nothing", an_empty_exchange_writes_nothing)
 check("a busy day stays whole until the fold", a_busy_day_stays_whole_until_the_fold)
 check("the brief stays small while a fold is due", the_brief_stays_small_while_a_fold_is_due)
 check("migrating in the morning keeps today in the past", migrating_in_the_morning_keeps_today_in_the_past)

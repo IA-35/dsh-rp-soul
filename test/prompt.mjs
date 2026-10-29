@@ -118,6 +118,23 @@ try {
   const snap = engineText(await assemble(agentA));
   hasNot(snap, '写之前用 soul_state', '8. 快照不要求每轮先调 soul_state');
   has(snap, '写完用 soul_commit 交账', '8. 快照仍要求交账');
+  // 模型忘了交账也不能丢：宿主在回合结束时把这一问一答写进 ABM。
+  agentA.session = {
+    deriveMessages: () => [
+      { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '灯还亮着吗' }] },
+      { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '亮着。你回来晚了。' }] },
+    ],
+  };
+  const before = next;
+  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  const noted = (await client.call('debug-memories', { session_id: before.session_id })).entries;
+  const line = noted.find((row) => row.content === '你：灯还亮着吗 她：亮着。你回来晚了。');
+  ok(line !== undefined, '9. 回合结束时宿主自己记一条（模型没交账也不丢）');
+  // 重发同一回合（宿主重试、刷新）不该变成两条。
+  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  const twice = (await client.call('debug-memories', { session_id: before.session_id })).entries
+    .filter((row) => row.content === '你：灯还亮着吗 她：亮着。你回来晚了。');
+  eq(twice.length, 1, '9. 同一回合重发不会记成两条');
   delete agentA.session;
   await fiber.dispose();
 

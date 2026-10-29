@@ -600,6 +600,21 @@ def deleting_a_memory_leaves_an_audit(s):
     assert err["code"] == "NOT_FOUND", err
 
 
+def the_host_notes_a_turn_by_itself(s):
+    """宿主在回合结束时递来两句原话，不经过 soul_commit 也能记进 ABM。"""
+    sid, rev, _ = e2e.start(s)
+    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
+                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
+    assert out["noted"] is True and out["revision"] == rev + 1, out
+    assert out["memory"]["content"] == "你：灯还亮着吗 她：亮着。你回来晚了。", out["memory"]
+    # 同一回合重发不重复记（宿主重试）
+    again = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": out["revision"],
+                               "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
+    assert again["noted"] is False and again["revision"] == out["revision"], again
+    entries = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "abm"]
+    assert len(entries) == 1, entries
+
+
 def summarize_now_is_paid_by_the_next_commit(s):
     sid, rev, _ = e2e.start(s)
     rev, _ = play(s, sid, rev, ops=[npc_action()], remember="今天陪她值了夜班")
@@ -741,6 +756,7 @@ check("a relationship move is felt by her", with_sc(a_relationship_move_is_felt_
 check("the mood page lists her", with_sc(settings_moods_page_lists_her))
 check("the memory page shows her memories", with_sc(the_memory_page_shows_her_memories))
 check("editing a memory marks it yours", with_sc(editing_a_memory_marks_it_yours))
+check("the host notes a turn by itself", with_sc(the_host_notes_a_turn_by_itself))
 check("deleting a memory leaves an audit", with_sc(deleting_a_memory_leaves_an_audit))
 check("summarize now is paid by the next commit", with_sc(summarize_now_is_paid_by_the_next_commit))
 check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))
