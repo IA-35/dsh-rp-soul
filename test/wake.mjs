@@ -9,7 +9,18 @@ const wakeMod = await import(new URL('../lib/wake.js', import.meta.url).href);
 const {
   WAKE_DEFAULTS, WAKE_SOURCE, localDay, readWakeConfig, wakeConfigPatch,
   renderWakeText, dueAt, mountWake, isWakeTurn, markWakeTurn, clearAllWakeTurns,
+  nextDayStart,
 } = wakeMod;
+
+// ---- 0. 额度用完也要在第二天自己回来 ----
+// 唤醒表只由「你说话 / 回合结束 / 设置页保存 / 手动」这些事件重算，没有纯时间
+// 驱动。额度用尽时若把 at 清成 null，arm() 见到 null 就不再挂表，于是没人说话
+// 的一整天里，她一次也不会醒过来。
+const rollover = nextDayStart(new Date(2026, 9, 29, 16, 30, 0));
+const rolloverDate = new Date(rollover);
+eq(rolloverDate.getDate(), 30, '0. 额度回血时刻落在第二天');
+eq(rolloverDate.getHours() * 60 + rolloverDate.getMinutes(), 5, '0. 零点过五分就回血');
+ok(rollover > new Date(2026, 9, 29, 23, 59, 0).getTime(), '0. 回血在当天 23:59 之后');
 
 // ---- 1. 配置读取与夹紧 ----
 const d = readWakeConfig(null);
