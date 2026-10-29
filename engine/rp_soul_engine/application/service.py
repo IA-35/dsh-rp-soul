@@ -1285,12 +1285,10 @@ def note_turn(ctx, payload):
         )
         if entry is None:
             return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮没有可记的话",
-                    "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
+                    "noted": False, "receipt": "这一轮没有可记的话"}
         if duplicate:
             return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮已经记过了",
-                    "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
+                    "noted": False, "receipt": "这一轮已经记过了"}
         # 记进 ABM 之后，「该收了」的判断要跟着更新：不重算的话要等到下一次
         # 模型交账才会提示，而模型不交账正是这个命令存在的理由。
         # 但设置页点过「立即总结」的批次不能被这里重算掉。
@@ -1298,10 +1296,8 @@ def note_turn(ctx, payload):
             MODULES.run(state, "close_record")
         state["revision"] = state.get("revision", 0) + 1
         repo.update_session(conn, state, now)
-        # fold 一并带回：宿主不用再跑一次 get-context 才知道 ABM 满了
         return {"revision": state["revision"], "turn": state["turn"], "noted": True,
-                "receipt": "记住了", "memory": MEM.row(state, entry),
-                "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
+                "receipt": "记住了", "memory": MEM.row(state, entry)}
 
     return session_write(ctx, "note-turn", payload, handler)
 

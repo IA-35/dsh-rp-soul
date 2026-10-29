@@ -89,8 +89,8 @@ application 层；`domain/` 里没有一处 `open()`。
 ```
 宿主：回合结束（agent/turn-stopping）→ note-turn 把这一问一答写进 ABM
       （模型这一轮交过账就跳过；记账失败不抛，绝不因此判这一轮出错）
-      → 返回里带着「该收了」，满了就起一个子代理写汇总
-      → 子代理写回来，summarize-memory 直接落成一条 SCM
+      → 再问一次引擎「该收了没有」，满了就自己起一个子代理
+      → 子代理（provider: fork，带着这一局的上下文）写回来，summarize-memory 落成一条 SCM
 ```
 
 ### 3.3 一次 soul_commit 在引擎内部

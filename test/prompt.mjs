@@ -43,7 +43,7 @@ const subagentsSpawned = [];
 app.provide('subagents');
 app.set('subagents', {
   startActivation: async (spec) => {
-    subagentsSpawned.push({ prompt: spec?.request?.prompt?.[0]?.text ?? '', label: spec?.label, delivery: spec?.delivery });
+    subagentsSpawned.push({ prompt: spec?.request?.prompt?.[0]?.text ?? '', label: spec?.label, provider: spec?.provider, delivery: spec?.delivery, signal: spec?.signal });
     return {
       childId: 's_fake',
       result: Promise.resolve({ output: [{ type: 'text', text: '那些天一直亮着灯，我在岸上等。\nKEEP: m1' }], stopReason: 'completed' }),
@@ -167,6 +167,9 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 50));
   eq(subagentsSpawned.length, 1, '10. 攒满了就起一个子代理去收');
   has(subagentsSpawned[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
+  eq(subagentsSpawned[0]?.provider, 'fork', '10. 用的是 fork：子代理带着这一局的上下文开工');
+  eq(subagentsSpawned[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
+  ok(subagentsSpawned[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
   const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
   eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
   // 收完之后 ABM 只剩这一回合刚记下的那条（它进的是下一批）
