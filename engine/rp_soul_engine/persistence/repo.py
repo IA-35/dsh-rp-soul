@@ -437,8 +437,11 @@ def trim_undo_points(conn, session_id, keep):
         (session_id, session_id, keep),
     )
     # The fact journal of a turn is only needed while its undo point exists.
+    # turn=0 is not a turn: it records what the settings page deleted by hand,
+    # and revert_turn_facts needs it to know what must stay gone. Deleting it
+    # here would let an older turn's undo bring a hand-deleted fact back.
     conn.execute(
-        "DELETE FROM fact_journal WHERE session_id=? AND turn < "
+        "DELETE FROM fact_journal WHERE session_id=? AND turn > 0 AND turn < "
         "(SELECT COALESCE(MIN(turn), 1000000000) FROM undo_points WHERE session_id=?)",
         (session_id, session_id),
     )

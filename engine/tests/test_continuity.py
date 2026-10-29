@@ -164,6 +164,31 @@ def the_pending_batch_grows_with_abm():
         conn.execute("COMMIT")
 
 
+def trimming_undo_points_keeps_the_hand_deleted_record():
+    """turn 0 不是回合，是「设置页手动删过」的凭据。清理旧撤销点时把它
+    一起删掉，revert_turn_facts 就认不出哪些事实该保持消失。"""
+    with game() as (ctx, clock, row):
+        conn = ctx.db()
+        db.begin_write(conn)
+        sid = row["session_id"]
+        for turn in (1, 2, 3):
+            repo.put_undo_point(conn, sid, turn, repo.load_session(conn, sid)["state"])
+        for turn in (0, 2):
+            conn.execute(
+                "INSERT OR IGNORE INTO fact_journal(session_id, turn, id, before) VALUES(?,?,?,?)",
+                (sid, turn, "f_by_hand", "{}"),
+            )
+        repo.trim_undo_points(conn, sid, 30)
+        left = [r[0] for r in conn.execute(
+            "SELECT turn FROM fact_journal WHERE session_id=? ORDER BY turn", (sid,)).fetchall()]
+        conn.execute("COMMIT")
+        assert 0 in left, left
+        assert 2 in left, left
+
+
+check("trimming undo points keeps the hand deleted record",
+      trimming_undo_points_keeps_the_hand_deleted_record)
+
 def a_hand_asked_batch_survives_the_recount():
     """设置页点过「立即汇总」的那一批不能被宿主重算掉。"""
     with game() as (ctx, clock, row):

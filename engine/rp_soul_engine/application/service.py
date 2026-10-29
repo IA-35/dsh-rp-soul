@@ -18,6 +18,7 @@ content store. A persona arrives with the call, is validated by
 import hashlib
 import os
 import re
+import sys
 from datetime import datetime
 
 from .. import paths
@@ -46,6 +47,9 @@ from ..projections import context as CX
 from . import specs
 
 CREATE_SCOPE = "create"
+# 常识写的幂等键单独一摊：和建会话/读档挤在一起会撞号，而且常识写很密，
+# 会把那 200 条清理预算吃完，把建会话的记录挤掉，重放时真的再建一局。
+COMMON_SCOPE = "common"
 RESERVED_SLOT_NAMES = {"con", "prn", "aux", "nul"} | {"com%d" % i for i in range(1, 10)} | {"lpt%d" % i for i in range(1, 10)}
 
 
@@ -258,7 +262,16 @@ def _refresh_persona(conn, state, persona, raw, now):
     session exactly as it is and reports why, instead of taking the story down
     with it: the settings page may be half-written while the player is playing.
     """
-    payload = validate(specs.PERSONA_PAYLOAD, raw)
+    payload, errors = S.validate(specs.PERSONA_PAYLOAD, raw)
+    if errors:
+        # 形状坏了也算「保持原样并报告」：这里抛出去会让整次 get-context 失败，
+        # 而设置页写坏一个字段不该把正在玩的这一局也带走。
+        return persona, {
+            "ok": False,
+            "changed": False,
+            "count": len(errors),
+            "problems": errors,
+        }
     assembled = PE.from_markdown(payload["front"], payload["prose"], payload["title"], payload["persona_id"])
     fresh, errors = PE.validate(assembled)
     if errors:
@@ -492,7 +505,7 @@ def _plan_journal(ctx, session_id, results):
 
 
 def _flush_journal(ctx):
-    """COMMIT 之后把排好的日记写到盘上。失败不抛，只记一条日志。"""
+    """COMMIT 之后把排好的日记写到盘上。失败不抛，但要留痕。"""
     pending = getattr(ctx, "_journal_pending", None)
     if not pending:
         return
@@ -502,9 +515,10 @@ def _flush_journal(ctx):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(markdown)
-        except OSError:
-            # 日记是副本，写不进去不该让已提交的回合失败。
-            continue
+        except OSError as exc:
+            # 日记是副本，写不进去不该让已提交的回合失败。但也不能一声不响：
+            # 回合的响应里已经带着这个路径，静默失败等于告诉调用方写成了。
+            sys.stderr.write("journal write failed: %s (%s)\n" % (path, exc))
 
 
 def _record_end(state, results):
@@ -878,25 +892,32 @@ def export_save(ctx, payload):
         raise AppError(INVALID_INPUT, "session_id 与 slot 必须且只能给一个",
                        [detail("$", "说明要导出哪个会话或哪个存档", None, INVALID_INPUT)])
     conn = ctx.db()
-    if payload["session_id"] is not None:
-        session = repo.load_session(conn, payload["session_id"])
-        state = FA.full_state(session["state"])
-        persona = session["persona"]
-        archive = repo.archive_items(conn, session["session_id"])
-        source = {"kind": "session", "session_id": session["session_id"], "current_slot": session["current_slot"]}
-    else:
-        name = normalize_slot_name(payload["slot"], "$.slot")
-        slot = repo.get_slot(conn, name, with_blobs=True)
-        if slot is None:
-            names = [s["name"] for s in repo.list_slots(conn)]
-            raise AppError(NOT_FOUND, "没有名为「%s」的存档" % name,
-                           [detail("$.slot", "存档不存在", "现有存档：%s" % ("、".join(names[:20]) or "（无）"), NOT_FOUND)],
-                           available=names[:20])
-        state = slot["state"]
-        state["facts"] = repo.slot_facts(conn, name)
-        persona = slot["persona"]
-        archive = repo.slot_archive(conn, name)
-        source = {"kind": "slot", "name": name, "version": slot["version"]}
+    # 三个 SELECT 要在同一个快照里读：state、facts、archive 分几次读，中间
+    # 正好有人交了一回合，导出的文件就是两个版本拼的，而 checksum 只管
+    # 「文件没被改过」，认不出这种错位。读事务结束后回滚，什么都不写。
+    conn.execute("BEGIN DEFERRED")
+    try:
+        if payload["session_id"] is not None:
+            session = repo.load_session(conn, payload["session_id"])
+            state = FA.full_state(session["state"])
+            persona = session["persona"]
+            archive = repo.archive_items(conn, session["session_id"])
+            source = {"kind": "session", "session_id": session["session_id"], "current_slot": session["current_slot"]}
+        else:
+            name = normalize_slot_name(payload["slot"], "$.slot")
+            slot = repo.get_slot(conn, name, with_blobs=True)
+            if slot is None:
+                names = [s["name"] for s in repo.list_slots(conn)]
+                raise AppError(NOT_FOUND, "没有名为「%s」的存档" % name,
+                               [detail("$.slot", "存档不存在", "现有存档：%s" % ("、".join(names[:20]) or "（无）"), NOT_FOUND)],
+                               available=names[:20])
+            state = slot["state"]
+            state["facts"] = repo.slot_facts(conn, name)
+            persona = slot["persona"]
+            archive = repo.slot_archive(conn, name)
+            source = {"kind": "slot", "name": name, "version": slot["version"]}
+    finally:
+        conn.execute("ROLLBACK")
     doc = transfer.build(state, persona, archive, source, now_iso())
     target = transfer.export_target(ctx, payload["path"], "%s-第%d回合" % (state["persona_title"], state["turn"]), payload["overwrite"])
     size = transfer.write_file(target, doc)
@@ -1088,12 +1109,16 @@ def next_wake(ctx, payload):
     state, persona = session["state"], session["persona"]
     # The story clock stands on the last settled turn; a save without one (an
     # older build, or one migrated from the old engine) stands on right now.
-    now = CL.parse_iso(payload["now"]) if payload["now"] else CL.parse_iso(now_iso())
-    if now is not None and now.utcoffset() is None:
-        # naive 的 now 和带时区的候选时刻一相减就 TypeError，几秒内可反复触发；
-        # 和 last_wake_at 一样在入口就挡下来。
+    # 和 last_wake_at 一样在入口挡：裸抛会被报成 INTERNAL_ERROR，模型拿到
+    # 一个自己修不了的内部错误；naive 时间和候选相减又会 TypeError。
+    try:
+        now = CL.parse_iso(payload["now"]) if payload["now"] else CL.parse_iso(now_iso())
+        if now is not None and now.utcoffset() is None:
+            raise ValueError("timezone required")
+    except (TypeError, ValueError):
         raise AppError(INVALID_INPUT, "当前时刻必须是带时区的 ISO 时间",
                        [detail("$.now", "时间格式不合法或缺少时区", "例如 2026-10-26T13:00:00+08:00", INVALID_INPUT)])
+
     try:
         last_wake = CL.parse_iso(payload["last_wake_at"])
         if last_wake is not None and last_wake.utcoffset() is None:
@@ -1648,7 +1673,7 @@ def _common_write(ctx, command, spec, payload, change):
     digest = digest_of(command, payload)
     db.begin_write(conn)
     try:
-        replay = _replay(conn, CREATE_SCOPE, payload["request_id"], digest)
+        replay = _replay(conn, COMMON_SCOPE, payload["request_id"], digest)
         if replay is not None:
             conn.execute("COMMIT")
             return replay
@@ -1657,7 +1682,7 @@ def _common_write(ctx, command, spec, payload, change):
         repo.write_common(conn, rows)
         response = {"replayed": False, "receipt": receipt, "next_request_id": new_request_id()}
         response.update(CM.panel(rows, _common_limit(conn)))
-        repo.idem_put(conn, CREATE_SCOPE, payload["request_id"], digest, response, now_iso())
+        repo.idem_put(conn, COMMON_SCOPE, payload["request_id"], digest, response, now_iso())
         conn.execute("COMMIT")
         return response
     except BaseException:

@@ -868,7 +868,25 @@ def undo_does_not_resurrect_a_deleted_fact(s):
     assert still == [], still
 
 
+def undo_does_not_resurrect_a_deleted_fact_later(s):
+    """手动删的事实过几回合再撤销，也不能回来：turn 0 的记录是唯一的凭据，
+    清理撤销点时不许把它一起清了。"""
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
+    fid = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["key"] == "rain"][0]["id"]
+    rev = s.ok("delete-fact", {"session_id": sid, "request_id": e2e.rid("r_f"), "expected_revision": rev,
+                               "fact_id": fid})["revision"]
+    # 又过了几回合：每回合都会清理一次撤销点，turn 0 的记录必须活下来
+    for _ in range(3):
+        rev, _ = play(s, sid, rev, ops=[npc_action(significant=False)])
+    rev = s.ok("undo-turn", {"session_id": sid, "request_id": e2e.rid(), "expected_revision": rev})["revision"]
+    still = [r for r in s.ok("debug-facts", {"session_id": sid})["rows"] if r["id"] == fid]
+    assert still == [], still
+
+
 check("undo does not resurrect a deleted fact", with_sc(undo_does_not_resurrect_a_deleted_fact))
+check("undo does not resurrect a deleted fact later either",
+      with_sc(undo_does_not_resurrect_a_deleted_fact_later))
 
 
 def undo_keeps_a_removed_fact_removed_even_if_it_was_edited(s):
