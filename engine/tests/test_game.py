@@ -630,6 +630,27 @@ def summarize_now_is_paid_by_the_next_commit(s):
     assert scm and scm[0]["content"].startswith("那晚我值夜班"), scm
 
 
+def the_host_folds_abm_by_itself(s):
+    """宿主起的子代理把 ABM 收成一条 SCM，模型一次 soul_commit 都没交。"""
+    sid, rev, _ = e2e.start(s)
+    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
+                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
+    rev = out["revision"]
+    s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
+    rev = s.ok("debug-memories", {"session_id": sid})["revision"]
+    folded = s.ok("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s"), "expected_revision": rev,
+                                       "text": "那天他回来得晚，灯一直亮着。"})
+    assert folded["memory"]["content"].startswith("那天他回来得晚"), folded
+    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
+    assert [e for e in entries if e["layer"] == "scm"], entries
+    assert not [e for e in entries if e["layer"] == "abm"], entries
+    # 收完了就不该再有待收的批次
+    again = s.fail("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s2"),
+                                        "expected_revision": folded["revision"],
+                                        "text": "再说一次"})
+    assert again["code"] == "INVALID_INPUT", again
+
+
 def nothing_to_archive_is_refused(s):
     sid, rev, _ = e2e.start(s)
     err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "diary"})
@@ -757,6 +778,7 @@ check("the mood page lists her", with_sc(settings_moods_page_lists_her))
 check("the memory page shows her memories", with_sc(the_memory_page_shows_her_memories))
 check("editing a memory marks it yours", with_sc(editing_a_memory_marks_it_yours))
 check("the host notes a turn by itself", with_sc(the_host_notes_a_turn_by_itself))
+check("the host folds ABM by itself", with_sc(the_host_folds_abm_by_itself))
 check("deleting a memory leaves an audit", with_sc(deleting_a_memory_leaves_an_audit))
 check("summarize now is paid by the next commit", with_sc(summarize_now_is_paid_by_the_next_commit))
 check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))

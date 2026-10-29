@@ -37,6 +37,20 @@ const agentA = { id: 'conversation-A' }, agentB = { id: 'conversation-B' };
 const app = new Context();
 let fiber;
 let promptFiber;
+// 宿主真正的 subagent 服务在测试环境里没有，这里放一个假的顶上：
+// 记下每次调用，返回一句编好的汇总，验插件有没有走对这条路。
+const subagentsSpawned = [];
+app.provide('subagents');
+app.set('subagents', {
+  startActivation: async (spec) => {
+    subagentsSpawned.push({ prompt: spec?.request?.prompt?.[0]?.text ?? '', label: spec?.label, delivery: spec?.delivery });
+    return {
+      childId: 's_fake',
+      result: Promise.resolve({ output: [{ type: 'text', text: '那些天一直亮着灯，我在岸上等。\nKEEP: m1' }], stopReason: 'completed' }),
+      dispose: async () => {},
+    };
+  },
+});
 const assemble = async (agent, signal) => app.systemPrompt.assemble(agent ? assembleContextFor(agent, signal) : {});
 // 账本现在走「有序动态 runtime context」，不再是系统提示词的 section——
 // 系统提示词必须恒定，前缀才能一路命中缓存。
@@ -135,6 +149,28 @@ try {
   const twice = (await client.call('debug-memories', { session_id: before.session_id })).entries
     .filter((row) => row.content === '你：灯还亮着吗 她：亮着。你回来晚了。');
   eq(twice.length, 1, '9. 同一回合重发不会记成两条');
+  // 攒够二十条之后，收成一条这件事交给子代理，也不再等模型交账。
+  // 这里只验插件有没有真的去起子代理、并把它写的话落进 SCM。
+  const foldGame = await start();
+  let foldRow = foldGame;
+  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
+  for (let i = 0; i < 20; i += 1) {
+    const step = await client.call('note-turn', {
+      session_id: foldRow.session_id, request_id: rid(), expected_revision: foldRow.revision,
+      said: '第' + i + '句', reply: '嗯。',
+    });
+    foldRow = { ...foldRow, revision: step.revision };
+    writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
+  }
+  ok(subagentsSpawned.length === 0, '10. 还没攒满时没去扰动子代理');
+  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  eq(subagentsSpawned.length, 1, '10. 攒满了就起一个子代理去收');
+  has(subagentsSpawned[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
+  const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
+  eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
+  // 收完之后 ABM 只剩这一回合刚记下的那条（它进的是下一批）
+  eq(folded.filter((row) => row.layer === 'abm').length, 1, '10. 收完之后 ABM 不再堆着那一批');
   delete agentA.session;
   await fiber.dispose();
 

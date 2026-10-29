@@ -234,6 +234,16 @@ REQUEST_MEMORY = _obj(
     "request-memory",
 )
 
+SUMMARIZE_MEMORY = _obj(
+    dict(
+        session_write_fields(),
+        text=F(S.Str(1, 300), desc="这一批收成的那条：第一人称（我），记得发生了什么、当时的感受，留下带得住的细节"),
+        keep=F(S.List(S.Id(), max_items=2), required=False, default=[],
+               desc="值得一直记着的 0~2 条经历 id（会进 CLPA）"),
+    ),
+    "summarize-memory",
+)
+
 DEBUG_DELETE_THOUGHT = _obj(
     dict(
         session_write_fields(),

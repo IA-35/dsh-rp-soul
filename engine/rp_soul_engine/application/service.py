@@ -1285,19 +1285,49 @@ def note_turn(ctx, payload):
         )
         if entry is None:
             return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮没有可记的话"}
+                    "noted": False, "receipt": "这一轮没有可记的话",
+                    "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
         if duplicate:
             return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮已经记过了"}
+                    "noted": False, "receipt": "这一轮已经记过了",
+                    "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
         # 记进 ABM 之后，「该收了」的判断要跟着更新：不重算的话要等到下一次
         # 模型交账才会提示，而模型不交账正是这个命令存在的理由。
-        MODULES.run(state, "close_record")
+        # 但设置页点过「立即总结」的批次不能被这里重算掉。
+        if state["requests"].get("memory_fold") is None:
+            MODULES.run(state, "close_record")
         state["revision"] = state.get("revision", 0) + 1
         repo.update_session(conn, state, now)
+        # fold 一并带回：宿主不用再跑一次 get-context 才知道 ABM 满了
         return {"revision": state["revision"], "turn": state["turn"], "noted": True,
-                "receipt": "记住了", "memory": MEM.row(state, entry)}
+                "receipt": "记住了", "memory": MEM.row(state, entry),
+                "fold": MEM.request_view(state, state["requests"].get("memory_fold"))}
 
     return session_write(ctx, "note-turn", payload, handler)
+
+
+def summarize_memory(ctx, payload):
+    """The host's subagent hands back the batch of ABM already folded into one line.
+
+    Like note-turn, this exists because the model may never commit a turn: the
+    fold is the one step that has to keep happening or ABM grows without end.
+    """
+    from .. import modules as MODULES
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        request = state["requests"].get("memory_fold")
+        if not request or not MEM.sources(state, request):
+            raise AppError(INVALID_INPUT, "现在没有可以收进 SCM 的记忆",
+                           [detail("$.text", "ABM 里没有待收的条目", None, INVALID_INPUT)])
+        entry = MEM.apply_fold(state, request, payload["text"], state["turn"],
+                               keep=tuple(payload.get("keep") or ()))
+        state["requests"]["memory_fold"] = None
+        # 收完 ABM 变了，下一次该不该再收 / 该不该写日记要跟着重算
+        MODULES.run(state, "close_record")
+        return "收成了一条记忆：%s" % entry["content"][:20], {"memory": MEM.row(state, entry)}
+
+    return _memory_write(ctx, "summarize-memory", specs.SUMMARIZE_MEMORY, payload, change)
 
 
 def request_memory(ctx, payload):

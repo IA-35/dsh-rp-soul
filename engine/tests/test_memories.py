@@ -526,6 +526,15 @@ def an_exchange_is_noted_without_the_model():
     assert len(MEM.of_layer(state, "abm")) == 1, MEM.of_layer(state, "abm")
 
 
+def noted_exchanges_still_reach_the_fold():
+    """宿主记的那些带着同一个 turn 号，不能因此永远收不进 SCM。"""
+    state, _persona = start()
+    for i in range(MEM.CAPACITY["abm"]):
+        MEM.note_exchange(state, "第%d句" % i, "嗯。", turn=state["turn"])
+    request = MEM.abm_batch(state)
+    assert request and len(request["ids"]) == MEM.CAPACITY["abm"], request
+
+
 def an_alone_exchange_is_an_experience():
     """她一个人醒着的时候没有「你说的话」，那条要落成 experience。"""
     state, _persona = start()
@@ -640,6 +649,7 @@ check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)
 check("mentioning it makes it stronger", mentioning_it_makes_it_stronger)
 check("an exchange is noted without the model", an_exchange_is_noted_without_the_model)
+check("noted exchanges still reach the fold", noted_exchanges_still_reach_the_fold)
 check("an alone exchange is an experience", an_alone_exchange_is_an_experience)
 check("an empty exchange writes nothing", an_empty_exchange_writes_nothing)
 check("a busy day stays whole until the fold", a_busy_day_stays_whole_until_the_fold)

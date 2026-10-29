@@ -275,8 +275,10 @@ def abm_batch(state):
     now = CL.to_abs(state["clock"])
     # 这一回合刚记下的那几条不算：一批是「之前说过的话」。把它们算进来的话，
     # 停一小时再开口时最新的一条正好是刚说的，闲置永远凑不满一小时。
+    # 宿主替模型记的那几条（exchanged）不受这条限制：turn 只有 commit-turn
+    # 会推进，它们全带着同一个 turn 号，按「本回合」排除的话永远收不进 SCM。
     waiting = [e for e in entries(state) if e["layer"] == "abm" and e["type"] in KEEPS
-               and e.get("turn") != state["turn"]]
+               and (e.get("exchanged") or e.get("turn") != state["turn"])]
     # 钉住的不占名额，但照样随这批一起收走（apply_fold 把它送进 CLPA）
     pool = [e for e in waiting if not e.get("pinned")]
     if not pool:
