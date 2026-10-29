@@ -412,17 +412,17 @@ responses.set('GET /rp-soul/engine/memories', () => jsonResponse({
   ok: true, session_id: 's_test01', revision: 11, turn: 3, clock_label: '第三天 21:30',
   counts: { abm: 2, scm: 1, clpa: 1 }, capacity: { abm: 20, scm: 50, clpa: null },
   layers: { abm: 'ABM', scm: 'SCM', clpa: 'CLPA' },
-  requests: { memory_fold: { sources: [{ id: 'm2', when: '昨天 · 周二晚上', text: '下雨那天' }] }, memory_diary: null },
+  requests: { memory_fold: { sources: [{ id: 'm2', when: '周三晚上 21:40', text: '下雨那天' }] }, memory_diary: null },
   deletions: [{ turn: 2, memory_id: 'm0', layer: 'scm', content: '不想记得的事', reason: '设置页手动删除', created_at: 'x' }],
   entries: [
     { id: 'm3', layer: 'abm', layer_label: 'ABM', type: 'conversation', content: '他今晚又来了', importance: 0.3, activity: 1,
-      when: '今天 · 周三晚上', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, you: '我来了', quotes: ['坐吧'] },
+      when: '10.29 周四 19:12', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, you: '我来了', quotes: ['坐吧'] },
     { id: 'm4', layer: 'abm', layer_label: 'ABM', type: 'action', content: '她推过来一杯热水', importance: 0.3, activity: 1,
-      when: '今天 · 周三晚上', keywords: [], origin_ids: [], pinned: false, edited: false, note: '', turn: 3 },
+      when: '10.29 周四 19:12', keywords: [], origin_ids: [], pinned: false, edited: false, note: '', turn: 3 },
     { id: 'm2', layer: 'scm', layer_label: 'SCM', type: 'summary', content: '下雨那天', importance: 0.5, activity: 0.4,
-      when: '昨天 · 周二晚上', keywords: ['下雨'], origin_ids: [], pinned: false, edited: false, note: '', turn: 2 },
+      when: '10.28 周三 21:40', keywords: ['下雨'], origin_ids: [], pinned: false, edited: false, note: '', turn: 2 },
     { id: 'm1', layer: 'clpa', layer_label: 'CLPA', type: 'summary', content: '我们是在雨夜认识的', importance: 0.6, activity: 0.9,
-      when: '7 天前 · 周三晚上', keywords: [], origin_ids: ['m9'], pinned: true, edited: false, note: '', turn: 0, milestone: ['stage'] },
+      when: '10.22 周四 08:05', keywords: [], origin_ids: ['m9'], pinned: true, edited: false, note: '', turn: 0, milestone: ['stage'] },
   ],
 }));
 responses.set('GET /rp-soul/engine/common', () => jsonResponse({

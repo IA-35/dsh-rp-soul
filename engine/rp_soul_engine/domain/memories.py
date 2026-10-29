@@ -29,6 +29,7 @@ Capture costs no model call: every committed turn leaves one entry in ABM
 an offscreen beat leaves an "experience", a minor action leaves an "action".
 """
 
+import datetime
 import math
 
 from . import clock as CL
@@ -536,13 +537,13 @@ def request_view(state, request, compact=False):
         # brief 里一条一行「时间 · 内容」，截短
         shown = picked[-BRIEF_SOURCES:]
         out = {"sources": [
-            "%s · %s" % (when_label(state, e["at"]),
+            "%s · %s" % (when_short(state, e["at"]),
                          e["content"] if len(e["content"]) <= BRIEF_SOURCE_TEXT else e["content"][:BRIEF_SOURCE_TEXT - 1] + "…")
             for e in shown
         ]}
     else:
         shown = picked
-        out = {"sources": [{"id": e["id"], "when": when_label(state, e["at"]), "text": e["content"]} for e in shown]}
+        out = {"sources": [{"id": e["id"], "when": when_short(state, e["at"]), "text": e["content"]} for e in shown]}
     if compact and len(shown) < len(picked):
         # brief 只有 6 KB：多的那些在 depth=full 里
         out["more"] = len(picked) - len(shown)
@@ -644,7 +645,7 @@ def inject(state, cue="", total=SCM_BRIEF):
     for entry in select(state, cue, total):
         item = {
             "layer": LAYER_LABELS[entry["layer"]],
-            "when": when_label(state, entry["at"]),
+            "when": when_short(state, entry["at"]),
             "clear": clearness(activity(entry, now)),
             "text": _clip(entry["content"]),
         }
@@ -675,13 +676,52 @@ def reinforce(state, ids):
 # reading
 
 
-def when_label(state, at):
-    """Life-like time: 今天 / 昨天 / 前天 / N 天前, plus the weekday and the time of day."""
-    today = state["clock"]["day"]
-    ago = today - at["day"]
-    head = {0: "今天", 1: "昨天", 2: "前天"}.get(ago, "%d 天前" % ago if ago > 0 else "今天")
+def when_short(state, at):
+    """Injected form: 周四下午 14:00 —— the weekday and the exact minute, no date.
+
+    The entry itself already carries its day and minute; what the model needs is
+    which day and which hour. 「周四下午」 alone is too coarse to be a moment, so
+    the clock stays. Falls back to 今天/昨天 when an old save has no anchor.
+    """
     weekday = _weekday(state, at["day"])
-    return "%s · %s%s" % (head, weekday, _part_of_day(at["minute"]))
+    clock = CL.hm(at["minute"])
+    part = _part_of_day(at["minute"])
+    head = weekday or _ago_head(state, at["day"])
+    return "%s%s %s" % (head, part, clock)
+
+
+def when_label(state, at):
+    """Settings-page form: 10.29 周四 14:00 —— the date is there to sort by.
+
+    Not 「三天前」 and not 「周四晚上」: the ledger runs on the minutes actually
+    spent, so this moment exists on your clock too, and a memory stamped with
+    the real date and minute is something that happened rather than a summary
+    of roughly when. Falls back to the day count when an old save has no
+    anchor to project onto the calendar.
+    """
+    weekday = _weekday(state, at["day"])
+    clock = CL.hm(at["minute"])
+    start = CL.parse_iso(state.get("real_start"))
+    if start is not None:
+        date = start.date() + datetime.timedelta(days=at["day"] - 1)
+        stamp = "%d.%d" % (date.month, date.day)
+        return "%s %s %s" % (stamp, weekday, clock) if weekday else "%s %s" % (stamp, clock)
+    head = weekday or _ago_head(state, at["day"])
+    return "%s %s" % (head, clock)
+
+
+def _ago_head(state, day):
+    """No anchor (an old save): count back from now, the clock stays real."""
+    ago = state["clock"]["day"] - day
+    return {0: "今天", 1: "昨天", 2: "前天"}.get(ago, "%d 天前" % ago if ago > 0 else "今天")
+
+
+def _part_of_day(minute):
+    hour = minute // 60
+    for upto, name in ((5, "凌晨"), (9, "早上"), (12, "上午"), (14, "中午"), (18, "下午"), (23, "晚上"), (24, "深夜")):
+        if hour < upto:
+            return name
+    return "深夜"
 
 
 WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -692,14 +732,6 @@ def _weekday(state, day):
     if start is None:
         return ""
     return WEEKDAYS[(start.weekday() + day - 1) % 7]
-
-
-def _part_of_day(minute):
-    hour = minute // 60
-    for upto, name in ((5, "凌晨"), (9, "早上"), (12, "上午"), (14, "中午"), (18, "下午"), (23, "晚上"), (24, "深夜")):
-        if hour < upto:
-            return name
-    return "深夜"
 
 
 def row(state, entry, now=None):

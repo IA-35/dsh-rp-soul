@@ -250,9 +250,18 @@ def memory_follows_undo():
 def when_label_is_lifelike():
     state, persona = start()
     state["clock"] = {"day": 4, "minute": 600}
-    assert MEM.when_label(state, {"day": 4, "minute": 1200}) == "今天 · 周四晚上"
-    assert MEM.when_label(state, {"day": 3, "minute": 60}) == "昨天 · 周三凌晨"
-    assert MEM.when_label(state, {"day": 1, "minute": 1230}) == "3 天前 · 周一晚上"
+    # 设置页用日期排序：账本按真实分钟走，这个时刻在主人的钟上真的存在过
+    # （T0 是 10.26 周一，第 4 天 = 10.29 周四）
+    assert MEM.when_label(state, {"day": 4, "minute": 1200}) == "10.29 周四 20:00"
+    assert MEM.when_label(state, {"day": 3, "minute": 60}) == "10.28 周三 01:00"
+    assert MEM.when_label(state, {"day": 1, "minute": 1230}) == "10.26 周一 20:30"
+    # 注入只说周几和钟点：几号在条目里，不该再念一遍
+    assert MEM.when_short(state, {"day": 4, "minute": 840}) == "周四下午 14:00"
+    assert MEM.when_short(state, {"day": 3, "minute": 60}) == "周三凌晨 01:00"
+    # 没有 real_start（老存档）就退回相对日子，钟点仍然是真
+    state["real_start"] = None
+    assert MEM.when_label(state, {"day": 2, "minute": 605}) == "前天 10:05"
+    assert MEM.when_short(state, {"day": 2, "minute": 605}) == "前天上午 10:05"
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +465,7 @@ def each_line_carries_its_age():
     MEM.add(state, "scm", "summary", "那天一起看海", 0.5, at={"day": 1, "minute": 600})
     state["clock"] = {"day": 4, "minute": 600}
     rows = MEM.inject(state, "", MEM.SCM_BRIEF)
-    assert rows and rows[0]["when"].startswith("3 天前"), rows
+    assert rows and rows[0]["when"] == "周一上午 10:00", rows
 
 
 def each_line_says_how_well_she_remembers_it():
