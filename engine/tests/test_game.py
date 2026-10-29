@@ -215,6 +215,33 @@ def debug_delete_removes_one_thought(s):
     assert after["deletions"], after
 
 
+def deletion_audit_keeps_only_five(s):
+    """删除记录只留最近五条：它是用来看「刚才那条怎么没了」的，不是流水账。"""
+    import sqlite3
+
+    sid, rev, _ = e2e.start(s)
+    rev, _ = play(s, sid, rev, ops=[her_fact("rain", "昨天下了一整夜的雨")])
+    for i in range(7):
+        rev, _ = play(s, sid, rev, ops=[
+            {"op": "add_thought", "label": "念头%d" % i, "delta": -1, "basis_fact_id": "f1"},
+            npc_action(significant=False),
+        ])
+        panel = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})
+        rev = s.ok("debug-delete-thought", {"session_id": sid, "request_id": e2e.rid("r_del"),
+                                            "expected_revision": rev, "npc_id": "lin_wan",
+                                            "thought_id": panel["thoughts"][-1]["id"],
+                                            "reason": "测试删除"})["revision"]
+    rows = s.ok("debug-mood", {"session_id": sid, "npc_id": "lin_wan"})["deletions"]
+    assert [r["label"] for r in rows] == ["念头6", "念头5", "念头4", "念头3", "念头2"], rows
+    # 读出来永远是五条，所以直接数表里的行：多留的就是没清掉的
+    conn = sqlite3.connect(os.path.join(s.data_dir, "engine.db"))
+    try:
+        kept = conn.execute("SELECT COUNT(*) FROM thought_debug WHERE session_id=?", (sid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert kept == 5, kept
+
+
 def thought_cap_is_enforced(s):
     sid, rev, _ = e2e.start(s)
     ops = [her_fact("pile", "一晚上出了很多事")]
@@ -767,6 +794,7 @@ check("the mood panel shows thresholds and decay", with_sc(mood_panel_has_thresh
 check("a thought needs a fact she knows", with_sc(a_thought_needs_a_fact_she_knows))
 check("a refreshed thought updates its label and undo restores it", with_sc(refreshing_a_thought_updates_its_label))
 check("debug delete removes exactly one thought", with_sc(debug_delete_removes_one_thought))
+check("the deletion audit keeps only five", with_sc(deletion_audit_keeps_only_five))
 check("at most twelve memory thoughts are kept", with_sc(thought_cap_is_enforced))
 check("a fact's scope decides who knows it", with_sc(fact_scopes_decide_who_knows))
 check("reveal makes her secret shared", with_sc(reveal_makes_her_secret_shared))

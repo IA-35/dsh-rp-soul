@@ -25,6 +25,9 @@ IDEMPOTENCY_KEEP = 200
 # 每条幂等记录都躺着一份 6~20KB 的完整 context：1000 条能撑到 20MB，
 # 而真正会被重试的窗口只有最近几十次请求，砍到 200 条足够且省下十几 MB。
 
+# 删除审计只留最近五条：它是给「刚才那条怎么没了」用的，翻不到五条以前。
+DELETIONS_KEEP = 5
+
 # Every session is opened from a persona pack; the column stays for the
 # session list's "how was this opened" line.
 PERSONA_MODE = "persona"
@@ -481,9 +484,19 @@ def log_thought_delete(conn, session_id, turn, npc_id, thought_id, label, delta,
         "INSERT INTO thought_debug(session_id, turn, npc_id, thought_id, label, delta, reason, created_at) VALUES(?,?,?,?,?,?,?,?)",
         (session_id, turn, npc_id, thought_id, label, delta, reason, now),
     )
+    _keep_newest(conn, "thought_debug", session_id)
 
 
-def thought_deletions(conn, session_id, limit=20):
+def _keep_newest(conn, table, session_id):
+    """Drop everything but the newest DELETIONS_KEEP rows of this session."""
+    conn.execute(
+        "DELETE FROM %s WHERE session_id=? AND rowid < "
+        "(SELECT rowid FROM %s WHERE session_id=? ORDER BY rowid DESC LIMIT 1 OFFSET ?)" % (table, table),
+        (session_id, session_id, DELETIONS_KEEP - 1),
+    )
+
+
+def thought_deletions(conn, session_id, limit=DELETIONS_KEEP):
     rows = conn.execute(
         "SELECT turn, npc_id, thought_id, label, delta, reason, created_at FROM thought_debug "
         "WHERE session_id=? ORDER BY id DESC LIMIT ?",
@@ -498,9 +511,10 @@ def log_memory_delete(conn, session_id, turn, memory_id, layer, content, reason,
         "INSERT INTO memory_debug(session_id, turn, memory_id, layer, content, reason, created_at) VALUES(?,?,?,?,?,?,?)",
         (session_id, turn, memory_id, layer, content, reason, now),
     )
+    _keep_newest(conn, "memory_debug", session_id)
 
 
-def memory_deletions(conn, session_id, limit=20):
+def memory_deletions(conn, session_id, limit=DELETIONS_KEEP):
     rows = conn.execute(
         "SELECT turn, memory_id, layer, content, reason, created_at FROM memory_debug "
         "WHERE session_id=? ORDER BY id DESC LIMIT ?",
