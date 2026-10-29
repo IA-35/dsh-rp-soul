@@ -46,6 +46,10 @@ ABM_IDLE_MINUTES = 60
 DIARY_MINUTE = 23 * 60 + 30
 NOW_LIFESPAN_MINUTES = 24 * 60
 CLEAN_BELOW = 0.025
+# 记得多清楚，四档。写进上下文时用它代替小数：模型读「有些模糊了」就够，
+# 读 0.4317 只会让它把这个数当证据去推理。
+# 边界取自 SCM 的衰减曲线：0.7 / 0.4 / 0.1 分别是 3 天、7.6 天、19 天。
+CLEARNESS = ((0.7, "记忆犹新"), (0.4, "大概记得"), (0.1, "有些模糊了"), (0.0, "记不起来了"))
 TYPES = ("conversation", "experience", "action", "summary")
 # 留在 ABM 里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
@@ -95,6 +99,14 @@ def activity(entry, now):
         return entry["a0"]
     hours = max(0, now - entry["t0"]) / 60.0
     return entry["a0"] * (1.0 - DECAY[entry["layer"]]) ** hours
+
+
+def clearness(value):
+    """How well she remembers something, in words."""
+    for floor, name in CLEARNESS:
+        if value >= floor:
+            return name
+    return CLEARNESS[-1][1]
 
 
 def touch(entry, now, a0):
@@ -627,9 +639,15 @@ def inject(state, cue="", total=SCM_BRIEF):
     The age is the point: 「三天前」 and 「一小时前」 weigh differently to her, and
     a line with no time on it reads as if it happened just now.
     """
+    now = CL.to_abs(state["clock"])
     rows = []
     for entry in select(state, cue, total):
-        item = {"layer": LAYER_LABELS[entry["layer"]], "when": when_label(state, entry["at"]), "text": _clip(entry["content"])}
+        item = {
+            "layer": LAYER_LABELS[entry["layer"]],
+            "when": when_label(state, entry["at"]),
+            "clear": clearness(activity(entry, now)),
+            "text": _clip(entry["content"]),
+        }
         if entry.get("pinned"):
             item["pinned"] = True
         rows.append(item)

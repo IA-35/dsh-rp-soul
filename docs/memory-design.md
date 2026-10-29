@@ -110,6 +110,9 @@ score = 时间分 + importance × 场景重要度权重 + 关键词分 × 场景
 
 `ABM_IDLE_MINUTES = 60`、`DIARY_MINUTE = 23*60+30`、`CLEAN_BELOW = 0.025`。
 
+写进上下文时不报活跃度的小数，报四档：`CLEARNESS = ((0.7, "记忆犹新"), (0.4, "大概记得"), (0.1, "有些模糊了"), (0.0, "记不起来了"))`。
+边界对着 SCM 的曲线取：0.7 / 0.4 / 0.1 分别是 3 天、7.6 天、19 天。
+
 ## 9. 迁移
 
 `normalize_legacy` 把旧层名映射过来（`now→abm`、`temp/days→scm`、`events/years/chapter→clpa`），

@@ -459,6 +459,22 @@ def each_line_carries_its_age():
     assert rows and rows[0]["when"].startswith("3 天前"), rows
 
 
+def each_line_says_how_well_she_remembers_it():
+    """四档：记忆犹新 / 大概记得 / 有些模糊了 / 记不起来了。"""
+    state, persona = start()
+    assert [MEM.clearness(v) for v in (1.0, 0.7, 0.5, 0.4, 0.2, 0.1, 0.05, 0.0)] == [
+        "记忆犹新", "记忆犹新", "大概记得", "大概记得",
+        "有些模糊了", "有些模糊了", "记不起来了", "记不起来了",
+    ]
+    fresh = MEM.add(state, "scm", "summary", "刚说完的话", 0.5, at={"day": 4, "minute": 600})
+    old_one = MEM.add(state, "scm", "summary", "很久以前的事", 0.5, at={"day": 1, "minute": 600})
+    MEM.touch(old_one, MEM.CL.to_abs({"day": 1, "minute": 600}), 0.3)
+    state["clock"] = {"day": 4, "minute": 600}
+    rows = {row["text"]: row["clear"] for row in MEM.inject(state, "", MEM.SCM_FULL)}
+    assert rows["刚说完的话"] == "记忆犹新", rows
+    assert rows["很久以前的事"] == "有些模糊了", rows
+
+
 def the_threshold_drops_the_faint():
     state, persona = start()
     faint = MEM.add(state, "scm", "summary", "很久以前的一件小事", 0.02, at={"day": 1, "minute": 0})
@@ -644,6 +660,7 @@ check("the old chain becomes her memory", the_old_chain_becomes_her_memory)
 check("the most relevant SCM lines come back", the_most_relevant_scm_lines_come_back)
 check("only a few lines are carried", only_a_few_lines_are_carried)
 check("each line carries its age", each_line_carries_its_age)
+check("each line says how well she remembers it", each_line_says_how_well_she_remembers_it)
 check("the threshold drops the faint (not the pinned)", the_threshold_drops_the_faint)
 check("her secrets are in the context", her_secrets_are_in_context)
 check("the brief stays within 6 KB", the_brief_stays_within_budget)
