@@ -287,17 +287,21 @@ def _recount_requests(state):
     `requests` used to be written only at the end of a commit, so anything that
     became due while nobody was talking — 23:30 arriving mid-awakening, ABM
     filling up on host-noted turns — stayed invisible until the next commit.
-    Only fills what is empty: a batch the settings page asked for by hand must
-    survive until it is actually written.
+    A batch the settings page asked for by hand survives until it is written;
+    the engine's own batches are recomputed, so they grow with ABM instead of
+    freezing at the size they had when they first came due.
     """
     from .. import modules as MODULES
+    from ..domain import memories as MEM
 
     requests = state["requests"]
     # 设置页手动点过的那一批（还在等模型写）不能被重算掉
     kept = {key: requests.get(key) for key in ("memory_fold", "memory_diary")}
     MODULES.run(state, "close_record")
     for key, value in kept.items():
-        if value:
+        # 只保住手动那一批：引擎自己排的批次必须跟着 ABM 一起长，
+        # 冻在第一次满二十条那一刻的话，收完二十条剩下的永远收不走。
+        if isinstance(value, dict) and value.get("manual") and MEM.sources(state, value):
             requests[key] = value
 
 
@@ -1291,7 +1295,6 @@ def note_turn(ctx, payload):
     the turn counter -- that stays the model's job through commit-turn -- so
     an unplayed exchange is remembered without ageing the ledger.
     """
-    from .. import modules as MODULES
     from ..domain import memories as MEM
 
     payload = validate(specs.NOTE_TURN, payload)
@@ -1312,9 +1315,7 @@ def note_turn(ctx, payload):
                     "noted": False, "receipt": "这一轮已经记过了"}
         # 记进 ABM 之后，「该收了」的判断要跟着更新：不重算的话要等到下一次
         # 模型交账才会提示，而模型不交账正是这个命令存在的理由。
-        # 但设置页点过「立即总结」的批次不能被这里重算掉。
-        if state["requests"].get("memory_fold") is None:
-            MODULES.run(state, "close_record")
+        _recount_requests(state)
         state["revision"] = state.get("revision", 0) + 1
         repo.update_session(conn, state, now)
         return {"revision": state["revision"], "turn": state["turn"], "noted": True,
@@ -1340,6 +1341,10 @@ def summarize_memory(ctx, payload):
         entry = MEM.apply_fold(state, request, payload["text"], state["turn"],
                                keep=tuple(payload.get("keep") or ()))
         state["requests"]["memory_fold"] = None
+        # 记下「这一回合已经由宿主收过了」：模型手里可能还留着「该收了」，
+        # 跟着这一回合再交一次 memory_fold，那不该把整次提交驳回去。
+        paid = state["counters"].setdefault("host_paid", {})
+        paid["fold"] = state["turn"]
         # 收完 ABM 变了，下一次该不该再收 / 该不该写日记要跟着重算
         MODULES.run(state, "close_record")
         return "收成了一条记忆：%s" % entry["content"][:20], {"memory": MEM.row(state, entry)}
@@ -1361,7 +1366,8 @@ def request_memory(ctx, payload):
             raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
                            [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])
 
-        state["requests"][key] = request
+        # 打上 manual：重算时只保住手动点过的这一批，引擎自己排的会跟着 ABM 长
+        state["requests"][key] = dict(request, manual=True)
         return "下一次提交会先做%s（%d 条）" % (what, len(request["ids"])), {"request": MEM.request_view(state, request)}
 
     return _memory_write(ctx, "request-memory", specs.REQUEST_MEMORY, payload, change)

@@ -146,8 +146,42 @@ def a_diary_due_after_the_last_commit_shows_up_in_the_snapshot():
         assert context.get("memory_diary_sources"), context
 
 
+def the_pending_batch_grows_with_abm():
+    """收过一次之后剩下的要进下一批：批次冻在二十条的话剩下的永远收不走。"""
+    with game() as (ctx, clock, row):
+        conn = ctx.db()
+        db.begin_write(conn)
+        state = repo.load_session(conn, row["session_id"])["state"]
+        for i in range(42):
+            MEM.note_exchange(state, "第%d句话" % i, "嗯，我在。", turn=state["turn"])
+            service._recount_requests(state)
+        request = state["requests"]["memory_fold"]
+        assert request and len(MEM.sources(state, request)) == 42, request
+        MEM.apply_fold(state, request, "那天他一直在说话。", state["turn"])
+        state["requests"]["memory_fold"] = None
+        service._recount_requests(state)
+        assert MEM.of_layer(state, "abm") == [], MEM.of_layer(state, "abm")
+        conn.execute("COMMIT")
+
+
+def a_hand_asked_batch_survives_the_recount():
+    """设置页点过「立即汇总」的那一批不能被宿主重算掉。"""
+    with game() as (ctx, clock, row):
+        conn = ctx.db()
+        db.begin_write(conn)
+        state = repo.load_session(conn, row["session_id"])["state"]
+        entry = MEM.add(state, "abm", "conversation", "你来陪我吃了午饭。", 0.7, turn=0)
+        state["requests"]["memory_fold"] = {"ids": [entry["id"]], "manual": True}
+        service._recount_requests(state)
+        request = state["requests"]["memory_fold"]
+        assert request and request["ids"] == [entry["id"]], request
+        conn.execute("COMMIT")
+
+
 check("a diary due after the last commit shows in the snapshot",
       a_diary_due_after_the_last_commit_shows_up_in_the_snapshot)
+check("the pending batch grows with abm", the_pending_batch_grows_with_abm)
+check("a hand asked batch survives the recount", a_hand_asked_batch_survives_the_recount)
 check("read previews keep unanswered wake absence without writes", read_previews_keep_the_unanswered_wakes_absence)
 check("a real reply restores presence within the same minute", a_real_reply_restores_presence_without_waiting_a_whole_minute)
 run("continuity")

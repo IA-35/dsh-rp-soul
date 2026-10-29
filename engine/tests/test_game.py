@@ -651,6 +651,25 @@ def the_host_folds_abm_by_itself(s):
     assert again["code"] == "INVALID_INPUT", again
 
 
+def a_fold_the_subagent_already_paid_is_not_paid_twice(s):
+    """子代理先收了这一批，模型这次交的 fold 就不该再落一条 —— 那会是一段没有来源的记忆。"""
+    sid, rev, _ = e2e.start(s)
+    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
+                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
+    rev = out["revision"]
+    s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
+    rev = s.ok("debug-memories", {"session_id": sid})["revision"]
+    folded = s.ok("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s"), "expected_revision": rev,
+                                       "text": "那天他回来得晚，灯一直亮着。"})
+    rev = folded["revision"]
+    # 模型手里还留着「该收了」的旧印象，照样交了 memory_fold
+    play(s, sid, rev, ops=[npc_action()], memory_fold="他回来得晚，灯亮着。")
+    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
+    scm = [e for e in entries if e["layer"] == "scm"]
+    assert len(scm) == 1, scm
+    assert scm[0]["content"].startswith("那天他回来得晚"), scm
+
+
 def nothing_to_archive_is_refused(s):
     sid, rev, _ = e2e.start(s)
     err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "diary"})
@@ -779,6 +798,8 @@ check("the memory page shows her memories", with_sc(the_memory_page_shows_her_me
 check("editing a memory marks it yours", with_sc(editing_a_memory_marks_it_yours))
 check("the host notes a turn by itself", with_sc(the_host_notes_a_turn_by_itself))
 check("the host folds ABM by itself", with_sc(the_host_folds_abm_by_itself))
+check("a fold the subagent already paid is not paid twice",
+      with_sc(a_fold_the_subagent_already_paid_is_not_paid_twice))
 check("deleting a memory leaves an audit", with_sc(deleting_a_memory_leaves_an_audit))
 check("summarize now is paid by the next commit", with_sc(summarize_now_is_paid_by_the_next_commit))
 check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))

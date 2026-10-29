@@ -172,8 +172,11 @@ try {
   ok(subagentsSpawned[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
   const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
   eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
-  // 收完之后 ABM 只剩这一回合刚记下的那条（它进的是下一批）
-  eq(folded.filter((row) => row.layer === 'abm').length, 1, '10. 收完之后 ABM 不再堆着那一批');
+  // 批次跟着 ABM 一起长，所以这一批收完全部收干净，不留尾巴
+  eq(folded.filter((row) => row.layer === 'abm').length, 0, '10. 收完之后 ABM 清空');
+  // 连收两次之后不留尾巴：批次冻在二十条的话这里会剩二十条
+  const leftovers = folded.filter((row) => row.layer === 'scm');
+  ok(leftovers.length === 1, '10. 只落了一条 SCM');
   delete agentA.session;
   await fiber.dispose();
 
