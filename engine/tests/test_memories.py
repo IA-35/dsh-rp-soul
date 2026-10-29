@@ -134,6 +134,21 @@ def a_passing_action_is_dropped_after_a_day():
 # ABM -> SCM：满了或者搁置一小时，收成一条
 
 
+def passing_actions_do_not_bloat_abm():
+    """过场的动作也记在 ABM 里，但它们不该把这一层撑过二十条。"""
+    state, persona = start()
+    for i in range(MEM.CAPACITY["abm"]):
+        MEM.add(state, "abm", "conversation", "第%d句" % i, 0.5, turn=i + 1)
+    for i in range(5):
+        MEM.add(state, "abm", "action", "她应了一声", 0.2, turn=MEM.CAPACITY["abm"] + 1)
+    report = MEM.maintain(state)
+    assert len(report["dropped"]) == 5, report
+    assert len(MEM.of_layer(state, "abm")) == MEM.CAPACITY["abm"]
+    # 被挤掉的只是动作，能收的那批原封不动
+    request = MEM.abm_batch(state)
+    assert request and len(request["ids"]) == MEM.CAPACITY["abm"], request
+
+
 def a_full_abm_asks_to_be_folded():
     """ABM 满 20 条就要收成一条 SCM。"""
     state, persona = start()
@@ -564,6 +579,7 @@ check("without remember the summary is kept", without_remember_the_summary_is_ke
 check("importance follows the turn's feelings", importance_follows_the_feelings)
 check("ABM is never injected", abm_is_never_injected)
 check("a passing action is dropped after a day", a_passing_action_is_dropped_after_a_day)
+check("passing actions do not bloat ABM", passing_actions_do_not_bloat_abm)
 check("a full ABM asks to be folded", a_full_abm_asks_to_be_folded)
 check("a quiet hour asks to be folded", a_quiet_hour_asks_to_be_folded)
 check("the fold makes one SCM and clears the batch", the_fold_makes_one_scm_and_clears_the_batch)

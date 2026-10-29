@@ -397,7 +397,7 @@ routine:
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结。心情、记忆、常识、时间、在场「当前局面」每轮都已写进上下文，这里不再重复一遍。`want_twist` 取转折 |
+| `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结。心情、记忆、常识、时间、在场、该交的总结「当前局面」每轮都已写进上下文，这里不再重复一遍。不是每轮都必调——快照里没有的（比如 `agency` 候选）才需要读。`want_twist` 取转折 |
 | `soul_commit` | 写完这一次后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。可选的 `remember` 用第一人称写她会怎么记得这一次；引擎要把 ABM 收进 SCM / 写日记时，这次提交带上 `memory_fold` / `memory_diary`（汇总时可加 `memory_keep` 挑 0~2 条进 CLPA）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这次过了多久 |
 | `soul_admin` | 开局（`start`，全局作用域下通常不必手动开）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
 

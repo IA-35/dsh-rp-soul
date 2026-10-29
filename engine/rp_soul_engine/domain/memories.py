@@ -270,6 +270,16 @@ def maintain(state):
         else:
             keep.append(entry)
     items[:] = keep
+    # 动作类垫着 ABM 会让它胀过二十条：满的时候就先把最老的动作丢掉，
+    # 应收的那批一条不动（它们等 fold）。
+    limit_abm = CAPACITY["abm"]
+    in_abm = [e for e in items if e["layer"] == "abm" and not e.get("pinned")]
+    if len(in_abm) > limit_abm:
+        spare = sorted([e for e in in_abm if e["type"] not in KEEPS],
+                       key=lambda e: (CL.to_abs(e["at"]), _num(e)))
+        for entry in spare[: len(in_abm) - limit_abm]:
+            items.remove(entry)
+            report["dropped"].append(entry["id"])
     # forgotten: SCM ages out; CLPA never fades, ABM is emptied by the fold
     faded = [e for e in items if e["layer"] == "scm" and not e.get("pinned")
              and activity(e, now) < CLEAN_BELOW]

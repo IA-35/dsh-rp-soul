@@ -114,6 +114,10 @@ try {
     ],
   };
   hasNot(engineText(await assemble(agentA)), '### 常识', '8. 别人注入的上下文不算你说的话');
+  // 快照里已经写着局面了，别再让模型每轮白跑一趟 soul_state 才敢动笔。
+  const snap = engineText(await assemble(agentA));
+  hasNot(snap, '写之前用 soul_state', '8. 快照不要求每轮先调 soul_state');
+  has(snap, '写完用 soul_commit 交账', '8. 快照仍要求交账');
   delete agentA.session;
   await fiber.dispose();
 
