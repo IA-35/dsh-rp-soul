@@ -56,6 +56,10 @@ hasNot(plain, '{when}', '4. 时刻占位符被替换');
 const withPlan = renderWakeText({ root, when: '23:00', why: 'qu xizao', player: 'xiaolin' });
 has(withPlan, 'qu xizao', '4. 有计划时说明理由');
 
+const withDiary = renderWakeText({ root, when: '23:30', reason: 'diary', why: '该把今天写进日记了', player: 'xiaolin' });
+has(withDiary, '该把今天写进日记了', '4. 日记那次要说清为什么醒');
+hasNot(withDiary, '这是我说好做到的时间', '4. 日记不是我说好的时间，不能套那句');
+
 writeFileSync(join(root, 'rp-soul', 'wake.md'), 'hi {when}{why}\n', 'utf8');
 const custom = renderWakeText({ root, when: '07:30', why: 'shuijiao', player: 'xiaolin' });
 has(custom, 'hi 07:30', '4. 模板文件整份覆盖');

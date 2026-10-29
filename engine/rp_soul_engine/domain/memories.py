@@ -433,10 +433,14 @@ def diary_request(state):
     before 23:30 nothing is asked for, and a day already written is not asked
     for again even if later turns add more to it.
     """
-    if state["clock"]["minute"] < DIARY_MINUTE:
-        return None
     day, ids = diary_sources(state)
-    return {"day": day, "ids": ids} if ids else None
+    if not ids:
+        return None
+    # 欠着昨天以前的，就是过了点没写成：什么时候想起来都该补。
+    # 只看「当前是不是过了 23:30」的话，跨过午夜就永远补不上了。
+    if day >= state["clock"]["day"] and state["clock"]["minute"] < DIARY_MINUTE:
+        return None
+    return {"day": day, "ids": ids}
 
 
 def apply_diary(state, request, text):

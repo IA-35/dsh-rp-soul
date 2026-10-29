@@ -281,6 +281,26 @@ def _refresh_persona(conn, state, persona, raw, now):
 # get-context
 
 
+def _recount_requests(state):
+    """Recompute what the model owes before handing it a snapshot.
+
+    `requests` used to be written only at the end of a commit, so anything that
+    became due while nobody was talking — 23:30 arriving mid-awakening, ABM
+    filling up on host-noted turns — stayed invisible until the next commit.
+    Only fills what is empty: a batch the settings page asked for by hand must
+    survive until it is actually written.
+    """
+    from .. import modules as MODULES
+
+    requests = state["requests"]
+    # 设置页手动点过的那一批（还在等模型写）不能被重算掉
+    kept = {key: requests.get(key) for key in ("memory_fold", "memory_diary")}
+    MODULES.run(state, "close_record")
+    for key, value in kept.items():
+        if value:
+            requests[key] = value
+
+
 def get_context(ctx, payload):
     payload = validate(specs.GET_CONTEXT, payload)
     conn = ctx.db()
@@ -305,6 +325,7 @@ def get_context(ctx, payload):
                 conn.execute("ROLLBACK")
             raise
     state = SETTLE.preview(state, now_iso())
+    _recount_requests(state)
     project = CX.full if payload["depth"] == "full" else CX.brief
     context = project(state, persona, save_info(session), payload["cue"])
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}

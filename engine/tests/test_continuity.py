@@ -132,6 +132,22 @@ check("a diary commit writes its file and replays once", diary_commit_writes_a_f
 check("separate games keep their own diary files", separate_games_keep_their_own_diary_files)
 check("fold receipts identify the SCM entry", fold_receipt_names_the_new_scm_entry)
 check("a rejected diary commit leaves no file", rejected_diary_commit_leaves_the_request_and_no_file)
+def a_diary_due_after_the_last_commit_shows_up_in_the_snapshot():
+    """23:30 的唤醒到达时，上一轮 commit 早过了：这一轮必须看得见该写日记了。"""
+    with game() as (ctx, clock, row):
+        conn = ctx.db()
+        db.begin_write(conn)
+        state = repo.load_session(conn, row["session_id"])["state"]
+        MEM.add(state, "scm", "summary", "你今天来陪我吃了午饭。", 0.9, at={"day": 1, "minute": 1200})
+        repo.update_session(conn, state, T0)
+        conn.execute("COMMIT")
+        clock.return_value = "2026-10-28T23:30:00+08:00"
+        context = service.get_context(ctx, {"session_id": row["session_id"]})["context"]
+        assert context.get("memory_diary_sources"), context
+
+
+check("a diary due after the last commit shows in the snapshot",
+      a_diary_due_after_the_last_commit_shows_up_in_the_snapshot)
 check("read previews keep unanswered wake absence without writes", read_previews_keep_the_unanswered_wakes_absence)
 check("a real reply restores presence within the same minute", a_real_reply_restores_presence_without_waiting_a_whole_minute)
 run("continuity")

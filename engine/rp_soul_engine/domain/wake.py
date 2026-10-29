@@ -182,7 +182,8 @@ def _diary_candidate(state):
         clock = CL.add_minutes(state["clock"], 1)
     return [_candidate(
         "diary", clock,
-        "该把今天写进日记了",
+        "该把今天写进日记了" if day == state["clock"]["day"]
+        else "第 %d 天的日记还欠着，该补上了" % day,
         day=day, entries=len(ids),
     )]
 
