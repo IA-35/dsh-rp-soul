@@ -53,8 +53,9 @@ RimTalk 的原始设计里，记忆是**一堆带活跃度的条目**：被想�
 
 ## 4. 日记
 
-- 定时任务，不是模型欠的账：`diary_request(state)` 只在 `clock.minute >= DIARY_MINUTE`（23:30）时才返回东西。
+- 定时任务，不是模型欠的账：`diary_request(state)` 在 23:30 之后才返回东西；**过了午夜还欠着的也照样返回**，不然 23:30 那次唤醒被推后（你在说话 / 会话在跑 / 额度用完），跨过零点就再也写不出来了。
 - 取**最早一个还没写过的日子**的 SCM（`diary_sources`）——23:30 那会儿没人说话，第二天醒来也要补上昨天。
+- `get-context` 每次读快照前重算一遍 `requests`：到点这件事可能发生在上一轮 commit 之后，不重算的话这一轮根本看不见「该写日记了」。
 - `counters["last_diary_day"]` 记住写到哪天，同一天不写第二遍（后来的条目进第二天的日记）。
 - `apply_diary` 不删任何 SCM，只给条目盖 `diary_day` 章。
 - 落盘走 `service.py` 的 `_plan_journal` / `_flush_journal`：写 `journal/<session_id>/diary-<日>.md`，不同账本不会互相覆盖；写失败只是少一份日记，不挡提交。
