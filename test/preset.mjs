@@ -53,8 +53,12 @@ has(refused, 'entries', '2. 不是 RimTalk 预设时说清缺什么');
 const home = mkdtempSync(join(tmpdir(), 'soulpreset-'));
 process.env.DSH_HOME = home;
 mkdirSync(join(home, 'rp-soul'), { recursive: true });
-// 老的多文件还在，预设一旦存在就必须盖过它。
-writeFileSync(join(home, 'SOUL.md'), '多文件里的一句。\n', 'utf8');
+mkdirSync(join(home, 'rp-soul', 'presets'), { recursive: true });
+writeFileSync(join(home, 'SOUL.md'), '<!-- soul-part: 根目录 -->\n从 SOUL.md 搬过来的。\n', 'utf8');
+writeFileSync(join(home, 'rp-soul', 'presets', '别的.md'), '<!-- soul-part: 目录里 -->\n预设目录里那份。\n', 'utf8');
+writeFileSync(join(home, 'rp-soul', 'presets', 'rim.json'), JSON.stringify({
+  version: 1, name: 'r', entries: [{ name: 'A', content: '目录里的 RimTalk 预设。' }],
+}), 'utf8');
 const presetPath = join(home, 'rp-soul', 'preset.md');
 writeFileSync(presetPath, md, 'utf8');
 
@@ -128,6 +132,29 @@ eq(exported.statusCode, 200, '4. 导出 200');
 eq(JSON.parse(exported.body).json.entries[0].content, '从 RimTalk 来的。', '4. 导出内容一致');
 
 ok(existsSync(presetPath), '4. 预设文件还在');
+
+// 从磁盘导入：先列出能吃的文件，再按 rel 读进来。
+const listed = await call('GET', '/rp-soul/preset?files=1');
+eq(listed.statusCode, 200, '5. 列可导入文件 200');
+const rels = JSON.parse(listed.body).files.map((one) => one.rel);
+eq(rels.length, 3, '5. 列了三个能吃的文件');
+ok(rels.indexOf('SOUL.md') >= 0 && rels.indexOf('rp-soul/presets/别的.md') >= 0 && rels.indexOf('rp-soul/presets/rim.json') >= 0, '5. 根目录 SOUL.md 与预设目录都在列表里');
+eq(JSON.parse(listed.body).files.every((one) => one.bytes > 0), true, '5. 空文件不进列表');
+
+const fromRoot = await call('POST', '/rp-soul/preset', { from: 'SOUL.md' });
+eq(fromRoot.statusCode, 200, '5. 从 SOUL.md 导入 200');
+eq(sections.get('soul-persona').text(), '从 SOUL.md 搬过来的。', '5. 导入后合成换成 SOUL.md 的内容');
+
+const fromDir = await call('POST', '/rp-soul/preset', { from: 'rp-soul/presets/rim.json' });
+eq(fromDir.statusCode, 200, '5. 从目录里的 RimTalk JSON 导入 200');
+eq(sections.get('soul-persona').text(), '目录里的 RimTalk 预设。', '5. 目录里的 JSON 也认');
+
+const outside = await call('POST', '/rp-soul/preset', { from: 'rp-soul/presets/不存在.md' });
+eq(outside.statusCode, 400, '5. 不在列表里的路径被拒');
+has(JSON.parse(outside.body).error, '没有可导入的文件', '5. 拒绝理由说清楚');
+
+const escape = await call('POST', '/rp-soul/preset', { from: '../etc/passwd' });
+eq(escape.statusCode, 400, '5. 越界路径被拒');
 
 await fiber.dispose();
 done('preset');

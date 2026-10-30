@@ -107,9 +107,12 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 - **点左边的块改那一块**，不用在整份文本里找位置；块名只是给人看的。
 - **勾掉 = 不注入**：内容原样留在文件里，随时勾回来。
-- **导入**：吃 `.md`（同样格式的预设）和 `.json`（RimTalk 的 `preset.json`，
+- **从文件导入**：点「从文件导入」会扫一遍盘上现成的预设，列出来让你点，不用翻文件对话框。
+  扫两处：`rp-soul/presets/`（自己往里放）和根目录的 `SOUL.md`（老用户现成的就在这儿）。
+  吃 `.md` / `.txt`（同样格式的预设）和 `.json`（RimTalk 的 `preset.json`，
   `{entries:[{name, content, enabled}]}` 那种）。RimTalk 的 `role` / `position` 会被丢掉 ——
   人设永远是一段系统提示，那两个字段在这儿没有对应物。
+- **导入**（旁边的按钮）：直接挑一个文件，不上传、只读内容，一样的三种格式都认。
 - **导出**：`.md` 用来备份 / 换机器，`.json` 能直接给 RimTalk 读。
 - 没有块标记的老预设照样能用：整份算一块。
 - **编辑**：点左边某一块，右边就是那一块；改完点「保存预设」，下一条消息即生效。
@@ -220,7 +223,8 @@ RimTalk-ExpandMemory 工作台的简化版：
 | GET | `/rp-soul/state` | 快照：配置 + 各文件元信息 + 库列表 + 合成预览 + 预设块 |
 | GET | `/rp-soul/preset` | 读人设预设：块列表 + 合成后的文本 |
 | GET | `/rp-soul/preset?export=rimtalk` | 导出成 RimTalk 的 `preset.json` 形状 |
-| POST | `/rp-soul/preset` | 写预设：`{blocks}` / `{text}` / `{import}`（`.md` 文本或 RimTalk JSON） |
+| GET | `/rp-soul/preset?files=1` | 列出能导入的文件（`rp-soul/presets/` + 根目录 `SOUL.md`） |
+| POST | `/rp-soul/preset` | 写预设：`{blocks}` / `{text}` / `{import}`（`.md` 文本或 RimTalk JSON）/ `{from}`（盘上的 rel） |
 | GET | `/rp-soul/config` | 读生效配置 |
 | POST | `/rp-soul/config` | 写配置 `{separator, enabled, maxBytes, title, personaId}` |
 | GET | `/rp-soul/engine` | 引擎健康 + 人设摘要 + 当前这一局 |
