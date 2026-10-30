@@ -1,7 +1,7 @@
 /* 真 HTTP + 真 Python 侧车：验 /rp-soul/engine* 这几条设置页路由。
  * 与 engine.mjs 的分工：那边验工具语义（mock ctx），这边验路线与 JSON 形状。 */
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
@@ -241,6 +241,40 @@ const ctxr = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(
 eq(ctxr.status, 200, '8. /engine/session 200');
 ok(ctxr.body.context !== undefined && typeof ctxr.body.context === 'object', '8. 带回 context');
 eq(ctxr.body.context.depth, 'brief', '8. 默认 brief');
+
+// ---- 9. DELETE /engine/wipe：从零开始 ----
+// 先确认确实有东西可删，否则「删干净了」证明不了什么
+const beforeWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
+ok(Array.isArray(beforeWipe.body.entries) && beforeWipe.body.entries.length > 0, '9. 清空前有记忆');
+const engineDir = join(home, 'rp-soul', 'engine');
+ok(existsSync(join(engineDir, 'engine.db')), '9. 清空前有数据库');
+mkdirSync(join(engineDir, 'backups'), { recursive: true });
+writeFileSync(join(engineDir, 'backups', 'old.db'), 'x');
+
+// 不带 confirm 必须被挡
+const noConfirm = await j('/rp-soul/engine/wipe', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: '{}' });
+eq(noConfirm.status, 400, '9. 没有 confirm 就拒掉');
+
+const wiped = await j('/rp-soul/engine/wipe', {
+  method: 'DELETE',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ confirm: true }),
+});
+eq(wiped.body.ok, true, '9. 清空成功（' + JSON.stringify(wiped.body.error ?? '') + '）');
+eq(wiped.body.db, true, '9. 数据库被删');
+// 删完会立刻开新局，engine.db 又会被建出来 —— 所以「删没删」看的是回执与新局内容，不是文件在不在
+ok(wiped.body.backups >= 1, '9. 备份目录里那一份也被删了（' + wiped.body.backups + '）');
+// 开了新局，且它跟旧局不是同一个
+ok(typeof wiped.body.session_id === 'string' && wiped.body.session_id !== sid, '9. 新局已开好');
+
+// 新局是空的：记忆一条都没有
+const afterWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(wiped.body.session_id));
+ok(Array.isArray(afterWipe.body.entries) && afterWipe.body.entries.length === 0, '9. 新局没有旧记忆');
+eq(afterWipe.body.turn, 0, '9. 新局从第 0 回合开始');
+
+// 人设没被动：前面的用例改过标题，所以只验「还读得出来、还是同一个人」
+const personaAfter = await j('/rp-soul/engine');
+ok(typeof personaAfter.body.persona?.title === 'string' && personaAfter.body.persona.title !== '', '9. 清空不动人设');
 
 await new Promise((r) => server.close(r));
 done('engine-http');

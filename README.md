@@ -116,6 +116,12 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 改完点保存写回文件，点「看 YAML」看原文，「校验」直接把这份人设交给引擎校验。
 没有任何人填的「当前目标 / 处境」——那些由引擎按心情、关系、到期的事现场测算。
 
+### 从零开始
+
+「引擎（账本）」那张卡片底部有个「清空引擎数据」。会话、记忆、情绪、常识、存档备份、落盘的日记，
+一起删掉，然后**立刻开一局新的**；人设、提示词文件、设置都不动。
+点之前要输「清空」两个字——这一步没法撤销，`backups/` 也一起删了。
+
 ### 情绪
 
 每次重算的**心情条**（RimWorld 式：基准 + 一组带衰减的 thought，夹在 0..100）：
@@ -222,6 +228,7 @@ RimTalk-ExpandMemory 工作台的简化版：
 | DELETE | `/rp-soul/engine/common` | 删一条 `{common_id}` |
 | PUT | `/rp-soul/engine/common/limit` | 每次注入几条 `{limit: 2..4}` |
 | DELETE | `/rp-soul/engine/thought` | 手动删一条情绪 `{session_id, npc_id, thought_id, revision, reason}` |
+| DELETE | `/rp-soul/engine/wipe` | 清空引擎数据从零开始 `{confirm: true}`（会话、记忆、常识、备份、日记一起删，人设与设置不动） |
 | GET | `/rp-soul/wake` | 「唤醒」页：配置 + 定时器状态 + 可指定的会话清单 |
 | POST | `/rp-soul/wake` | 改唤醒配置（字段同上表 `配置` 一节） |
 | POST | `/rp-soul/wake/now` | 现在叫醒一次（绕过时刻与安静时段，照样计额度） |
