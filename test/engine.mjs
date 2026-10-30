@@ -184,12 +184,15 @@ ok(turnCommitted.committed === true, '6e. 这一轮交了账（' + JSON.stringif
 noteAgent.session = { deriveMessages: () => [...talk('今晚忙吗', '还行，就是雨大。'), { id: 'a-more', role: 'assistant', content: [{ type: 'text', text: '你先坐。' }] }] };
 await stopping({ agent: noteAgent });
 eq((await notedOf()).length, before6e, '6e. 交过账的那一轮只有交账那一条，不会再记一条「你：… 她：…」');
-// 下一轮没交账：宿主自己记一条
-noteAgent.session = { deriveMessages: () => talk('伞放哪儿', '门边就行。') };
-await stopping({ agent: noteAgent });
+// 没交账：攒够几轮之后由宿主自己记一条（一条 ABM 讲的是一件事，不是一句话）
+const lines = [['伞放哪儿', '门边就行。'], ['雨这么大', '伞还在门口。'], ['你带伞了吗', '我不用。'], ['那我走了', '路上慢点。']];
+for (const [one, two] of lines) {
+  noteAgent.session = { deriveMessages: () => talk(one, two) };
+  await stopping({ agent: noteAgent });
+}
 const after6e = await notedOf();
-eq(after6e.length, before6e + 1, '6e. 没交账的那一轮由宿主记一条');
-ok(after6e.some((e) => e.content === '你：伞放哪儿 她：门边就行。'), '6e. 记的是这一轮的一问一答');
+eq(after6e.length, before6e + 1, '6e. 攒够几轮，宿主自己记一条');
+ok(after6e.some((e) => String(e.content).includes('伞放哪儿') && String(e.content).includes('路上慢点')), '6e. 记的是这几轮铺开的样子');
 // 子代理那一轮结束也不记
 await stopping({ agent: { id: 'child-1', session: { header: { origin: 'subagent' }, deriveMessages: () => talk('把下面这一批收成一条', '那天雨很大。') } } });
 eq((await notedOf()).length, after6e.length, '6e. 子代理那一轮结束不当成她的对话记下来');

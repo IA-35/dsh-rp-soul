@@ -1332,6 +1332,7 @@ def note_turn(ctx, payload):
         entry, duplicate = MEM.note_exchange(
             state, said, reply, turn=state["turn"],
             together=bool(state.get("together", True)) if payload["together"] is None else payload["together"],
+            text=payload["text"].strip(),
         )
         if entry is None:
             return {"revision": state.get("revision", 0), "turn": state["turn"],

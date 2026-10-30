@@ -225,8 +225,10 @@ DELETE_MEMORY = _obj(
 NOTE_TURN = _obj(
     dict(
         session_write_fields(),
-        said=F(S.Str(0, 500), desc="主人这一轮说的话（宿主从会话里取的原文）"),
-        reply=F(S.Str(0, 2000), desc="TA这一轮说的话（宿主从会话里取的原文）"),
+        text=F(S.Str(0, 4000), required=False, default="",
+               desc="攒了若干轮之后合成的一段：这期间到底发生了什么。带了它就不看 said / reply"),
+        said=F(S.Str(0, 800), required=False, default="", desc="主人这一轮说的话（宿主从会话里取的原文）"),
+        reply=F(S.Str(0, 2400), required=False, default="", desc="TA这一轮说的话（宿主从会话里取的原文）"),
         together=F(S.Nullable(S.Bool()), required=False, default=None,
                    desc="这一轮你在不在；她自己醒来的那一轮是 false。不带就沿用账本里上一次的"),
     ),

@@ -54,7 +54,10 @@ CLEARNESS = ((0.7, "记忆犹新"), (0.4, "大概记得"), (0.1, "有些模糊�
 TYPES = ("conversation", "experience", "action", "summary")
 # 留在 ABM 里过期后还要往下走的类型；动作类到期就丢（和 RimTalk 一样）
 KEEPS = ("conversation", "experience")
-CONTENT_MAX = 300
+# 一条 ABM 的正文上限。RimTalk 那种一句一轮的对话，两百字就是全部内容；
+# DSH 里一轮可能是一整件事，截在三百会把它截成一句摘要。写入时不砍，
+# 只在注入（TEXT_MAX）那一步收窄 —— 存下来的和读出来的不该是同一个额度。
+CONTENT_MAX = 4000
 YOU_MAX = 60
 # 一条 SCM 的正文长度（一批 ABM 合成一条）
 SUMMARY_MAX = 300
@@ -231,10 +234,10 @@ def capture(state, ctx, commit):
     return added
 
 
-SAID_MAX = 120
+SAID_MAX = 800
 # 记住最近算过轻重的那些心事 id，够覆盖一小时里冒出来的就行
 WEIGHED_KEEP = 50
-REPLY_MAX = 120
+REPLY_MAX = 2400
 
 
 def _said(text, limit):
@@ -269,32 +272,39 @@ def _exchange_importance(state):
     return min(1.0, 0.3 + min(0.5, weight / 30.0))
 
 
-def note_exchange(state, said, reply, turn=None, together=True, at=None):
+def note_exchange(state, said, reply, turn=None, together=True, at=None, text=""):
     """A turn remembered straight from the exchange, without the model.
 
     RimTalk's rule: the memory comes from the event being intercepted, not from
     the model volunteering to write one down. So the host hands over what was
     actually said on both sides and this writes the ABM entry itself.
 
+    `text` is what the host writes when it has been batching: several turns
+    spelled out as one paragraph, tools and all. Given one, the exchange pair
+    is ignored -- the paragraph already contains it.
+
     Returns (entry, duplicate). A duplicate is the same exchange already noted
     (the host re-fires on a retried turn), and adds nothing.
     """
-    said = _said(said, SAID_MAX)
-    reply = _said(reply, REPLY_MAX)
-    if not said and not reply:
-        return None, False
-    # 「你：… 她：…」：她说的话是这段记忆的主体，你的话是触发它的那半句
-    if said and reply:
-        content = "你：%s 她：%s" % (said, reply)
+    if text:
+        content = _said(text, CONTENT_MAX)
     else:
-        content = said or reply
+        said = _said(said, SAID_MAX)
+        reply = _said(reply, REPLY_MAX)
+        if not said and not reply:
+            return None, False
+        # 「你：… 她：…」：她说的话是这段记忆的主体，你的话是触发它的那半句
+        if said and reply:
+            content = "你：%s 她：%s" % (said, reply)
+        else:
+            content = said or reply
     for entry in entries(state):
         if entry["layer"] == "abm" and entry["type"] in KEEPS and entry["content"] == content:
             return entry, True
     entry = add(
         state, "abm", "conversation" if together else "experience", content, _exchange_importance(state),
         at=at, turn=turn,
-        you=said[:YOU_MAX],
+        you=(said or "")[:YOU_MAX],
         exchanged=True,
     )
     return entry, False
@@ -564,6 +574,8 @@ def prune_requests(state):
 
 
 BRIEF_SOURCES = 12
+# 紧凑视图只给注入用（快照里那几行提示）。真要读原文的是子代理，它走
+# request_view(compact=False) 拿全文，所以这里不必放宽 —— 放宽只会挤掉 brief 里的记忆。
 BRIEF_SOURCE_TEXT = 30
 
 

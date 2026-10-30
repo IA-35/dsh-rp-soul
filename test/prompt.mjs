@@ -163,15 +163,28 @@ try {
     ],
   };
   const before = next;
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  // 单轮先攒着：一条 ABM 该讲的是一件事，不是一句话。
+  // 同一轮被重发（重试、刷新）也不会压成两条。
+  const fireOnce = () => app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  await fireOnce();
+  await fireOnce();
+  const kept = (await client.call('debug-memories', { session_id: before.session_id })).entries;
+  eq(kept.filter((row) => String(row.content).includes('灯还亮着吗')).length, 0, '9. 一轮先攒着，不成条');
+  // 攒够四轮就落一条，内容是这几轮铺开的样子
+  for (let i = 0; i < 4; i += 1) {
+    agentA.session = {
+      deriveMessages: () => [
+        { id: 'u' + i, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '第' + i + '句' }] },
+        { id: 'a' + i, role: 'assistant', content: [{ type: 'text', text: '嗯' + i }] },
+      ],
+    };
+    await fireOnce();
+  }
   const noted = (await client.call('debug-memories', { session_id: before.session_id })).entries;
-  const line = noted.find((row) => row.content === '你：灯还亮着吗 她：亮着。你回来晚了。');
-  ok(line !== undefined, '9. 回合结束时宿主自己记一条（模型没交账也不丢）');
-  // 重发同一回合（宿主重试、刷新）不该变成两条。
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  const twice = (await client.call('debug-memories', { session_id: before.session_id })).entries
-    .filter((row) => row.content === '你：灯还亮着吗 她：亮着。你回来晚了。');
-  eq(twice.length, 1, '9. 同一回合重发不会记成两条');
+  const line = noted.find((row) => String(row.content).includes('第0句'));
+  ok(line !== undefined, '9. 攒够几轮，回合结束时宿主自己记一条（模型没交账也不丢）');
+  ok(String(line.content).includes('灯还亮着吗'), '9. 攒着的前几轮也一起记进去');
+  eq(noted.filter((row) => String(row.content).includes('第0句')).length, 1, '9. 同一批只落一条');
   // 攒够二十条之后，收成一条这件事交给子代理，也不再等模型交账。
   // 这里只验插件有没有真的去起子代理、并把它写的话落进 SCM。
   const foldGame = await start();
