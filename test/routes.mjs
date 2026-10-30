@@ -8,10 +8,26 @@ import { eq, ok, has, hasNot, done } from './_check.mjs';
 const home = mkdtempSync(join(tmpdir(), 'soulhome-'));
 process.env.DSH_HOME = home;
 mkdirSync(join(home, 'rp-soul'), { recursive: true });
-mkdirSync(join(home, 'rp-soul', 'parts'), { recursive: true });
-writeFileSync(join(home, 'SOUL.md'), '你是暗夜侦探。\n\n说话简短、冷静。\n', 'utf8');
-writeFileSync(join(home, 'STYLE.md'), '口吻：第一人称，不超过三句。\n', 'utf8');
-writeFileSync(join(home, 'rp-soul', 'evil.md'), '这个文件有 {{user}} 占位符\n', 'utf8');
+writeFileSync(
+  join(home, 'rp-soul', 'preset.md'),
+  [
+    '<!-- soul-part: 身份 -->',
+    '你是暗夜侦探。',
+    '',
+    '说话简短、冷静。',
+    '',
+    '<!-- soul-part: 口吻 -->',
+    '口吻：第一人称，不超过三句。',
+    '',
+    '<!-- soul-part: 占位 -->',
+    '这个块有 {{user}} 占位符',
+    '',
+    '<!-- soul-part: 草稿 -->',
+    '这一块是草稿，不该进提示词。',
+    '',
+  ].join('\n'),
+  'utf8'
+);
 
 const mod = await import(new URL('../lib/index.js', import.meta.url).href);
 
@@ -43,7 +59,7 @@ const ctx = {
     context(def) { contextDefs.set(def.name, def); return () => {}; },
   },
 };
-mod.apply(ctx, { files: ['SOUL.md', 'STYLE.md'], maxBytes: 65536 });
+mod.apply(ctx, { maxBytes: 65536 });
 
 // ---- 1. section ----
 ok(sectionDefs.has('soul-persona'), '1. soul-persona section 已注册');
@@ -54,11 +70,10 @@ eq(contextDefs.get('soul-engine').order, 220, '1. 账本落在动态上下文末
 eq(tools.length, 3, '1. 注册了 3 个工具');
 eq(tools.map((t) => t.name).sort().join(','), 'soul_admin,soul_commit,soul_state', '1. 三个工具名');
 const text = sectionDefs.get('soul-persona').text();
-has(text, '你是暗夜侦探', '1. 合成文本含 SOUL.md');
-has(text, '第一人称', '1. 合成文本含 STYLE.md');
-// annotate 默认 false（见 lib/index.js:32），所以默认合成文本里不该有分段注释
-hasNot(text, '<!-- soul-part:', '1. 默认 annotate=false 不带分段注释');
-eq(text, ['你是暗夜侦探。', '说话简短、冷静。', '口吻：第一人称，不超过三句。'].join('\n\n'), '1. 默认 separator 用两个换行拼接并裁掉首尾空白');
+has(text, '你是暗夜侦探', '1. 合成文本含第一块');
+has(text, '第一人称', '1. 合成文本含第二块');
+hasNot(text, '<!-- soul-part:', '1. 标记本身不进提示词');
+ok(text.indexOf('暗夜侦探') < text.indexOf('第一人称'), '1. 顺序 = 块在文件里的顺序');
 
 // ---- 2. 路由 ----
 eq(routes.length, 1, '2. 只注册一条前缀路由');
@@ -95,55 +110,61 @@ async function call(method, url, body) {
 const st = await call('GET', '/rp-soul/state');
 eq(st.status, 200, '3. GET /state 200');
 eq(st.headers['cache-control'], 'no-store', '3. /state 不许缓存');
-// 首装会把种子文件补进清单（cordis 里的 files + 一份角色档案），所以多一个角色档案。
-eq(st.parsed.config.files, ['SOUL.md', 'STYLE.md', 'rp-soul/parts/角色档案.md'], '3. /state 回配置 files（含首装种子）');
-ok(Array.isArray(st.parsed.library), '3. /state 回 library 数组');
-ok(st.parsed.library.includes('SOUL.md'), '3. library 含 SOUL.md');
-ok(st.parsed.library.includes('STYLE.md'), '3. library 含 STYLE.md');
+eq(st.parsed.config.files, undefined, '3. /state 不再回 files（多文件那套删了）');
+eq(st.parsed.library, undefined, '3. /state 不再回 library');
+eq(st.parsed.preset.rel, 'rp-soul/preset.md', '3. /state 回预设路径');
+eq(st.parsed.preset.exists, true, '3. /state 说预设存在');
+ok(Array.isArray(st.parsed.preset.blocks) && st.parsed.preset.blocks.length === 4, '3. 预设拆出 4 块');
 ok(st.parsed.composed.chars > 0, '3. /state 回合成预览字数');
-ok(!('parts' in st.parsed) || st.parsed.parts !== undefined, '3. parts 字段存在性不强制');
 
-// ---- 4. 越界路径必须被拒 ----
-for (const bad of ['../../etc/passwd', 'C:/Windows/win.ini', '..', '', 'a/../../b']) {
-  const r = await call('GET', '/rp-soul/file?rel=' + encodeURIComponent(bad));
-  eq(r.status, 400, `4. 越界路径 ${JSON.stringify(bad)} 必须 400`);
-}
+// ---- 4. 逐块读写预设 ----
+const pg = await call('GET', '/rp-soul/preset');
+eq(pg.status, 200, '4. GET /preset 200');
+const blocks = pg.parsed.blocks;
+const off = blocks.map((b) => (b.name === '草稿' ? { ...b, enabled: false } : b));
+const w = await call('PUT', '/rp-soul/preset', { blocks: off });
+eq(w.status, 200, '4. PUT /preset 200');
+hasNot(sectionDefs.get('soul-persona').text(), '草稿', '4. 勾掉的块立刻不再注入（无需重启）');
+ok(readFileSync(join(home, 'rp-soul', 'preset.md'), 'utf8').includes('soul-part-off: 草稿'), '4. 勾掉的标记写回磁盘');
 
-// ---- 5. 读写真实文件 ----
-const w = await call('PUT', '/rp-soul/file', { rel: 'STYLE.md', text: '口吻：第二人称。\n' });
-eq(w.status, 200, '5. PUT 已存在文件 200');
-eq(w.parsed.ok, true, '5. PUT 回 ok=true');
-eq(readFileSync(join(home, 'STYLE.md'), 'utf8'), '口吻：第二人称。\n', '5. 磁盘内容已更新');
+// 改名 + 改正文
+const renamed = off.map((b) => (b.name === '口吻' ? { ...b, name: '语气', text: '口吻：第二人称。' } : b));
+await call('PUT', '/rp-soul/preset', { blocks: renamed });
+has(sectionDefs.get('soul-persona').text(), '第二人称', '4. 改正文立刻生效');
+ok(JSON.parse(JSON.stringify((await call('GET', '/rp-soul/preset')).parsed.blocks)).some((b) => b.name === '语气'), '4. 改名写回');
 
-const back = await call('GET', '/rp-soul/file?rel=' + encodeURIComponent('STYLE.md'));
-eq(back.status, 200, '5. 读回 200');
-eq(back.parsed.text, '口吻：第二人称。\n', '5. 读回内容一致');
+// ---- 5. 导出与导入 ----
+const exp = await call('GET', '/rp-soul/preset?export=rimtalk');
+eq(exp.status, 200, '5. GET /preset?export=rimtalk 200');
+eq(exp.parsed.json.version, 1, '5. 导出的是 RimTalk preset.json');
+ok(Array.isArray(exp.parsed.json.entries) && exp.parsed.json.entries.length === 4, '5. entries 数与块数一致');
 
-// ---- 6. 新建文件 ----
-const n = await call('POST', '/rp-soul/new', { name: '禁忌', text: '不要主动提问。\n' });
-eq(n.status, 200, '6. POST /new 200');
-eq(n.parsed.rel, 'rp-soul/parts/禁忌.md', '6. 新文件落在 rp-soul/parts/');
-ok(existsSync(join(home, 'rp-soul', 'parts', '禁忌.md')), '6. 新文件磁盘存在');
-eq(readFileSync(join(home, 'rp-soul', 'parts', '禁忌.md'), 'utf8'), '不要主动提问。\n', '6. 新文件内容正确');
-
-// ---- 7. 写配置立即生效 ----
-const c = await call('POST', '/rp-soul/config', {
-  files: ['rp-soul/parts/禁忌.md', 'SOUL.md'],
-  separator: '\n---\n',
-  annotate: true,
-  enabled: true,
-  maxBytes: 4096,
+const imported = await call('POST', '/rp-soul/preset', {
+  import: { version: 1, name: '别人的预设', entries: [
+    { name: '开场', content: '你是雨夜的守灯人。', role: 'System', enabled: true },
+    { name: '口气', content: '说话很轻。', role: 'System', enabled: true },
+  ] },
 });
+eq(imported.status, 200, '5. 导入 RimTalk JSON 200');
+has(sectionDefs.get('soul-persona').text(), '雨夜的守灯人', '5. 导入的内容立刻生效');
+eq(imported.parsed.blocks.length, 2, '5. 导入后是两块');
+
+// 坏输入
+const bad = await call('POST', '/rp-soul/preset', { import: { foo: 1 } });
+eq(bad.status, 400, '5. 不像 RimTalk 预设就 400');
+const empty = await call('POST', '/rp-soul/preset', {});
+eq(empty.status, 400, '5. 什么都没给就 400');
+
+// ---- 7. 自定义 separator 立即生效 ----
+const c = await call('POST', '/rp-soul/config', { separator: '\n---\n', maxBytes: 4096 });
 eq(c.status, 200, '7. POST /config 200');
-const after = sectionDefs.get('soul-persona').text();
-has(after, '不要主动提问', '7. 新配置的第一段生效');
-has(after, '你是暗夜侦探', '7. 新配置的第二段生效');
-has(after, '\n---\n', '7. 自定义 separator 生效');
-ok(after.indexOf('不要主动提问') < after.indexOf('你是暗夜侦探'), '7. files 顺序决定拼接顺序');
+has(sectionDefs.get('soul-persona').text(), '\n---\n', '7. 自定义 separator 生效');
 
 // ---- 8. 插值关闭 ----
 eq(sectionDefs.get('soul-persona').interpolate, false, '8. section 声明 interpolate:false（渲染时不做 {{变量}} 插值）');
-await call('POST', '/rp-soul/config', { files: ['rp-soul/evil.md'] });
+await call('POST', '/rp-soul/preset', {
+  blocks: [{ name: '占位', enabled: true, text: '这个块有 {{user}} 占位符' }],
+});
 const esc = sectionDefs.get('soul-persona').text();
 has(esc, '{{user}}', '8. 原文 {{user}} 原样保留（由 interpolate:false 保证不炸）');
 hasNot(esc, String.fromCharCode(0x200b), '8. 不再塞零宽字符');
@@ -155,7 +176,7 @@ eq(sectionDefs.get('soul-persona').text(), '', '9. enabled=false 时合成文本
 // ---- 10. 异常输入 ----
 const badCfg = await call('POST', '/rp-soul/config', { maxBytes: -1 });
 ok(badCfg.status === 200 || badCfg.status === 400, '10. 非法 maxBytes 不崩（200 夹紧 或 400）');
-await call('POST', '/rp-soul/config', { enabled: true, maxBytes: 8192, files: ['SOUL.md'] });
+await call('POST', '/rp-soul/config', { enabled: true, maxBytes: 8192 });
 
 // ---- 11. 引擎人设独立文件 ----
 const pf0 = await call('GET', '/rp-soul/engine/persona-file');
@@ -164,26 +185,29 @@ eq(pf0.parsed.rel, 'rp-soul/persona.md', '11. 人设文件固定叫 rp-soul/pers
 eq(pf0.parsed.exists, false, '11. 还没建时 exists=false');
 eq(pf0.parsed.source, 'empty', '11. 散文里也没有前置块时 source=empty');
 
-// 老样子：散文里带前置块 → 表单初值从散文里来（source=legacy），此时还没落盘
-writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
-  '---',
-  'id: legacy_hero',
-  'title: 旧世界',
-  'mood_base: 60',
-  'places:',
-  '  - {id: room, name: 房间, privacy: private}',
-  'cast:',
-  '  - {id: hero, name: 英雄, gender: female, age: 20, tier: major, voices: {surface: 冷, inner: 热}}',
-  '---',
-  '',
-  '这是散文正文。',
-  '',
-].join('\n'), 'utf8');
-await call('POST', '/rp-soul/config', { files: ['rp-soul/legacy.md'] });
+// 预设里带前置块 → 表单初值从预设的正文里来（source=legacy），此时还没落盘
+await call('POST', '/rp-soul/preset', {
+  blocks: [
+    { name: '前置', enabled: true, text: [
+      '---',
+      'id: legacy_hero',
+      'title: 旧世界',
+      'mood_base: 60',
+      'places:',
+      '  - {id: room, name: 房间, privacy: private}',
+      'cast:',
+      '  - {id: hero, name: 英雄, gender: female, age: 20, tier: major, voices: {surface: 冷, inner: 热}}',
+      '---',
+      '',
+      '这是散文正文。',
+      '',
+    ].join('\n') },
+  ],
+});
 const pf1 = await call('GET', '/rp-soul/engine/persona-file');
-eq(pf1.parsed.source, 'legacy', '11. 前置块在散文里时表单以 legacy 迁移');
+eq(pf1.parsed.source, 'legacy', '11. 前置块在预设正文里时表单以 legacy 迁移');
 eq(pf1.parsed.front.id, 'legacy_hero', '11. legacy 初值能读到 id');
-eq(pf1.parsed.legacyRel, 'rp-soul/legacy.md', '11. legacy 来源文件可追溯');
+eq(pf1.parsed.legacyRel, 'rp-soul/preset.md', '11. legacy 来源文件可追溯');
 has(pf1.parsed.preview, 'mood_base:', '11. legacy 也能给出 YAML 预览');
 
 const injected = sectionDefs.get('soul-persona').text();
@@ -216,19 +240,12 @@ eq(pf2.parsed.front.id, 'new_world', '11. 重读拿到刚存的 id');
 const badFront = await call('PUT', '/rp-soul/engine/persona-file', { front: [1, 2] });
 eq(badFront.status, 400, '11. front 不是对象时 400');
 
-// 文件优先：散文里的前置块不再影响结构化字段
-writeFileSync(join(home, 'rp-soul', 'legacy.md'), [
-  '---',
-  'id: should_be_ignored',
-  'places: []',
-  'cast: []',
-  '---',
-  '',
-  '散文变了。',
-  '',
-].join('\n'), 'utf8');
+// 文件优先：改了预设正文里的前置块，persona.md 仍然赢
+await call('POST', '/rp-soul/preset', {
+  text: ['---', 'id: should_be_ignored', 'places: []', 'cast: []', '---', '', '散文变了。', ''].join('\n'),
+});
 const pf3 = await call('GET', '/rp-soul/engine/persona-file');
-eq(pf3.parsed.front.id, 'new_world', '11. persona.md 存在时散文前置块被忽略');
+eq(pf3.parsed.front.id, 'new_world', '11. persona.md 存在时预设前置块被忽略');
 
 // ---- 12. 唤醒页的三条接口 ----
 // 这里没有桌面宿主，所以唤醒线没挂载：验的是「没挂载时不崩、字段照样能存」，

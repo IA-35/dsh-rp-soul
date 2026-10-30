@@ -204,8 +204,9 @@ function findRow(tree, label) {
 let resolveState = null;
 responses.set('GET /rp-soul/state', () => new Promise((res) => {
   resolveState = () => res(jsonResponse(statePayload || {
-    config: { files: [], separator: '\n\n', annotate: false, enabled: true, maxBytes: 65536 },
-    files: [], library: [], composed: null, storePath: 'rp-soul/config.json',
+    config: { separator: '\n\n', enabled: true, maxBytes: 65536 },
+    preset: { rel: 'rp-soul/preset.md', exists: true, marked: true, text: '', blocks: [] },
+    composed: null, storePath: 'rp-soul/config.json',
   }));
 }));
 const loadingTree = await renderUntil((t) => textOf(t).includes('正在读取角色预设'));
@@ -215,12 +216,17 @@ ok(loadingTree.props['data-render-state'] !== 'ready', '4. loading 态不是 rea
 
 // ---- 5. ready 态 ----
 statePayload = {
-  config: { files: ['SOUL.md', 'TONE.md'], separator: '\n\n', annotate: false, enabled: true, maxBytes: 65536 },
-  files: [
-    { rel: 'SOUL.md', exists: true, bytes: 24 },
-    { rel: 'TONE.md', exists: false, bytes: 0 },
-  ],
-  library: ['SOUL.md', 'TONE.md', 'rp-soul/parts/禁忌.md'],
+  config: { separator: '\n\n', enabled: true, maxBytes: 65536 },
+  preset: {
+    rel: 'rp-soul/preset.md',
+    exists: true,
+    marked: true,
+    text: '<!-- soul-part: 身份 -->\n你是守岸人。\n\n<!-- soul-part: 口吻 -->\n说话慢半拍。',
+    blocks: [
+      { name: '身份', enabled: true, text: '你是守岸人。' },
+      { name: '口吻', enabled: true, text: '说话慢半拍。' },
+    ],
+  },
   composed: { chars: 40, bytes: 60, preview: '身份 + 口吻的预览' },
   storePath: 'rp-soul/config.json',
 };
@@ -230,10 +236,10 @@ const readyTree = await renderUntil((t) => t.props['data-render-state'] === 'rea
 eq(readyTree.props['data-render-state'], 'ready', '5. 拿到 state 后进入 ready 态');
 const readyText = textOf(readyTree);
 has(readyText, '角色人设', '5. 标题');
-has(readyText, '2 个文件', '5. 文件数徽标');
-has(readyText, 'SOUL.md', '5. 清单列出 SOUL.md');
-has(readyText, 'TONE.md', '5. 清单列出 TONE.md');
-has(readyText, '缺失', '5. 不存在的文件标「缺失」');
+has(readyText, '2 块', '5. 块数徽标');
+has(readyText, '身份', '5. 条目列出「身份」');
+has(readyText, '口吻', '5. 条目列出「口吻」');
+has(readyText, '单文件预设', '5. 标出这是单文件预设');
 has(readyText, 'rp-soul/config.json', '5. 显示 store 路径');
 ok(calls.some((c) => c.method === 'GET' && c.url === '/rp-soul/state'), '5. 确实请求了 /state');
 
@@ -248,51 +254,44 @@ const cfgCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/con
 ok(cfgCall !== undefined, '6. 勾选框触发 POST /config');
 eq(cfgCall.body, { enabled: false }, '6. 请求体只带 enabled');
 
-// ---- 7. 点文件名 → GET /file；编辑后保存 → PUT /file ----
-responses.set('GET /rp-soul/file', () => jsonResponse({ rel: 'SOUL.md', text: '旧文本', exists: true }));
-responses.set('PUT /rp-soul/file', () => jsonResponse({ ok: true }));
+// ---- 7. 点条目 → 右边就是那一块；改完「保存预设」发 POST /preset ----
+responses.set('POST /rp-soul/preset', () => jsonResponse({ ok: true, blocks: statePayload.preset.blocks }));
+const backToReady = await renderUntil((t) => t.props['data-render-state'] === 'ready');
+const blockRow = findRow(backToReady, '口吻');
+ok(blockRow !== undefined, '7. 找到条目「口吻」');
 calls.length = 0;
-const row = findAll(readyTree, (n) => n.type === 'div' && typeof n.props.onClick === 'function' && textOf(n).includes('SOUL.md'))[0];
-ok(row !== undefined, '7. 找到清单里的 SOUL.md 行');
-row.props.onClick();
-for (let i = 0; i < 12; i++) await Promise.resolve();
-ok(calls.some((c) => c.method === 'GET' && c.url.startsWith('/rp-soul/file')), '7. 点行触发 GET /file');
-ok(calls.some((c) => c.url.includes('rel=SOUL.md')), '7. GET 带正确 rel 参数');
+blockRow.props.onClick();
+const picked = await renderOnce();
+const blockArea = findAll(picked, (n) => n.type === 'textarea')[0];
+ok(blockArea !== undefined, '7. 点条目后出现编辑器');
+eq(blockArea.props.value, '说话慢半拍。', '7. 编辑器是这一块的内容');
 
-const editingTree = await renderUntil((t) => findAll(t, (n) => n.type === 'textarea').length > 0);
-const textarea = findAll(editingTree, (n) => n.type === 'textarea')[0];
-ok(textarea !== undefined, '7. 选中文件后出现编辑器 textarea');
-eq(textarea.props.value, '旧文本', '7. 编辑器内容 = 服务端返回的文本');
-
-calls.length = 0;
-textarea.props.onChange({ target: { value: '新文本' } });
-const typedEdited = await renderOnce();
-const saveBtn = findButton(typedEdited, '保存');
-ok(saveBtn !== undefined, '7. dirty 后「保存」按钮存在');
-eq(saveBtn.props.disabled, false, '7. dirty 后保存按钮可用');
+blockArea.props.onChange({ target: { value: '说话慢半拍，还会停一下。' } });
+const typed = await renderOnce();
+const saveBtn = findButton(typed, '保存预设');
+ok(saveBtn !== undefined, '7. 有「保存预设」按钮');
+eq(saveBtn.props.disabled, false, '7. 改过之后可保存');
 saveBtn.props.onClick();
 for (let i = 0; i < 12; i++) await Promise.resolve();
-const putCall = calls.find((c) => c.method === 'PUT' && c.url === '/rp-soul/file');
-ok(putCall !== undefined, '7. 点保存发出 PUT /file');
-eq(putCall.body.rel, 'SOUL.md', '7. PUT body.rel');
-eq(putCall.body.text, '新文本', '7. PUT body.text 是改后的文本');
+const presetCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/preset');
+ok(presetCall !== undefined, '7. 点保存发出 POST /preset');
+eq(presetCall.body.blocks[1].text, '说话慢半拍，还会停一下。', '7. 请求体带着改后的那一块');
+eq(presetCall.body.blocks[0].text, '你是守岸人。', '7. 别的块原样不动');
 
-// ---- 8. 新建文件 → POST /new ----
-responses.set('POST /rp-soul/new', () => jsonResponse({ ok: true, rel: 'rp-soul/parts/语气.md' }));
-const baseTree = await renderUntil((t) => t.props['data-render-state'] === 'ready');
-const nameInput = findAll(baseTree, (n) => n.type === 'input' && typeof n.props.placeholder === 'string' && n.props.placeholder.includes('新文件名'))[0];
-ok(nameInput !== undefined, '8. 找到「新文件名」输入框');
+// ---- 8. 勾掉一块 → 同样走 POST /preset ----
+const boxTree = await renderUntil((t) => t.props['data-render-state'] === 'ready');
+const boxes = findAll(boxTree, (n) => n.type === 'input' && n.props.type === 'checkbox');
+ok(boxes.length >= 2, '8. 每块一个勾选框');
 calls.length = 0;
-nameInput.props.onChange({ target: { value: '语气' } });
-const typedName = await renderOnce();
-const createBtn = findButton(typedName, '新建');
-ok(createBtn !== undefined, '8. 输入名字后「新建」按钮存在');
-eq(createBtn.props.disabled, false, '8. 输入名字后「新建」可用');
-createBtn.props.onClick();
+// boxes[0] 是顶部的「启用」，块勾选框从第二个起；最后一个是「口吻」
+boxes[boxes.length - 1].props.onChange({ target: { checked: false }, stopPropagation: () => {} });
+const unchecked = await renderOnce();
+const saveAfter = findButton(unchecked, '保存预设');
+saveAfter.props.onClick();
 for (let i = 0; i < 12; i++) await Promise.resolve();
-const newCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/new');
-ok(newCall !== undefined, '8. 点新建发出 POST /new');
-eq(newCall.body.name, '语气', '8. POST /new body.name');
+const offPresetCall = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/preset');
+ok(offPresetCall !== undefined, '8. 勾掉一块也能保存');
+eq(offPresetCall.body.blocks[1].enabled, false, '8. 被勾掉的那块 enabled=false');
 
 // ---- 9. /state 失败 → 错误态（不是白屏）----
 // 先把前面几个小节残留的微任务灌完 —— 否则旧请求的回调会在我们清空 hookState
@@ -482,7 +481,7 @@ has(tabText, '引擎人设', '11. 有「引擎人设」页签');
 has(tabText, '情绪', '11. 有「情绪」页签');
 has(tabText, '常识库', '11. 有「常识库」页签');
 has(tabText, '自主行动记录', '11. 有「自主行动记录」页签');
-has(tabText, '拼接顺序', '11. 人设页仍然渲染原来的内容');
+has(tabText, '加一块', '11. 人设页渲染的是条目编辑器');
 
 // 切到「引擎人设」：表单要能从 persona-file 读出结构化字段并渲染
 calls.length = 0;

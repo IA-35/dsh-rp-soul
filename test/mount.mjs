@@ -4,13 +4,16 @@ import { Context } from '@deepseek-ai/cordis';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { eq, ok, has, done } from './_check.mjs';
+import { eq, ok, has, hasNot, done } from './_check.mjs';
 
 const home = mkdtempSync(join(tmpdir(), 'soulreal-'));
 process.env.DSH_HOME = home;
 mkdirSync(join(home, 'rp-soul'), { recursive: true });
-writeFileSync(join(home, 'SOUL.md'), '身份：夜航船的领航员。\n', 'utf8');
-writeFileSync(join(home, 'TONE.md'), '口吻：克制，不解释。\n', 'utf8');
+writeFileSync(
+  join(home, 'rp-soul', 'preset.md'),
+  '# 人设预设\n\n<!-- soul-part: 身份 -->\n身份：夜航船的领航员。\n\n<!-- soul-part: 口吻 -->\n口吻：克制，不解释。\n',
+  'utf8'
+);
 
 const plugin = await import(new URL('../lib/index.js', import.meta.url).href);
 
@@ -21,16 +24,12 @@ eq(typeof plugin.Config, 'function', '1. 导出了 schemastery Config');
 
 // ---- 2. Config 默认值与校验 ----
 const cfgDefault = plugin.Config({});
-eq(cfgDefault.fileName, 'SOUL.md', '2. fileName 默认 SOUL.md');
 eq(cfgDefault.separator, '\n\n', '2. separator 默认两个换行');
-eq(cfgDefault.annotate, false, '2. annotate 默认 false');
 eq(cfgDefault.maxBytes, 65536, '2. maxBytes 默认 65536');
 eq(cfgDefault.storeFile, 'rp-soul/config.json', '2. storeFile 默认路径');
-eq(cfgDefault.files, [], '2. files 未给时是空数组（effectiveFrom 会回退到 fileName）');
-
-const cfgGiven = plugin.Config({ files: ['SOUL.md', 'TONE.md'], annotate: true });
-eq(cfgGiven.files, ['SOUL.md', 'TONE.md'], '2. files 原样保留');
-eq(cfgGiven.annotate, true, '2. annotate 覆盖成功');
+// 多文件那套已经删了：这几个键不该还留在 Config 里
+eq(cfgDefault.files, undefined, '2. 不再有 files 配置项');
+eq(cfgDefault.annotate, undefined, '2. 不再有 annotate 配置项');
 
 // maxBytes 下界 1024 必须被 schemastery 拒（不是静默夹紧）
 let clamped = null;
@@ -59,7 +58,7 @@ app.provide('webServer', {
 });
 app.provide('connection', { requestRejection() { return undefined; } });
 
-const fiber = app.plugin(plugin.apply, plugin.Config({ files: ['SOUL.md', 'TONE.md'], annotate: true }));
+const fiber = app.plugin(plugin.apply, plugin.Config({ maxBytes: 65536 }));
 await fiber;
 
 ok(sections.has('soul-persona'), '3. 挂载后 soul-persona section 已注册');
@@ -74,10 +73,10 @@ eq(routes[0].kind, 'prefix', '3. 路由 kind=prefix');
 eq(routes[0].path, '/rp-soul', '3. 路由 path');
 
 const composed = sections.get('soul-persona').text();
-has(composed, '夜航船的领航员', '3. 合成含 SOUL.md');
-has(composed, '克制，不解释', '3. 合成含 TONE.md');
-has(composed, '<!-- soul-part: SOUL.md -->', '3. annotate=true 带分段注释');
-ok(composed.indexOf('夜航船') < composed.indexOf('克制'), '3. 拼接顺序 = files 数组顺序');
+has(composed, '夜航船的领航员', '3. 合成含第一块');
+has(composed, '克制，不解释', '3. 合成含第二块');
+hasNot(composed, '<!-- soul-part:', '3. 标记本身不进提示词');
+ok(composed.indexOf('夜航船') < composed.indexOf('克制'), '3. 顺序 = 块在文件里的顺序');
 
 // ---- 4. 路由改配置后立即生效 ----
 const route = routes[0];
@@ -99,15 +98,20 @@ const call = (method, url, body) => new Promise((resolve) => {
   route.handler(req, res);
 });
 
-const r1 = await call('POST', '/rp-soul/config', {
-  files: ['TONE.md'], annotate: false, separator: '\n\n', enabled: true, maxBytes: 8192,
-});
-eq(r1.statusCode, 200, '4. POST /config 200');
-eq(sections.get('soul-persona').text(), '口吻：克制，不解释。', '4. 改配置后合成文本立即变化（无需重启）');
+// 关掉一块：合成里就该少一句，而且不用重启
+const presetUrl = '/rp-soul/preset';
+const before = await call('GET', presetUrl);
+const beforeBody = JSON.parse(before.body);
+const blocks = beforeBody.blocks.map((b) => (b.name === '口吻' ? { ...b, enabled: false } : b));
+const r1 = await call('POST', presetUrl, { blocks });
+eq(r1.statusCode, 200, '4. POST /preset 200');
+hasNot(sections.get('soul-persona').text(), '克制，不解释', '4. 勾掉的块立刻不再注入（无需重启）');
+has(sections.get('soul-persona').text(), '夜航船的领航员', '4. 没勾掉的那块还在');
+const r1b = await call('POST', '/rp-soul/config', { maxBytes: 8192 });
+eq(r1b.statusCode, 200, '4. POST /config 200');
 const store = JSON.parse(readFileSync(join(home, 'rp-soul', 'config.json'), 'utf8'));
-eq(store.files, ['TONE.md'], '4. store 落盘 files');
-eq(store.annotate, false, '4. store 落盘 annotate');
 eq(store.maxBytes, 8192, '4. store 落盘 maxBytes');
+eq(store.files, undefined, '4. store 不再写 files');
 
 // ---- 5. store 优先级高于 cordis 配置 ----
 const r2 = await call('POST', '/rp-soul/config', { maxBytes: 2048 });

@@ -17,8 +17,12 @@ const persona = {
 };
 const home = mkdtempSync(join(tmpdir(), 'soulprompt-'));
 mkdirSync(join(home, 'rp-soul'));
-writeFileSync(join(home, 'SOUL.md'), '---\n' + Object.entries({ id: 'lin_wan', name: '林晚', age: 31, gender: 'female', role: '医生' })
-  .map(([key, value]) => `${key}: ${value}`).join('\n') + '\nvoices:\n  surface: 说话克制\n  inner: 总在算时间\n---\n' + persona.prose);
+const personaYaml = Object.entries({ id: 'lin_wan', name: '林晚', age: 31, gender: 'female', role: '医生' })
+  .map(([key, value]) => key + ': ' + value).join(String.fromCharCode(10))
+  + String.fromCharCode(10) + 'voices:' + String.fromCharCode(10) + '  surface: 说话克制' + String.fromCharCode(10) + '  inner: 总在算时间' + String.fromCharCode(10);
+writeFileSync(join(home, 'rp-soul', 'persona.md'), personaYaml);
+writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->' + String.fromCharCode(10) + persona.prose + String.fromCharCode(10));
+writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->' + String.fromCharCode(10) + persona.prose + String.fromCharCode(10));
 process.env.DSH_HOME = home;
 const client = new EngineClient({ dataDir: join(home, 'rp-soul', 'engine') });
 let request = 0;
@@ -67,7 +71,7 @@ try {
   writeFileSync(mappingPath, JSON.stringify({ shared: a }));
   promptFiber = app.plugin(SystemPrompt, SystemPrompt.Config({ includeHarnessIdentity: false }));
   await promptFiber;
-  fiber = app.plugin(plugin, plugin.Config({ files: ['SOUL.md'] }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
 
   // 没有 tools 服务，没有调用 soul_state：直接走宿主的真实装配入口。
@@ -89,11 +93,13 @@ try {
   eq(promptB, promptA, '2. 账本更新后系统提示词逐字节不变（缓存前缀可一直命中）');
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({ files: ['SOUL.md'] }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
   has(engineText(await assemble(agentA)), '外部更新后的悬念A', '3. 插件重启后第一次装配仍有状态');
 
-  const store = JSON.parse(readFileSync(storePath));
+  // 首装不再自动写 config.json（不再建种子文件），读不到就是空配置。
+  let store = {};
+  try { store = JSON.parse(readFileSync(storePath, 'utf8')); } catch { store = {}; }
   writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'session' }));
   writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: again, [agentB.id]: b }));
   const [pa, pb] = await Promise.all([assemble(agentA), assemble(agentB)]);
@@ -202,7 +208,7 @@ try {
   // 新建一个干净的引擎目录，验证首次自动开局及两个装配同时发生的情况。
   writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'global', engineDataDir: join(home, 'fresh-engine') }));
   writeFileSync(mappingPath, '{}');
-  fiber = app.plugin(plugin, plugin.Config({ files: ['SOUL.md'] }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
   const cold = await Promise.all([assemble(agentA), assemble(agentB)]);
   ok(cold.every((p) => engineText(p).includes('心情：')), '6. 全新安装第一次并行装配也有引擎状态');
@@ -213,7 +219,7 @@ try {
   } finally { await freshClient.stop(); }
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({ files: ['SOUL.md'], engineEnabled: false }));
+  fiber = app.plugin(plugin, plugin.Config({ engineEnabled: false }));
   await fiber;
   eq(engineText(await assemble(agentA)), '', '7. 引擎关闭时不注入账本');
   done('prompt');

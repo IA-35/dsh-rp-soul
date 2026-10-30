@@ -9,8 +9,8 @@ import { markWakeTurn, clearWakeTurn } from '../lib/wake.js';
 
 const home = mkdtempSync(join(tmpdir(), 'souleng-'));
 process.env.DSH_HOME = home;
-mkdirSync(join(home, 'rp-soul', 'parts'), { recursive: true });
-writeFileSync(join(home, 'SOUL.md'), [
+mkdirSync(join(home, 'rp-soul'), { recursive: true });
+writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->' + String.fromCharCode(10) + [
   '---',
   'id: lin_wan',
   'title: 雨夜诊所',
@@ -61,7 +61,7 @@ const ctx = {
     section(def) { sections.set(def.name, def); return () => { sections.delete(def.name); }; },
   },
 };
-mod.apply(ctx, { files: ['SOUL.md'], maxBytes: 65536 });
+mod.apply(ctx, { maxBytes: 65536 });
 
 // ---- 1. 三个工具都注册了 ----
 eq(tools.size, 3, '1. 注册了 3 个工具');
@@ -351,7 +351,8 @@ for (const depth of ['brief', 'full']) {
 
 // ---- 16. 人设为空时 start 明确报错（不静默开局） ----
 writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engineScope: 'global' }), 'utf8');
-writeFileSync(join(home, 'SOUL.md'), '   \n', 'utf8');
+writeFileSync(join(home, 'rp-soul', 'persona.md'), '   ' + String.fromCharCode(10), 'utf8');
+writeFileSync(join(home, 'rp-soul', 'preset.md'), '   ' + String.fromCharCode(10), 'utf8');
 const emptyStart = await call('soul_admin', { action: 'reset_mapping' }).then(() =>
   call('soul_admin', { action: 'start' }));
 eq(emptyStart.ok, false, '16. 空人设拒绝开局');
