@@ -110,12 +110,31 @@ def a_half_written_entry_is_ignored():
 
 
 def the_same_keywords_update_instead_of_pile_up():
-    rows = [entry("c1", ["ds", "deepseek"], 0.5, "旧的说法。")]
+    """还挂着等你确认的那条，模型再提一次就用新说法覆盖，不另起一条。"""
+    rows = [dict(entry("c1", ["ds", "deepseek"], 0.5, "旧的说法。"), pending=True)]
     fresh = [CM.from_model({"key": ["deepseek", "ds"], "weight": 0.9, "content": "新的说法。"}, 4)]
     got, touched = CM.merge(rows, fresh, CM.next_id)
     assert len(got) == 1, got
     assert got[0]["content"] == "新的说法。" and got[0]["weight"] == 0.9, got[0]
+    assert got[0]["pending"] is True, got[0]
     assert touched == ["c1"], touched
+
+
+def the_model_cannot_overwrite_what_you_confirmed():
+    """你确认过（或手动加）的那条，模型提同样的关键词也改不动它。"""
+    rows = [entry("c1", ["ds", "deepseek"], 0.5, "你写的说法。")]
+    fresh = [CM.from_model({"key": ["deepseek", "ds"], "weight": 0.9, "content": "模型的说法。"}, 4)]
+    got, touched = CM.merge(rows, fresh, CM.next_id)
+    assert len(got) == 1 and got[0]["content"] == "你写的说法。", got
+    assert touched == [], touched
+
+
+def a_pending_one_is_not_carried():
+    """模型提的常识在你确认之前不进上下文。"""
+    rows = [dict(entry("c1", ["ds"], 0.9, "DS 是深度求索。"), pending=True)]
+    assert CM.select(rows, "DS 给我写个代码") == [], "挂着的不该被选中"
+    rows = [dict(rows[0], pending=False)]
+    assert [e["id"] for e in CM.select(rows, "DS 给我写个代码")] == ["c1"]
 
 
 def a_new_one_gets_the_next_id():
@@ -221,6 +240,14 @@ def what_she_learns_while_folding_goes_in(s):
     row = panel["rows"][0]
     assert row["key"] == ["ds", "deepseek"] and row["weight"] == 0.7, row
     assert row["origin"] in ("fold", "diary"), row
+    # 模型提的先挂着：确认之前不注入，确认之后才注入
+    assert row["pending"] is True and panel["pending"] == 1, panel
+    ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "DS 是什么"})["context"]
+    assert "common" not in ctx, ctx.get("common")
+    approved = s.ok("approve-common", {"request_id": e2e.rid(), "common_id": row["id"]})
+    assert approved["pending"] == 0 and approved["rows"][0]["pending"] is False, approved
+    ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "DS 是什么"})["context"]
+    assert "深度求索" in ctx.get("common", ""), ctx.get("common")
 
 
 @with_sc
@@ -261,6 +288,8 @@ check("nothing matched renders nothing", nothing_matched_renders_nothing)
 check("what the model says is normalized", what_the_model_says_is_normalized)
 check("a half written entry is ignored", a_half_written_entry_is_ignored)
 check("the same keywords update instead of pile up", the_same_keywords_update_instead_of_pile_up)
+check("the model cannot overwrite what you confirmed", the_model_cannot_overwrite_what_you_confirmed)
+check("a pending one is not carried", a_pending_one_is_not_carried)
 check("a new one gets the next id", a_new_one_gets_the_next_id)
 check("the page can add, edit and delete", the_page_can_add_edit_and_delete)
 check("a hit puts it into the context", a_hit_puts_it_into_the_context)

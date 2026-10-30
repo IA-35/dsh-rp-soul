@@ -242,6 +242,30 @@ eq(ctxr.status, 200, '8. /engine/session 200');
 ok(ctxr.body.context !== undefined && typeof ctxr.body.context === 'object', '8. 带回 context');
 eq(ctxr.body.context.depth, 'brief', '8. 默认 brief');
 
+// ---- 8b. GET /engine/diaries：读她的日记文件，新的在前；路径伸不出数据目录 ----
+const diaryDir = join(home, 'rp-soul', 'engine', 'journal', sid);
+mkdirSync(diaryDir, { recursive: true });
+writeFileSync(join(diaryDir, 'diary-0001.md'), '# 第 1 天 · 周一\n\n第一天，他来得很晚。\n');
+writeFileSync(join(diaryDir, 'diary-0002.md'), '# 第 2 天 · 周二\n\n下了一天雨。\n');
+writeFileSync(join(diaryDir, 'notes.txt'), '不是日记');
+const diaryList = await j('/rp-soul/engine/diaries?session_id=' + encodeURIComponent(sid));
+eq(diaryList.body.ok, true, '8b. 日记读得出来（' + JSON.stringify(diaryList.body.error ?? '') + '）');
+eq(diaryList.body.diaries.map((d) => d.day), [2, 1], '8b. 新的在前，别的文件不算');
+eq(diaryList.body.diaries[0].title, '第 2 天 · 周二', '8b. 标题是第一行');
+eq(diaryList.body.diaries[0].text, '下了一天雨。', '8b. 正文去掉了标题');
+const sneaky = await j('/rp-soul/engine/diaries?session_id=' + encodeURIComponent('../../etc'));
+eq(sneaky.body.ok, false, '8b. 不像会话 id 的一律拒掉（不拼进路径）');
+const noDiary = await j('/rp-soul/engine/diaries?session_id=s_nothinghere');
+eq(noDiary.body.diaries, [], '8b. 还没写过日记就是空列表');
+
+// ---- 8c. POST /engine/common/approve：确认一条待确认的常识 ----
+const missingCommon = await j('/rp-soul/engine/common/approve', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ common_id: 'c999' }),
+});
+eq(missingCommon.body.ok, false, '8c. 没有这条就报错');
+const noCommonId = await j('/rp-soul/engine/common/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+eq(noCommonId.status, 400, '8c. 没带 common_id 就 400');
+
 // ---- 9. DELETE /engine/wipe：从零开始 ----
 // 先确认确实有东西可删，否则「删干净了」证明不了什么
 const beforeWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));

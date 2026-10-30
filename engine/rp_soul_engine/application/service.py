@@ -377,6 +377,7 @@ DOMAIN_KEYS = (
     "common",
     "replaces_turn",
     "together",
+    "host_memory",
 )
 # A failed commit with one of these codes makes the next context full.
 FAILURE_CODES = (INVALID_INPUT, INVARIANT_VIOLATION, NOT_FOUND, SAFETY_BLOCK)
@@ -1330,7 +1331,7 @@ def note_turn(ctx, payload):
         reply = payload["reply"].strip()
         entry, duplicate = MEM.note_exchange(
             state, said, reply, turn=state["turn"],
-            together=bool(state.get("together", True)),
+            together=bool(state.get("together", True)) if payload["together"] is None else payload["together"],
         )
         if entry is None:
             return {"revision": state.get("revision", 0), "turn": state["turn"],
@@ -1375,6 +1376,33 @@ def summarize_memory(ctx, payload):
         return "收成了一条记忆：%s" % entry["content"][:20], {"memory": MEM.row(state, entry)}
 
     return _memory_write(ctx, "summarize-memory", specs.SUMMARIZE_MEMORY, payload, change)
+
+
+def write_diary(ctx, payload):
+    """The host's subagent hands back the owed day's diary, already written.
+
+    Same reason as summarize-memory: the diary must not wait for the model to
+    stop mid-conversation and write it. The file lands after COMMIT, like a
+    diary paid through commit-turn.
+    """
+    from .. import modules as MODULES
+    from ..domain import memories as MEM
+
+    def change(conn, state, payload, now):
+        request = state["requests"].get("memory_diary") or MEM.diary_request(state)
+        if not request or not MEM.sources(state, request):
+            raise AppError(INVALID_INPUT, "现在没有要写的日记",
+                           [detail("$.text", "没有欠着的日记", None, INVALID_INPUT)])
+        diary = MEM.apply_diary(state, request, payload["text"])
+        state["requests"]["memory_diary"] = None
+        # 模型手里那份上下文可能还写着「该写日记了」，跟着交上来不该被驳
+        paid = state["counters"].setdefault("host_paid", {})
+        paid["diary"] = state["turn"]
+        MODULES.run(state, "close_record")
+        _plan_journal(ctx, state["session_id"], [{"diary": diary}])
+        return "写好了第 %d 天的日记" % diary["day"], {"diary": {"day": diary["day"], "path": diary.get("path")}}
+
+    return _memory_write(ctx, "write-diary", specs.WRITE_DIARY, payload, change)
 
 
 def request_memory(ctx, payload):
@@ -1737,6 +1765,18 @@ def delete_common(ctx, payload):
         return rows, "已删掉「%s」" % "、".join(found["key"])
 
     return _common_write(ctx, "delete-common", specs.DELETE_COMMON, payload, change)
+
+
+def approve_common(ctx, payload):
+    """模型提的常识先挂着，你在设置页点了「确认」才会被注入。"""
+    def change(rows, data):
+        found = next((e for e in rows if e["id"] == data["common_id"]), None)
+        if found is None:
+            raise _missing_common(data["common_id"])
+        rows = [dict(e, pending=False) if e["id"] == data["common_id"] else e for e in rows]
+        return rows, "已确认「%s」，以后提到就会想起来" % "、".join(found["key"])
+
+    return _common_write(ctx, "approve-common", specs.APPROVE_COMMON, payload, change)
 
 
 def set_common_limit(ctx, payload):

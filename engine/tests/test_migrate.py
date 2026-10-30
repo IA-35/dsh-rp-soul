@@ -269,6 +269,27 @@ def an_old_database_is_migrated_and_playable():
     assert any("schema1" in name for name in backups), backups
 
 
+def model_written_common_waits_after_the_upgrade():
+    """schema 5 → 6：模型写进常识库的那些挂起等确认，你手动加的照旧生效。"""
+    data = e2e.temp_dir()
+    os.makedirs(data, exist_ok=True)
+    conn = db.connect(os.path.join(data, "engine.db"))
+    conn.execute("PRAGMA journal_mode=WAL")
+    db.begin_write(conn)
+    for target in range(1, 6):
+        db.MIGRATIONS[target](conn)
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '5')")
+    conn.execute("INSERT INTO common(n, id, key, weight, content, turn, at, origin) VALUES(1, 'c1', '[\"ds\"]', 0.8, '你写的。', NULL, NULL, 'manual')")
+    conn.execute("INSERT INTO common(n, id, key, weight, content, turn, at, origin) VALUES(2, 'c2', '[\"mc\"]', 0.5, '模型写的。', 3, NULL, 'fold')")
+    conn.execute("COMMIT")
+    conn.close()
+    with Sidecar(data) as s:
+        panel = s.ok("debug-common", {})
+        pending = {row["id"]: row["pending"] for row in panel["rows"]}
+        assert pending == {"c1": False, "c2": True}, pending
+        assert panel["pending"] == 1, panel
+
+
 def an_old_export_file_imports_as_her():
     state = v1_state()
     doc = transfer.build(state, legacy_persona(), [], {"session_id": state["session_id"]}, NOW)
@@ -292,5 +313,6 @@ check("events with someone else are dropped", events_with_someone_else_are_dropp
 check("the upgrade does not touch its input", the_input_is_not_touched)
 check("a new state passes through untouched", a_new_state_passes_through)
 check("an old database is migrated (with a backup) and playable", an_old_database_is_migrated_and_playable)
+check("model-written common waits for you after the upgrade", model_written_common_waits_after_the_upgrade)
 check("an old export file imports as her", an_old_export_file_imports_as_her)
 run("migrate")

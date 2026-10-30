@@ -195,6 +195,8 @@ EDIT_COMMON = _obj(
 
 DELETE_COMMON = _obj(dict(request_id=F(S.RequestId()), common_id=F(S.Id())), "delete-common")
 
+APPROVE_COMMON = _obj(dict(request_id=F(S.RequestId()), common_id=F(S.Id())), "approve-common")
+
 SET_COMMON_LIMIT = _obj(dict(request_id=F(S.RequestId()), limit=F(S.Int(2, 4))), "set-common-limit")
 
 EDIT_MEMORY = _obj(
@@ -225,6 +227,8 @@ NOTE_TURN = _obj(
         session_write_fields(),
         said=F(S.Str(0, 500), desc="主人这一轮说的话（宿主从会话里取的原文）"),
         reply=F(S.Str(0, 2000), desc="TA这一轮说的话（宿主从会话里取的原文）"),
+        together=F(S.Nullable(S.Bool()), required=False, default=None,
+                   desc="这一轮你在不在；她自己醒来的那一轮是 false。不带就沿用账本里上一次的"),
     ),
     "note-turn",
 )
@@ -242,6 +246,14 @@ SUMMARIZE_MEMORY = _obj(
                desc="值得一直记着的 0~2 条经历 id（会进 CLPA）"),
     ),
     "summarize-memory",
+)
+
+WRITE_DIARY = _obj(
+    dict(
+        session_write_fields(),
+        text=F(S.Str(1, 300), desc="那一天的日记：第一人称，按时间顺下来，记得感受和变化"),
+    ),
+    "write-diary",
 )
 
 DEBUG_DELETE_THOUGHT = _obj(

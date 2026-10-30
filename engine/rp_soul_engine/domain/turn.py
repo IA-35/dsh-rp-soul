@@ -90,6 +90,8 @@ def commit_fields():
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
         "together": F(S.Bool(), required=False, default=True,
                       desc="这一回合你们在不在一起；她自己醒来的那个回合是 false（由桥接层自动带，模型不用填）"),
+        "host_memory": F(S.Bool(), required=False, default=False,
+                         desc="宿主会在回合结束后自己收 ABM、写日记（由桥接层自动带，模型不用填）；带上时 memory_fold / memory_diary 不再是必填"),
     }
 
 

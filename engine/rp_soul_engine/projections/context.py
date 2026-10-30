@@ -189,7 +189,7 @@ def brief(state, persona, save=None, cue=""):
     known = CM.select(state.get("common") or (), cue, CM.limit_of(state.get("common_limit")))
     if known:
         context["common"] = CM.render(known, cue)
-    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "memories", "agency", "common"))
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "last_diary", "memories", "agency", "common"))
     return context
 
 

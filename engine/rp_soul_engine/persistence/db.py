@@ -387,7 +387,22 @@ def _migrate_to_5(conn):
     )
 
 
-MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3, 4: _migrate_to_4, 5: _migrate_to_5}
+def _migrate_to_6(conn):
+    """Schema 6: 模型提的常识先挂着，你确认了才注入。
+
+    已经在库里的、由模型在汇总 / 写日记时写进来的那些也一并挂起：它们从来
+    没被你看过，规则改了就该一视同仁。你手动加的照旧生效。
+    """
+    _exec_script(
+        conn,
+        """
+        ALTER TABLE common ADD COLUMN pending INTEGER NOT NULL DEFAULT 0;
+        UPDATE common SET pending = 1 WHERE origin IN ('fold', 'diary')
+        """,
+    )
+
+
+MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2, 3: _migrate_to_3, 4: _migrate_to_4, 5: _migrate_to_5, 6: _migrate_to_6}
 
 
 def _now_stamp():

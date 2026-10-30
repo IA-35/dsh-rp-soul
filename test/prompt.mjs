@@ -55,6 +55,12 @@ const assemble = async (agent, signal) => app.systemPrompt.assemble(agent ? asse
 // 账本现在走「有序动态 runtime context」，不再是系统提示词的 section——
 // 系统提示词必须恒定，前缀才能一路命中缓存。
 const engineText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-engine')?.text ?? '';
+// 「她想起来的」单独一段：跟着你这句话变的东西都在这里，局面那段才能保持不变。
+const recallText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-recall')?.text ?? '';
+// 后台的活是异步的：等它做完，最多等两秒
+const waitFor = async (check) => {
+  for (let i = 0; i < 100 && !(await check()); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+};
 try {
   const a = await commit(await start(), '重启前留下的悬念A');
   const b = await commit(await start(), '另一局留下的悬念B');
@@ -117,17 +123,28 @@ try {
     agent.session = { deriveMessages: () => [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }] };
   };
   sayTo(agentA, '我平时用的是 ds 这个模型');
-  has(engineText(await assemble(agentA)), '### 常识', '8. 命中关键词的常识跟着快照注入');
-  has(engineText(await assemble(agentA)), '深度求索', '8. 常识正文也在');
+  const hit = await assemble(agentA);
+  has(recallText(hit), '### 常识', '8. 命中关键词的常识跟着「想起来的」那段注入');
+  has(recallText(hit), '深度求索', '8. 常识正文也在');
+  hasNot(engineText(hit), '### 常识', '8. 常识不在局面那段：那段不该跟着你这句话变');
   sayTo(agentA, '今天下雨了，路上有点堵');
-  hasNot(engineText(await assemble(agentA)), '### 常识', '8. 没命中就不出现');
+  const miss = await assemble(agentA);
+  hasNot(recallText(miss), '### 常识', '8. 没命中就不出现');
+  eq(engineText(miss), engineText(hit), '8. 换一句话，局面那段一字不变（宿主不会再追加一份）');
   // 注入给模型的上下文（goal、压缩摘要）也是 user 角色，但不是你说的话。
   agentA.session = {
     deriveMessages: () => [
       { role: 'user', source: { kind: 'goal-round' }, content: [{ type: 'text', text: '我平时用的是 ds 这个模型' }] },
     ],
   };
-  hasNot(engineText(await assemble(agentA)), '### 常识', '8. 别人注入的上下文不算你说的话');
+  hasNot(recallText(await assemble(agentA)), '### 常识', '8. 别人注入的上下文不算你说的话');
+  // 宿主起的子代理也会走装配：它不是她，局面和想起来的都不给
+  const child = { id: 'child-fold', session: { header: { origin: 'subagent' }, deriveMessages: () => [
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '我平时用的是 ds 这个模型' }] },
+  ] } };
+  const childAssembly = await assemble(child);
+  eq(engineText(childAssembly), '', '8. 子代理的装配里没有她的局面');
+  eq(recallText(childAssembly), '', '8. 子代理的装配里也没有她想起来的');
   // 快照里已经写着局面了，别再让模型每轮白跑一趟 soul_state 才敢动笔。
   const snap = engineText(await assemble(agentA));
   hasNot(snap, '写之前用 soul_state', '8. 快照不要求每轮先调 soul_state');
@@ -164,10 +181,12 @@ try {
   }
   ok(subagentsSpawned.length === 0, '10. 还没攒满时没去扰动子代理');
   await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitFor(async () => subagentsSpawned.length > 0
+    && (await client.call('debug-memories', { session_id: foldGame.session_id })).entries.some((row) => row.layer === 'scm'));
   eq(subagentsSpawned.length, 1, '10. 攒满了就起一个子代理去收');
   has(subagentsSpawned[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
-  eq(subagentsSpawned[0]?.provider, 'fork', '10. 用的是 fork：子代理带着这一局的上下文开工');
+  eq(subagentsSpawned[0]?.provider, 'spawn', '10. 用的是 spawn：全新的子 agent，不复制整个会话的上下文');
+  eq(subagentsSpawned[0]?.label, '记忆整理', '10. 这一次是收 ABM');
   eq(subagentsSpawned[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
   ok(subagentsSpawned[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
   const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;

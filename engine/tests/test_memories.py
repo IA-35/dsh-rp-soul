@@ -589,6 +589,32 @@ def an_alone_exchange_is_an_experience():
     assert entry["content"] == "她把灯芯剪短了一截。", entry["content"]
 
 
+def a_noted_exchange_weighs_what_she_felt():
+    """宿主替她记的那条也按情绪算轻重：上一条之后冒出来的心事越重，这条越重。"""
+    from rp_soul_engine.domain import mood as MO
+    state, _persona = start()
+    plain, _ = MEM.note_exchange(state, "今天吃了什么", "面。", turn=state["turn"])
+    assert plain["importance"] == 0.3, plain["importance"]
+    her = next(cid for cid in state["characters"] if cid != state["player_id"])
+    MO.add_thought(state, her, "你把伞留给了我", 12, "memory", minutes=600)
+    moved, _ = MEM.note_exchange(state, "伞你拿着", "那你怎么办？", turn=state["turn"])
+    assert moved["importance"] > plain["importance"], (moved["importance"], plain["importance"])
+    # 「在场」这类情境心事每段都会刷新，不算这一轮的分量
+    MO.add_thought(state, her, "在场", 3, "situational")
+    calm, _ = MEM.note_exchange(state, "走吧", "嗯。", turn=state["turn"])
+    assert calm["importance"] == 0.3, calm["importance"]
+
+
+def only_lines_your_words_touch_are_marked_cued():
+    """被你这句话的关键词撞上的才标 cued：快照只放这些，其余的留给 soul_state。"""
+    state, _persona = start()
+    MEM.add(state, "scm", "summary", "那晚一起去看了海，风很大", 0.8)
+    MEM.add(state, "scm", "summary", "下午你帮我修好了台灯", 0.8)
+    rows = MEM.inject(state, "那次一起去看了海吗", MEM.SCM_FULL)
+    cued = [r["text"] for r in rows if r.get("cued")]
+    assert cued == ["那晚一起去看了海，风很大"], rows
+
+
 def an_empty_exchange_writes_nothing():
     """一句话都没有就别写：空白条目会白占 ABM 的位置。"""
     state, _persona = start()
@@ -700,6 +726,8 @@ check("mentioning it makes it stronger", mentioning_it_makes_it_stronger)
 check("an exchange is noted without the model", an_exchange_is_noted_without_the_model)
 check("noted exchanges still reach the fold", noted_exchanges_still_reach_the_fold)
 check("an alone exchange is an experience", an_alone_exchange_is_an_experience)
+check("a noted exchange weighs what she felt", a_noted_exchange_weighs_what_she_felt)
+check("only lines your words touch are marked cued", only_lines_your_words_touch_are_marked_cued)
 check("an empty exchange writes nothing", an_empty_exchange_writes_nothing)
 check("a busy day stays whole until the fold", a_busy_day_stays_whole_until_the_fold)
 check("the brief stays small while a fold is due", the_brief_stays_small_while_a_fold_is_due)

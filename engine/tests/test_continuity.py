@@ -128,7 +128,51 @@ def a_real_reply_restores_presence_without_waiting_a_whole_minute():
         assert state["last_player_at"] == clock.return_value
 
 
+def the_host_writes_the_diary_and_she_keeps_the_latest():
+    """宿主子代理写日记：落盘、不删 SCM，最近一篇留在账本里随上下文带上。"""
+    with game() as (ctx, clock, row):
+        request(ctx, row, "diary")
+        rev = repo.load_session(ctx.db(), row["session_id"])["revision"]
+        out = service.write_diary(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
+                                        "expected_revision": rev, "text": "今天你来陪我吃了午饭。"})
+        path = Path(out["diary"]["path"])
+        assert "今天你来陪我吃了午饭" in path.read_text(encoding="utf-8"), path
+        state = repo.load_session(ctx.db(), row["session_id"])["state"]
+        assert state["requests"]["memory_diary"] is None, state["requests"]
+        assert [e for e in MEM.entries(state) if e["layer"] == "scm"], "写日记不删 SCM"
+        context = service.get_context(ctx, {"session_id": row["session_id"], "depth": "brief"})["context"]
+        assert context["last_diary"]["text"] == "今天你来陪我吃了午饭。", context.get("last_diary")
+        assert context["last_diary"]["label"].startswith("第 1 天"), context["last_diary"]
+        # 再写一次：没有欠着的了
+        try:
+            service.write_diary(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
+                                      "expected_revision": out["revision"], "text": "又一篇。"})
+        except Exception as exc:  # AppError
+            assert "没有要写的日记" in str(exc), exc
+        else:
+            raise AssertionError("没有欠着的日记也写进去了")
+
+
+def a_host_backed_commit_is_not_forced_to_pay():
+    """宿主能收的时候，对话里那次提交不交 memory_fold / memory_diary 也不驳。"""
+    with game() as (ctx, clock, row):
+        request(ctx, row, "fold")
+        rejected = False
+        try:
+            service.commit_turn(ctx, e2e.commit(row, ops=[ACTION]))
+        except Exception:
+            rejected = True
+        assert rejected, "没有宿主兜底时，照旧要交"
+        result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], host_memory=True))
+        assert result["turns"][0].get("folded") is None, result["turns"][0]
+        state = repo.load_session(ctx.db(), row["session_id"])["state"]
+        left = [e for e in MEM.entries(state) if e["layer"] == "abm" and e["content"] == "你来陪我吃了午饭。"]
+        assert left, "这一批原样留着，等宿主去收"
+
+
 check("a diary commit writes its file and replays once", diary_commit_writes_a_file_and_replay_keeps_it)
+check("the host writes the diary and she keeps the latest", the_host_writes_the_diary_and_she_keeps_the_latest)
+check("a host-backed commit is not forced to pay", a_host_backed_commit_is_not_forced_to_pay)
 check("separate games keep their own diary files", separate_games_keep_their_own_diary_files)
 check("fold receipts identify the SCM entry", fold_receipt_names_the_new_scm_entry)
 check("a rejected diary commit leaves no file", rejected_diary_commit_leaves_the_request_and_no_file)

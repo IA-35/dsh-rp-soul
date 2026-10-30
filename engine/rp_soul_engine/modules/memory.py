@@ -61,6 +61,9 @@ def project(state, persona, cue, full):
         view = MEM.request_view(state, state["requests"].get(key), compact=not full)
         if view is not None:
             fields[key + "_sources"] = view
+    diary = state["memory"].get("diary_last")
+    if diary:
+        fields["last_diary"] = {"day": diary["day"], "label": MEM.day_label(state, diary["day"]), "text": diary["text"]}
     return {"context": fields}
 
 
@@ -77,8 +80,12 @@ def _host_paid(state, kind):
 def before_turn(state, ctx):
     commit = ctx.commit
     requests = ctx.state["requests"]
+    # 宿主会在回合结束后起子代理去收 ABM、写日记：对话中的她交不交都行，
+    # 交了照收，不交也不驳。只有宿主收不了（没有子代理服务、连着失败）时，
+    # 桥接层不带 host_memory，才退回「这次提交必须写上」。
+    host = bool(commit.get("host_memory"))
     if requests.get("memory_fold"):
-        if not commit.get("memory_fold"):
+        if not commit.get("memory_fold") and not host:
             ctx.error(
                 "$.memory_fold",
                 "ABM 该收进 SCM 了",
@@ -89,11 +96,11 @@ def before_turn(state, ctx):
     elif commit.get("memory_fold") and not _host_paid(state, "fold"):
         ctx.error("$.memory_fold", "引擎没有要求收 ABM", "去掉 memory_fold；ABM 满了或者搁置一小时，引擎会自己要", INVALID_INPUT)
     if requests.get("memory_diary"):
-        if not commit.get("memory_diary"):
+        if not commit.get("memory_diary") and not host:
             ctx.error(
                 "$.memory_diary",
                 "该写今天的日记了",
                 "读上下文的 memory_diary_sources，把这一天写成一篇日记（第一人称，按时间顺下来，≤300 字）",
             )
-    elif commit.get("memory_diary"):
+    elif commit.get("memory_diary") and not _host_paid(state, "diary"):
         ctx.error("$.memory_diary", "引擎没有要求写日记", "去掉 memory_diary；每晚 23:30 引擎会自己要", INVALID_INPUT)

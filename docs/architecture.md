@@ -81,7 +81,8 @@ application 层；`domain/` 里没有一处 `open()`。
 ### 3.2 一次对话（模型侧）
 
 ```
-模型：读系统提示词末尾的「当前现状」快照（时间、心情、记忆、常识、该交的总结都在里面）
+模型：读动态上下文末尾的「当前现状」（时间、心情、可能发生；宿主收不了时还有该交的总结）
+      和「想起来的」（被这句话撞上的记忆、命中的常识、新会话第一轮的最近一篇日记）
       → 需要「下一步能做什么」的候选或别的细节时，才调 soul_state（brief；隔久了/新的一天/上一次被驳回用 full）
       → 写正文
       → soul_commit 交账
@@ -90,7 +91,8 @@ application 层；`domain/` 里没有一处 `open()`。
 宿主：回合结束（agent/turn-stopping）→ note-turn 把这一问一答写进 ABM
       （模型这一轮交过账就跳过；记账失败不抛，绝不因此判这一轮出错）
       → 再问一次引擎「该收了没有」，满了就自己起一个子代理
-      → 子代理（provider: fork，带着这一局的上下文）写回来，summarize-memory 落成一条 SCM
+      → 子代理（provider: spawn，全新的子 agent，不复制会话上下文）写回来，summarize-memory 落成一条 SCM
+      → 欠着日记就再起一个写日记，write-diary 落盘
 ```
 
 ### 3.3 一次 soul_commit 在引擎内部
@@ -329,7 +331,7 @@ state["clock"]    故事时钟 {"day": N, "minute": M}，被 span 推着走
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 读这局的工作指令（`agency` / `due_soon` / `known_facts` / `her_knows` / 总结请求）。`depth: brief`（~6 KB）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`want_twist` 要转折。心情、记忆、常识跟「当前局面」一起每轮自动注入，不从这里取 |
+| `soul_state` | 读这局的工作指令（`agency` / `due_soon` / `known_facts` / `her_knows` / 总结请求）。`depth: brief`（~6 KB）/ `full`（~20 KB，隔久了/新的一天/上一次被驳回）；`want_twist` 要转折。心情、常识跟「当前局面」一起每轮自动注入，不从这里取；记忆只有被这句话撞上的才自动注入，其余几条在这里 |
 | `soul_commit` | 写完正文后交账。`operations` 最多 40 条；`summary` ≤120 字；`remember` ≤60 字（她第一人称怎么记）；引擎要把 ABM 收进 SCM 时带 `memory_fold`（≤300 字）、该写日记时带 `memory_diary`（≤300 字）；`memory_keep` 挑 0–2 条进 CLPA |
 | `soul_admin` | 14 个 action：`start` / `status` / `undo` / `save` / `load` / `list` / `delete` / `set_safety` / `set_preferences` / `export` / `import` / `mood_panel` / `drop_thought` / `reset_mapping` |
 

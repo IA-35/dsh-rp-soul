@@ -39,8 +39,10 @@ const mod = await import(new URL('../lib/index.js', import.meta.url).href);
 const tools = new Map();
 const sections = new Map();
 const routes = [];
+const handlers = new Map();
 const ctx = {
   effect(fn) { const d = fn(); return () => { if (typeof d === 'function') d(); }; },
+  on(name, fn) { handlers.set(name, fn); return () => { handlers.delete(name); }; },
   inject(_deps, cb) {
     cb({
       effect: ctx.effect,
@@ -93,8 +95,9 @@ eq(brief.session_id, sessionId, '3. 会话 id 一致');
 ok(brief.context !== undefined && brief.context !== null, '3. 带回 context');
 eq(brief.context.world, undefined, '3. 没有 world 段');
 ok(Array.isArray(brief.context.agency), '3. agency 是数组');
-// 记忆和常识跟着提示词快照走了（装配时按你这句话挑好），工具结果里再来一遍是重复。
-eq(brief.context.memories, undefined, '3. memories 不在工具结果里（提示词里已有）');
+// 常识跟着提示词走（装配时按你这句话挑好），工具结果里再来一遍是重复；
+// 记忆在快照里只有被这句话撞上的那几条，其余的在这里给模型自己翻。
+ok(Array.isArray(brief.context.memories), '3. memories 在工具结果里（快照只放被勾起的那几条）');
 eq(brief.context.common, undefined, '3. common 不在工具结果里（提示词里已有）');
 ok(brief.context.mood !== undefined, '3. 心情块提到顶层');
 has(JSON.stringify(brief.context.mood), 'band', '3. 心情带档位');
@@ -138,8 +141,8 @@ revision = committed.revision;
 const recalled = await call('soul_state', { cue: '今晚雨真大' });
 ok(Array.isArray(recalled.context?.her_knows), '6b. context 带 her_knows');
 eq(recalled.context?.recent, undefined, '6b. 旧的 recent 摘要不再单独给');
-// 记忆和常识由装配钩子按你这句话挑好、写进快照（见 prompt.mjs 第 8 条）。
-eq(recalled.context?.memories, undefined, '6b. memories 不进工具结果（提示词里已有）');
+// 常识由装配钩子按你这句话挑好、写进「想起来的」那段（见 prompt.mjs 第 8 条）。
+ok(Array.isArray(recalled.context?.memories), '6b. memories 在工具结果里，供模型多回忆一点');
 eq(recalled.context?.common, undefined, '6b. common 不进工具结果（提示词里已有）');
 
 // ---- 6c. 常识库：工具 schema 收得下；注入靠提示词快照，不靠工具结果 ----
@@ -148,6 +151,53 @@ ok(
   '6c. soul_commit 能写 common',
 );
 eq(recalled.context?.common, undefined, '6c. 常识不进工具结果（提示词里已有）');
+
+// ---- 6d. 宿主起的子代理不是她：读不到账本，也交不了账 ----
+const childExec = { signal: undefined, agent: { id: 'child-1', session: { header: { origin: 'subagent' }, deriveMessages: () => [] } } };
+eq((await tools.get('soul_state').execute({}, childExec)).started, false, '6d. 子代理读不到她的账本');
+eq((await tools.get('soul_commit').execute({ action_mode: 'continue', summary: '子代理想交账' }, childExec)).committed, false,
+  '6d. 子代理也交不了账');
+const deepExec = { signal: undefined, agent: { id: 'child-2', session: { header: { delegationDepth: 1 }, deriveMessages: () => [] } } };
+eq((await tools.get('soul_state').execute({}, deepExec)).started, false, '6d. 委派深度大于 0 的同样算子代理');
+
+// ---- 6e. 这一轮交过账，回合结束宿主就不再记一条（哪怕她交完账又说了一句） ----
+const { EngineClient } = await import(new URL('../lib/engine-client.js', import.meta.url).href);
+const peek = new EngineClient({ dataDir: join(home, 'rp-soul', 'engine') });
+// 宿主替她记的那条长这样：「你：… 她：…」；交账那条是她自己的记法，小动作另记一条 action
+const notedOf = async () => (await peek.call('debug-memories', { session_id: sessionId })).entries.filter((e) => e.layer === 'abm' && e.content.startsWith('你：'));
+const stopping = handlers.get('agent/turn-stopping');
+ok(typeof stopping === 'function', '6e. 挂上了回合结束的钩子');
+const talk = (said, reply) => [
+  { id: 'u-' + said, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
+  { id: 'a-' + said, role: 'assistant', content: [{ type: 'text', text: reply }] },
+];
+const noteAgent = { id: 'conv-1', session: { deriveMessages: () => talk('今晚忙吗', '还行，就是雨大。') } };
+const before6e = (await notedOf()).length;
+const turnArgs = {
+  action_mode: 'result', player_input: '今晚忙吗',
+  operations: [{ op: 'npc_action', kind: 'observe', action: 'TA 抬头看了一眼窗外。', significant: false }],
+  content_tags: [], summary: '你问 TA 忙不忙。', open_action: '等你接话',
+};
+const turnCommitted = await tools.get('soul_commit').execute(turnArgs, { signal: undefined, agent: noteAgent });
+ok(turnCommitted.committed === true, '6e. 这一轮交了账（' + JSON.stringify(turnCommitted.error ?? '') + '）');
+// 交完账她又说了一句：最后一条消息变了，但这一轮仍算交过
+noteAgent.session = { deriveMessages: () => [...talk('今晚忙吗', '还行，就是雨大。'), { id: 'a-more', role: 'assistant', content: [{ type: 'text', text: '你先坐。' }] }] };
+await stopping({ agent: noteAgent });
+eq((await notedOf()).length, before6e, '6e. 交过账的那一轮只有交账那一条，不会再记一条「你：… 她：…」');
+// 下一轮没交账：宿主自己记一条
+noteAgent.session = { deriveMessages: () => talk('伞放哪儿', '门边就行。') };
+await stopping({ agent: noteAgent });
+const after6e = await notedOf();
+eq(after6e.length, before6e + 1, '6e. 没交账的那一轮由宿主记一条');
+ok(after6e.some((e) => e.content === '你：伞放哪儿 她：门边就行。'), '6e. 记的是这一轮的一问一答');
+// 子代理那一轮结束也不记
+await stopping({ agent: { id: 'child-1', session: { header: { origin: 'subagent' }, deriveMessages: () => talk('把下面这一批收成一条', '那天雨很大。') } } });
+eq((await notedOf()).length, after6e.length, '6e. 子代理那一轮结束不当成她的对话记下来');
+await peek.stop();
+// 后面的步骤按「只交过一回合」来数：把 6e 这一回合撤掉
+const undo6e = await call('soul_admin', { action: 'undo' });
+ok(undo6e.ok !== false, '6e. 撤掉这一节加的回合（' + JSON.stringify(undo6e.error ?? '') + '）');
+revision = undo6e.revision ?? revision;
 
 // ---- 7. stale revision 会被引擎拒，但带当前 revision ----
 const staleClient = tools.get('soul_commit');

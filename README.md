@@ -160,7 +160,8 @@ RimTalk-ExpandMemory 工作台的简化版：
   中文按子串比，英文和数字按词边界比——所以 `ds` 不会在 `hands` 里误命中。
 - 一句话命中好几条时按权重从高到低取，取几条在这里调（2~4 条，默认 4）。
   注入的样子是 `## 常识` 下面一行一条 `- ds： deepseek 是深度求索旗下的大语言模型`。
-- 可以在这里加、改、删；她总结 SCM 和写日记时也可能顺手记下新的（同一组关键词会覆盖旧的那条）。
+- 可以在这里加、改、删；她总结 SCM 和写日记时也可能顺手提新的——**这些先标「待确认」，你点「确认」才生效**，
+  免得一句说错的话从此一直被当成常识。同一组关键词：还没确认的会被她的新说法覆盖，你确认过的她改不动。
 
 ### 自主行动记录
 
@@ -222,7 +223,9 @@ RimTalk-ExpandMemory 工作台的简化版：
 | PUT | `/rp-soul/engine/memory` | 改一条记忆 `{session_id, memory_id, revision, content?, importance?, activity?, keywords?, note?, pinned?}` |
 | DELETE | `/rp-soul/engine/memory` | 删一条记忆 `{session_id, memory_id, revision, reason}`（留审计） |
 | POST | `/rp-soul/engine/memory/request` | 立即汇总 / 写日记 `{session_id, revision, kind: fold|diary}` |
-| GET | `/rp-soul/engine/common` | 「常识库」页：全部条目 + 每次注入几条 |
+| GET | `/rp-soul/engine/common` | 「常识库」页：全部条目 + 每次注入几条（`pending` 是她提的、等你确认的） |
+| POST | `/rp-soul/engine/common/approve` | 确认一条她提的常识 `{common_id}`，确认后才会被注入 |
+| GET | `/rp-soul/engine/diaries?session_id=` | 「记忆」页：她写过的日记，新的在前 |
 | POST | `/rp-soul/engine/common` | 加一条 `{key, weight, content}` |
 | PUT | `/rp-soul/engine/common` | 改一条 `{common_id, key?, weight?, content?}` |
 | DELETE | `/rp-soul/engine/common` | 删一条 `{common_id}` |
@@ -404,7 +407,7 @@ routine:
 
 | 工具 | 什么时候用 |
 |---|---|
-| `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结。心情、记忆、常识、时间、在场、该交的总结「当前局面」每轮都已写进上下文，这里不再重复一遍。不是每轮都必调——快照里没有的（比如 `agency` 候选）才需要读。`want_twist` 取转折 |
+| `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结，以及按分数排出来的几条记忆（每轮自动注入的只有被你这句话撞上的那几条）。心情、常识、时间、在场「当前局面」每轮都已写进上下文，这里不再重复一遍。不是每轮都必调——快照里没有的（比如 `agency` 候选）才需要读。`want_twist` 取转折 |
 | `soul_commit` | 写完这一次后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。可选的 `remember` 用第一人称写她会怎么记得这一次；引擎要把 ABM 收进 SCM / 写日记时，这次提交带上 `memory_fold` / `memory_diary`（汇总时可加 `memory_keep` 挑 0~2 条进 CLPA）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这次过了多久 |
 | `soul_admin` | 开局（`start`，全局作用域下通常不必手动开）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
 
@@ -432,7 +435,9 @@ routine:
 - **ABM 收进 SCM**：ABM 满 20 条，或者搁置一小时以上（说话时上游那批已经过去一小时），
   宿主自己起一个子代理，把这一批收成一条第一人称的 SCM（≤300 字）、ABM 清空，
   顺手挑 0~2 条写进 CLPA。整个过程不经过对话里的模型——它不调 `soul_commit` 也照收。
-  子代理用 `fork`：它带着这一局已经走完的上下文开工，知道「他们」是谁；结果是回给宿主
+  子代理用 `spawn`：一个全新的子 agent，不复制整个会话的上下文（为了收二十行原话去读几万 token 不值），
+  要整理的原文全在提示词里，人设照样由本插件注入，所以还是她的口吻。子代理会话在本插件的钩子里一律跳过：
+  不注入局面、不记进 ABM、调 soul_* 工具也碰不到账本。结果是回给宿主
   而不是回到对话里（`delivery: "caller"`），abort 也是自己建的，不跟着回合一起被掐。
   没有子代理服务时退回老办法：让模型在下一次交账时写。
   待收的是**全部**攒着的条目，不是固定 20 条——收完一批剩下的立刻组成下一批，

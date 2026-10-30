@@ -47,6 +47,8 @@ def make(fid, keys, weight, content, turn=None, at=None, origin="manual"):
         "turn": turn,
         "at": at,
         "origin": origin,
+        # 你在设置页手动加的直接生效；模型提的要等你点「确认」
+        "pending": False,
     }
 
 
@@ -79,7 +81,7 @@ def select(rows, cue, limit=LIMIT_DEFAULT):
     权重相同就看谁说得多：同一个关键词下，比它更具体的那条更容易被想起来，
     所以关键词多的排前面。
     """
-    found = [e for e in rows if hits(e, cue)]
+    found = [e for e in rows if not e.get("pending") and hits(e, cue)]
     found.sort(key=lambda e: (-e["weight"], -len(e["key"]), _order(e)))
     return found[: max(1, int(limit))]
 
@@ -122,18 +124,23 @@ def from_model(raw, turn, at=None, origin="fold"):
         weight = 0.5
     low, high = WEIGHT_RANGE
     weight = max(low, min(high, weight))
-    return {"key": keys, "weight": round(weight, 2), "content": content[:CONTENT_MAX], "turn": turn, "at": at, "origin": origin}
+    return {"key": keys, "weight": round(weight, 2), "content": content[:CONTENT_MAX], "turn": turn, "at": at, "origin": origin,
+            "pending": True}
 
 
 def merge(rows, fresh, next_id):
-    """把模型提到的新常识并进库里：关键词完全相同的当成同一条，覆盖内容与权重。
+    """把模型提到的新常识并进库里，一律挂起等你确认。
 
+    关键词完全相同的当成同一条：还挂着的就用新说法覆盖；你已经确认过（或
+    手动加）的不动 —— 模型不能改掉你点过头的东西。
     返回 (新的库, 改动过的 id 列表)。
     """
     rows = [copy(e) for e in rows]
     touched = []
     for item in fresh:
         same = next((e for e in rows if set(e["key"]) == set(item["key"])), None)
+        if same is not None and not same.get("pending"):
+            continue
         if same is not None:
             same.update({"weight": item["weight"], "content": item["content"], "turn": item["turn"], "at": item["at"], "origin": item["origin"]})
             touched.append(same["id"])
@@ -151,6 +158,7 @@ def next_id(rows):
 def panel(rows, limit=LIMIT_DEFAULT):
     return {
         "count": len(rows),
+        "pending": sum(1 for e in rows if e.get("pending")),
         "limit": limit,
         "rows": sorted(rows, key=_order),
     }

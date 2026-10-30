@@ -70,6 +70,7 @@ _register("delete-memory", APP + "service", "delete_memory", "required", "sessio
 _register("note-turn", APP + "service", "note_turn", "required", "session_write", "宿主在回合结束时自动记一条 ABM（不经过模型交账）", "NOTE_TURN")
 _register("request-memory", APP + "service", "request_memory", "required", "session_write", "设置页记忆页：立即总结 / 立即归档（下一次提交执行）", "REQUEST_MEMORY")
 _register("summarize-memory", APP + "service", "summarize_memory", "required", "session_write", "宿主起的子代理把这一批 ABM 收成一条 SCM（不经过模型交账）", "SUMMARIZE_MEMORY")
+_register("write-diary", APP + "service", "write_diary", "required", "session_write", "宿主起的子代理把欠着的那一天写成日记（不经过模型交账）", "WRITE_DIARY")
 _register("debug-activity", APP + "service", "debug_activity", "required", "read", "设置页自主行动页：最近若干回合的行动、离屏片段与关系变化", "DEBUG_ACTIVITY")
 _register("debug-facts", APP + "service", "debug_facts", "required", "read", "设置页常识库：她知道的事", "DEBUG_FACTS")
 _register("delete-fact", APP + "service", "delete_fact", "required", "session_write", "设置页常识库：删一条事实（留审计）", "DELETE_FACT")
@@ -77,6 +78,7 @@ _register("debug-common", APP + "service", "debug_common", "none", "read", "设�
 _register("add-common", APP + "service", "add_common", "required", "settings_write", "设置页常识库：加一条常识", "ADD_COMMON")
 _register("edit-common", APP + "service", "edit_common", "required", "settings_write", "设置页常识库：改一条常识", "EDIT_COMMON")
 _register("delete-common", APP + "service", "delete_common", "required", "settings_write", "设置页常识库：删一条常识", "DELETE_COMMON")
+_register("approve-common", APP + "service", "approve_common", "required", "settings_write", "设置页常识库：确认一条模型提的常识，确认后才会被注入", "APPROVE_COMMON")
 _register("set-common-limit", APP + "service", "set_common_limit", "required", "settings_write", "设置页常识库：改每次注入几条（2~4）", "SET_COMMON_LIMIT")
 
 

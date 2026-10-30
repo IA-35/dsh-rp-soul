@@ -209,6 +209,13 @@ def capture(state, ctx, commit):
         remember=bool((commit.get("remember") or "").strip()),
     )
     added.append(main)
+    # 这一轮的心事已经算进交账这条了，宿主之后记的条目别再算一遍
+    weighed = state["counters"].setdefault("weighed_thoughts", [])
+    for row in ctx.thoughts:
+        thought = row.get("thought") if isinstance(row, dict) else None
+        if thought and thought.get("id"):
+            weighed.append("%s:%s" % (row.get("npc_id"), thought["id"]))
+    del weighed[:-WEIGHED_KEEP]
     if milestones:
         main["pinned"] = True
         main["milestone"] = milestones
@@ -225,12 +232,41 @@ def capture(state, ctx, commit):
 
 
 SAID_MAX = 120
+# 记住最近算过轻重的那些心事 id，够覆盖一小时里冒出来的就行
+WEIGHED_KEEP = 50
 REPLY_MAX = 120
 
 
 def _said(text, limit):
     one = " ".join((text or "").split())
     return one if len(one) <= limit else one[: limit - 1] + "…"
+
+
+def _exchange_importance(state):
+    """宿主替她记的这一轮有多重：和交账那条同一把尺子（importance_of）。
+
+    没有交账就没有这一轮的 ctx.thoughts，所以改看心情本身：最近一小时里冒出来、
+    还没被哪一条记忆算过的事件型心事（memory 类；情境类的「在场」「很久没见你」
+    每段都会刷新，不算），按 |delta| 加起来。
+    「算过没有」按心事 id 记，不按时间比：宿主记的条目不推进时钟，同一分钟里
+    记好几条是常事，按时间比会把同一份心情算进每一条。
+    """
+    now = CL.to_abs(state["clock"])
+    weighed = state["counters"].setdefault("weighed_thoughts", [])
+    weight = 0
+    for cid, card in (state.get("characters") or {}).items():
+        if cid == state.get("player_id"):
+            continue
+        for thought in ((card or {}).get("mood") or {}).get("thoughts") or []:
+            key = "%s:%s" % (cid, thought.get("id"))
+            if thought.get("kind") != "memory" or key in weighed:
+                continue
+            if (thought.get("since_abs") or 0) < now - ABM_IDLE_MINUTES:
+                continue
+            weight += abs(thought.get("delta") or 0)
+            weighed.append(key)
+    del weighed[:-WEIGHED_KEEP]
+    return min(1.0, 0.3 + min(0.5, weight / 30.0))
 
 
 def note_exchange(state, said, reply, turn=None, together=True, at=None):
@@ -256,7 +292,7 @@ def note_exchange(state, said, reply, turn=None, together=True, at=None):
         if entry["layer"] == "abm" and entry["type"] in KEEPS and entry["content"] == content:
             return entry, True
     entry = add(
-        state, "abm", "conversation" if together else "experience", content, 0.4,
+        state, "abm", "conversation" if together else "experience", content, _exchange_importance(state),
         at=at, turn=turn,
         you=said[:YOU_MAX],
         exchanged=True,
@@ -448,6 +484,8 @@ def apply_diary(state, request, text):
         entry["diary_day"] = day
         written.append(entry["id"])
     state["counters"]["last_diary_day"] = day
+    # 最近一篇留在账本里：换了会话的第一轮要带上它（文件在盘上，引擎读快照时不翻盘）
+    state["memory"]["diary_last"] = {"day": day, "text": text}
     return {"day": day, "text": text, "ids": written,
             "markdown": diary_markdown(state, text, day)}
 
@@ -455,6 +493,11 @@ def apply_diary(state, request, text):
 def diary_markdown(state, text, day=None):
     """One day's diary, written the way she would keep one."""
     return "# %s\n\n%s\n" % (_day_text(state, day if day is not None else state["clock"]["day"]), text)
+
+
+def day_label(state, day):
+    """「第 3 天 · 周二」：日记的标题，也是注入时那篇日记的抬头。"""
+    return _day_text(state, day)
 
 
 def _day_text(state, day):
@@ -647,6 +690,10 @@ def inject(state, cue="", total=SCM_BRIEF):
         }
         if entry.get("pinned"):
             item["pinned"] = True
+        # 真被你这句话勾起来的（关键词撞上了），快照只放这几条；
+        # 只靠时间和层级凑进前几名的，留在 soul_state 里给模型自己翻。
+        if cued_by_words(entry, cue):
+            item["cued"] = True
         rows.append(item)
     return rows
 

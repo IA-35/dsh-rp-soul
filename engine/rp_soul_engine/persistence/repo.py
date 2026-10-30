@@ -677,7 +677,7 @@ def count_archive(conn, session_id):
 # 常识库（全局：不挂会话，也不进撤销账）
 
 
-COMMON_COLUMNS = "n, id, key, weight, content, turn, at, origin"
+COMMON_COLUMNS = "n, id, key, weight, content, turn, at, origin, pending"
 
 
 def _common_row(entry):
@@ -690,6 +690,7 @@ def _common_row(entry):
         entry.get("turn"),
         entry.get("at"),
         entry.get("origin") or "manual",
+        1 if entry.get("pending") else 0,
     )
 
 
@@ -697,7 +698,8 @@ def load_common(conn):
     """全部常识，按 id 排。"""
     rows = conn.execute("SELECT %s FROM common ORDER BY n" % COMMON_COLUMNS).fetchall()
     return [
-        {"id": r[1], "key": json.loads(r[2]), "weight": r[3], "content": r[4], "turn": r[5], "at": r[6], "origin": r[7]}
+        {"id": r[1], "key": json.loads(r[2]), "weight": r[3], "content": r[4], "turn": r[5], "at": r[6], "origin": r[7],
+         "pending": bool(r[8])}
         for r in rows
     ]
 
@@ -705,7 +707,7 @@ def load_common(conn):
 def write_common(conn, rows):
     """整表重写：常识库很小（几十条），不值得为增量维护一份 diff。"""
     conn.execute("DELETE FROM common")
-    conn.executemany("INSERT OR REPLACE INTO common(%s) VALUES(?,?,?,?,?,?,?,?)" % COMMON_COLUMNS, [_common_row(e) for e in rows])
+    conn.executemany("INSERT OR REPLACE INTO common(%s) VALUES(?,?,?,?,?,?,?,?,?)" % COMMON_COLUMNS, [_common_row(e) for e in rows])
 
 
 def common_limit(conn):
