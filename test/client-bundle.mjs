@@ -824,4 +824,11 @@ has(textOf(bareTree), '唤醒线关着', '13. 关着时给出提示');
 hasNot(clientSrc, '"/modules"', '代码模块化不增加运行时模块 API 请求');
 hasNot(clientSrc, 'data-module', '代码模块化不增加功能模块开关');
 
+// 迷你 React 不校验样式类型，真 React 会抛 "style prop expects a mapping"，
+// 页面整个消失。这里静态挡住 string style —— 导入预设后第一次渲染出编辑区才踩得到。
+const stringStyles = clientSrc.split('\n')
+  .map((line, i) => ({ line: line.trim(), at: i + 1 }))
+  .filter((one) => /style:\s*"[a-z-]+"/.test(one.line));
+eq(stringStyles.length, 0, 'style 必须是对象，不能是字符串' + (stringStyles.length ? '：第 ' + stringStyles.map((o) => o.at).join(',') + ' 行' : ''));
+
 done('client-bundle');
