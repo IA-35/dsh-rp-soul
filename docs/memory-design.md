@@ -55,6 +55,7 @@ RimTalk 的原始设计里，记忆是**一堆带活跃度的条目**：被想�
 要收时 `state["requests"]["memory_fold"] = {"ids": [...]}`。平时由宿主在回合结束后起子代理去收
 （`summarize-memory`）；桥接层交账时带上 `host_memory: true`，这次提交不交 `memory_fold` 也不驳，快照里也不写「该收了」。
 只有宿主收不了（没有子代理服务，或连着失败三次、正在歇五分钟）时才退回「下一次提交必须带 `memory_fold`」。
+设置页手点「立即汇总」也走同一条路，只是不等回合结束：先登记这批，再当场起子代理（`foldNow`）。
 不管谁写：
 `apply_fold` 把这些条目合成一条 `layer="scm", type="summary"` 的条目（正文 ≤300 字，`origin_ids` 记来源），
 然后从 entries 里删掉这批，ABM 变空。`memory_keep` 里点名的、以及 pinned 的，改成进 CLPA。
