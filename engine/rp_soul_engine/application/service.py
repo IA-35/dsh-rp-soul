@@ -1248,7 +1248,8 @@ def debug_memories(ctx, payload):
     payload = validate(specs.DEBUG_MEMORIES, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
-    state = session["state"]
+    # 只读也要走一遍时间结算：面板抬头给的是「现在几点」，存储里的 clock 停在上一次 settle，不 preview 就比真实时间慢一段。
+    state = SETTLE.preview(session["state"], now_iso())
     out = {
         "session_id": state["session_id"],
         "revision": state.get("revision", 0),
@@ -1572,7 +1573,8 @@ def debug_facts(ctx, payload):
     payload = validate(specs.DEBUG_FACTS, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
-    state = session["state"]
+    # 只读也要走一遍时间结算：面板抬头给的是「现在几点」，存储里的 clock 停在上一次 settle，不 preview 就比真实时间慢一段。
+    state = SETTLE.preview(session["state"], now_iso())
     facts = FA.of(state)
     # 名字表：显示「谁知道」时用名字而不是 id
     names = {state["player_id"]: "你"}
@@ -1654,7 +1656,8 @@ def debug_activity(ctx, payload):
     payload = validate(specs.DEBUG_ACTIVITY, payload)
     conn = ctx.db()
     session = repo.load_session(conn, payload["session_id"])
-    state = session["state"]
+    # 只读也要走一遍时间结算：面板抬头给的是「现在几点」，存储里的 clock 停在上一次 settle，不 preview 就比真实时间慢一段。
+    state = SETTLE.preview(session["state"], now_iso())
     # recent_turn_log already returns the newest row first: the page reads like
     # a log, not like a book, so no extra reordering here.
     rows = [_activity_row(state, row) for row in repo.recent_turn_log(conn, state["session_id"], payload["limit"])]

@@ -21,7 +21,7 @@ WEIGHT_RANGE = (0.0, 1.0)
 # 注入几条：设置页可以改，默认这个
 LIMIT_DEFAULT = 4
 LIMIT_RANGE = (2, 4)
-ORIGINS = ("manual", "fold", "diary")
+ORIGINS = ("manual", "fold", "diary", "turn")
 
 
 def _order(entry):

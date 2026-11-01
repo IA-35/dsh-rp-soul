@@ -28,6 +28,7 @@ A thought whose current |delta| < THOUGHT_MIN_ABS is dropped.
 
 from ..errors import INVARIANT_VIOLATION, detail
 from . import clock as CL
+from . import rules as RL
 from . import state as SS
 from . import structure as ST
 
@@ -269,6 +270,75 @@ def settle(state, turn):
 # ---------------------------------------------------------------------------
 # situational thoughts: computed by the engine, never written by the model
 
+# 条件注册表：id → 判定函数。数值、文案、时长、开关都在 data/situational.json
+# 里，只有「什么时候算成立」这件事必须留在代码里 —— 它要读 state。
+# 加一条新规则：这里加一个函数，那里加一行数据。表里写了、这里没有的 id 一律
+# 不成立（不会报错），方便先关掉一条规则而不删代码。
+
+
+def _when_present(state, cid, ctx):
+    return ctx["present"] and ctx["player_present"]
+
+
+def _when_absent(state, cid, ctx):
+    return not ctx["player_present"]
+
+
+def _when_away_long(state, cid, ctx):
+    return ctx["player_present"] and ctx["gap"] >= ST.DAY
+
+
+def _due_events(state, cid):
+    return [e for e in state["events"].values()
+            if e["state"] == "pending" and cid in e["participants"]]
+
+
+def _when_event_overdue(state, cid, ctx):
+    due = _due_events(state, cid)
+    return bool(due) and min(CL.to_abs(e["due"]) for e in due) <= ctx["now"]
+
+
+def _when_event_due(state, cid, ctx):
+    due = _due_events(state, cid)
+    if not due:
+        return False
+    soonest = min(CL.to_abs(e["due"]) for e in due)
+    return ctx["now"] < soonest <= ctx["now"] + ST.DAY
+
+
+def _when_tension(state, cid, ctx):
+    edge = SS.edge(state, cid, ctx["player"])
+    return bool(edge) and edge["tension"] >= 3
+
+
+def _when_condition(state, cid, ctx):
+    return any(cond["kind"] in ST.INCAPACITATING
+               for cond in state["characters"][cid]["status"]["conditions"])
+
+
+def _when_late_hour(state, cid, ctx):
+    hour = state["clock"]["minute"] // 60
+    return ctx["present"] and (hour >= 23 or hour < 6)
+
+
+CONDITION = {
+    "present": _when_present,
+    "absent": _when_absent,
+    "away_long": _when_away_long,
+    "event_due": _when_event_due,
+    "event_overdue": _when_event_overdue,
+    "tension": _when_tension,
+    "condition": _when_condition,
+    "late_hour": _when_late_hour,
+}
+
+
+def situational_flags(state, cid, player, now, gap, player_present):
+    """这一刻哪些情境成立：{id: True/False}。表里没有的条件一律 False。"""
+    ctx = {"now": now, "gap": gap, "player": player,
+           "player_present": player_present, "present": SS.is_present(state, cid)}
+    return {name: bool(check(state, cid, ctx)) for name, check in CONDITION.items()}
+
 
 def refresh_situational(state, turn, gap=0, player_absent=False):
     """Recompute the engine-owned thoughts. Idempotent.
@@ -288,34 +358,14 @@ def refresh_situational(state, turn, gap=0, player_absent=False):
     # though the player card stays in the scene, because the scene cannot drop
     # the player (invariants) and presence is not the same question as company.
     player_present = SS.is_present(state, player) and not player_absent
+    table, warning = RL.situational()
+    if warning:
+        state["rules_warning"] = warning
     planned = {}
     for cid in SS.npcs(state):
-        char = state["characters"][cid]
-        rows = []
-        present = SS.is_present(state, cid)
-        if present and player_present:
-            rows.append(("在场", ST.SITUATIONAL_DELTA["present"], None))
-        elif not player_present:
-            rows.append(("你不在", ST.SITUATIONAL_DELTA["absent"], None))
-        if player_present and gap >= ST.DAY:
-            rows.append(("很久没见你", ST.SITUATIONAL_DELTA["away_long"], ST.SITUATIONAL_EXPIRES["away_long"]))
-        due = [e for e in state["events"].values() if e["state"] == "pending" and cid in e["participants"]]
-        if due:
-            soonest = min(CL.to_abs(e["due"]) for e in due)
-            if soonest <= now:
-                rows.append(("有件该办的事已经过期", ST.SITUATIONAL_DELTA["event_overdue"], ST.SITUATIONAL_EXPIRES["event_overdue"]))
-            elif soonest - now <= ST.DAY:
-                rows.append(("有件该办的事快到期", ST.SITUATIONAL_DELTA["event_due"], None))
-        edge = SS.edge(state, cid, player)
-        if edge and edge["tension"] >= 3:
-            rows.append(("你们之间还绷着", ST.SITUATIONAL_DELTA["tension"], None))
-        for cond in char["status"]["conditions"]:
-            if cond["kind"] in ST.INCAPACITATING:
-                rows.append(("身体不太对劲", ST.SITUATIONAL_DELTA["condition"], None))
-                break
-        hour = state["clock"]["minute"] // 60
-        if present and (hour >= 23 or hour < 6):
-            rows.append(("大半夜被打扰", ST.SITUATIONAL_DELTA["late_hour"], ST.SITUATIONAL_EXPIRES["late_hour"]))
+        flags = situational_flags(state, cid, player, now, gap, player_present)
+        rows = [(row["label"], row["delta"], row["minutes"])
+                for row in table if flags.get(row["id"])]
         planned[cid] = rows
     for cid, rows in planned.items():
         mood = state["characters"][cid]["mood"]

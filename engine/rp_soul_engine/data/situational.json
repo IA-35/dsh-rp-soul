@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "_说明": "情境类想法：引擎每回合自己算，模型一个字都不写。改这个文件就能加规则，不用动代码。id 必须在 domain/mood.py 的 CONDITION 注册表里有对应的判定函数；delta 是心情增减（-30~30），expires_minutes 是这条想法挂多久（null = 条件不成立就消失）；enabled=false 就整条停用。",
+  "thoughts": [
+    {
+      "id": "present",
+      "label": "在场",
+      "delta": 3,
+      "expires_minutes": null,
+      "enabled": true,
+      "note": "你们在一起"
+    },
+    {
+      "id": "absent",
+      "label": "你不在",
+      "delta": -2,
+      "expires_minutes": null,
+      "enabled": true,
+      "note": "这一回合只有她自己"
+    },
+    {
+      "id": "away_long",
+      "label": "很久没见你",
+      "delta": -5,
+      "expires_minutes": 1440,
+      "enabled": true,
+      "note": "隔了一天以上你才回来"
+    },
+    {
+      "id": "event_overdue",
+      "label": "有件该办的事已经过期",
+      "delta": -10,
+      "expires_minutes": 1440,
+      "enabled": true,
+      "note": "约定的事过了点还没办"
+    },
+    {
+      "id": "event_due",
+      "label": "有件该办的事快到期",
+      "delta": -6,
+      "expires_minutes": null,
+      "enabled": true,
+      "note": "一天之内就要到期"
+    },
+    {
+      "id": "tension",
+      "label": "你们之间还绷着",
+      "delta": -6,
+      "expires_minutes": null,
+      "enabled": true,
+      "note": "关系里的张力还没散"
+    },
+    {
+      "id": "condition",
+      "label": "身体不太对劲",
+      "delta": -4,
+      "expires_minutes": null,
+      "enabled": true,
+      "note": "生病、受伤这类状态"
+    },
+    {
+      "id": "late_hour",
+      "label": "大半夜被打扰",
+      "delta": -3,
+      "expires_minutes": 360,
+      "enabled": true,
+      "note": "23 点以后或早上 6 点以前还在说话"
+    }
+  ]
+}

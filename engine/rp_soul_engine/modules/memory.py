@@ -22,17 +22,19 @@ def pay_requests(state, commit, turn):
         if request:
             diary = MEM.apply_diary(state, request, commit["memory_diary"])
         state["requests"]["memory_diary"] = None
-    return {"folded": folded, "diary": diary, "common": _learned(commit, turn, "fold" if folded else "diary")}
+    # origin 记清这条是哪儿来的：收了 SCM / 写了日记 / 还是平常把话里提到的名词记下来
+    origin = "fold" if folded else ("diary" if diary else "turn")
+    return {"folded": folded, "diary": diary, "common": _learned(commit, turn, origin)}
 
 
 def _learned(commit, turn, origin):
-    """这次总结 / 写日记里提到的常识。
+    """这一回合里提到的常识：随时都能记，不必等到收 SCM 或写日记。
 
-    只有真的收了 SCM 或写了日记的那一回才算 —— 模型不能靠随手丢一条
-    common 就往全局库里写字。
+    以前只认「交了 memory_fold / memory_diary 的那一回」，理由是怕模型随手
+    丢一条就往全局库里写字。现在放开：模型提的常识本来就一律 pending，
+    要你在设置页点「确认」才生效，卡在日记那一回合除了错过时机没有别的用处
+    —— 一个名词的意思往往在他第一次解释的那回合就该记下来。
     """
-    if not (commit.get("memory_fold") or commit.get("memory_diary")):
-        return []
     found = []
     for raw in commit.get("common") or ():
         item = CM.from_model(raw, turn, origin=origin)

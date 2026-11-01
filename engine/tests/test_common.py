@@ -251,14 +251,23 @@ def what_she_learns_while_folding_goes_in(s):
 
 
 @with_sc
-def a_plain_turn_cannot_write_the_global_library(s):
-    """没总结、没写日记的那一回，随手带的 common 不算数。"""
+def a_plain_turn_can_still_write_the_library(s):
+    """平常回合里他解释一个名词，也该能记下来 —— 但要先挂着，等你确认。"""
     sid, rev, _ = e2e.start(s)
     body = e2e.commit({"session_id": sid, "revision": rev},
-                      ops=[{"op": "npc_action", "kind": "observe", "action": "她没说什么。", "significant": True}],
-                      common=[{"key": ["ds"], "weight": 0.9, "content": "不该被记下的一条。"}])
+                      ops=[{"op": "npc_action", "kind": "observe", "action": "她点点头。", "significant": True}],
+                      common=[{"key": ["ds"], "weight": 0.9, "content": "DS 是深度求索的简称。"}])
     s.ok("commit-turn", body)
-    assert s.ok("debug-common", {})["count"] == 0, s.ok("debug-common", {})
+    panel = s.ok("debug-common", {})
+    assert panel["count"] == 1, panel
+    row = panel["rows"][0]
+    assert row["origin"] == "turn", row
+    assert row["pending"] is True, row
+    ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "DS 是什么"})["context"]
+    assert "common" not in ctx, ctx.get("common")
+    s.ok("approve-common", {"request_id": e2e.rid(), "common_id": row["id"]})
+    ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "DS 是什么"})["context"]
+    assert "深度求索" in ctx.get("common", ""), ctx.get("common")
 
 
 @with_sc
@@ -296,7 +305,7 @@ check("a hit puts it into the context", a_hit_puts_it_into_the_context)
 check("a line that does not mention it is not carried", a_line_that_does_not_mention_it_is_not_carried)
 check("the library is shared across sessions", the_library_is_shared_across_sessions)
 check("what she learns while folding goes in", what_she_learns_while_folding_goes_in)
-check("a plain turn cannot write the global library", a_plain_turn_cannot_write_the_global_library)
+check("a plain turn can still write the library", a_plain_turn_can_still_write_the_library)
 check("the page can change how many are carried", the_page_can_change_how_many_are_carried)
 
 run("common")

@@ -42,6 +42,10 @@ class Context:
         self.environ = os.environ if environ is None else environ
         self.debug = debug
         self.data_dir, self.data_dir_source = paths.resolve(data_dir_arg, self.environ)
+        # 规则表（情境想法）可以在数据目录下的 rules/ 里覆盖，改数值不用动代码。
+        from ..domain import rules as RULES
+
+        RULES.set_data_dir(self.data_dir)
         self._prepared = False
         self._conn = None
         self.schema_report = None

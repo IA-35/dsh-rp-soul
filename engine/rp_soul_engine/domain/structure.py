@@ -125,27 +125,9 @@ MOOD_GATE = {
 # 低心情时这些行动也能表达对尝试的反应，但不构成亲密同意。
 MOOD_REACTION_KINDS = ("provoke", "leave", "silence", "seek_comfort", "change_topic", "withdraw")
 
-# 情境类想法的来源与幅度（引擎自己算，模型一个字都不写）
-SITUATIONAL_DELTA = {
-    "present": 3,
-    "absent": -2,
-    "away_long": -5,      # 隔了一天以上你才回来
-    "event_due": -6,
-    "event_overdue": -10,
-    "tension": -6,
-    "condition": -4,
-    "late_hour": -3,
-}
-SITUATIONAL_EXPIRES = {
-    "present": None,       # 条件成立期间生效
-    "absent": None,
-    "away_long": 1 * DAY,
-    "event_due": None,
-    "event_overdue": 1 * DAY,
-    "tension": None,
-    "condition": None,
-    "late_hour": 6 * HOUR,
-}
+# 情境类想法（引擎自己算，模型一个字都不写）已经从代码搬到 data/situational.json：
+# 标签、增减、持续多久、开关都在那个文件里，条件判定留在 domain/mood.py 的
+# CONDITION 注册表。改这里不再有任何效果，改那个 JSON 才有。
 # 记忆类：由 op 触发，必须带 source_fact_id。
 # NPC 自己选的回应（拒绝/配合）不进他自己的心情：心情由别人对他做了什么驱动
 # （relationship 的信任变化、add_thought），否则低落→拒绝→更低落会一路滑进崩溃档。
