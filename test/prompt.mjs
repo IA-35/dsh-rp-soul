@@ -202,12 +202,15 @@ try {
   await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
   await waitFor(async () => subagentsSpawned.length > 0
     && (await client.call('debug-memories', { session_id: foldGame.session_id })).entries.some((row) => row.layer === 'scm'));
-  eq(subagentsSpawned.length, 1, '10. 攒满了就起一个子代理去收');
-  has(subagentsSpawned[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
-  eq(subagentsSpawned[0]?.provider, 'spawn', '10. 用的是 spawn：全新的子 agent，不复制整个会话的上下文');
-  eq(subagentsSpawned[0]?.label, '记忆整理', '10. 这一次是收 ABM');
-  eq(subagentsSpawned[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
-  ok(subagentsSpawned[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
+  // 收完 ABM 接着可能就该写日记了，那是另一个子代理，别把它算成「起了两次」。
+  // 只数 label 是「记忆整理」的那几次。
+  const folders = subagentsSpawned.filter((one) => one.label === '记忆整理');
+  eq(folders.length, 1, '10. 攒满了就起一个子代理去收');
+  has(folders[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
+  eq(folders[0]?.provider, 'spawn', '10. 用的是 spawn：全新的子 agent，不复制整个会话的上下文');
+  eq(folders[0]?.label, '记忆整理', '10. 这一次是收 ABM');
+  eq(folders[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
+  ok(folders[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
   const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
   eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
   // 批次跟着 ABM 一起长，所以这一批收完全部收干净，不留尾巴
