@@ -139,19 +139,25 @@ eq(exp.status, 200, '5. GET /preset?export=rimtalk 200');
 eq(exp.parsed.json.version, 1, '5. 导出的是 RimTalk preset.json');
 ok(Array.isArray(exp.parsed.json.entries) && exp.parsed.json.entries.length === 4, '5. entries 数与块数一致');
 
-const imported = await call('POST', '/rp-soul/preset', {
-  import: { version: 1, name: '别人的预设', entries: [
-    { name: '开场', content: '你是雨夜的守灯人。', role: 'System', enabled: true },
-    { name: '口气', content: '说话很轻。', role: 'System', enabled: true },
-  ] },
-});
-eq(imported.status, 200, '5. 导入 RimTalk JSON 200');
-has(sectionDefs.get('soul-persona').text(), '雨夜的守灯人', '5. 导入的内容立刻生效');
-eq(imported.parsed.blocks.length, 2, '5. 导入后是两块');
+// RimTalk 的预设放进预设目录，直接打开就是它
+mkdirSync(join(home, 'rp-soul', 'presets'), { recursive: true });
+writeFileSync(join(home, 'rp-soul', 'presets', '别人的预设.json'), JSON.stringify({ version: 1, name: '别人的预设', entries: [
+  { name: '开场', content: '你是雨夜的守灯人。', role: 'System', enabled: true },
+  { name: '口气', content: '说话很轻。', role: 'System', enabled: true },
+] }), 'utf8');
+const opened = await call('POST', '/rp-soul/preset', { from: 'rp-soul/presets/别人的预设.json' });
+eq(opened.status, 200, '5. 打开 RimTalk JSON 200');
+has(sectionDefs.get('soul-persona').text(), '雨夜的守灯人', '5. 打开的内容立刻生效');
+eq(opened.parsed.blocks.length, 2, '5. 打开后是两块');
+// 打开过别的之后，默认那份也在列表里，能切回来
+const back = await call('POST', '/rp-soul/preset', { from: 'rp-soul/preset.md' });
+eq(back.status, 200, '5. 切回 rp-soul/preset.md 200');
+eq(back.parsed.rel, 'rp-soul/preset.md', '5. 当前预设回到默认那份');
+has(sectionDefs.get('soul-persona').text(), '第二人称', '5. 切回来之后注入的是默认那份');
 
 // 坏输入
 const bad = await call('POST', '/rp-soul/preset', { import: { foo: 1 } });
-eq(bad.status, 400, '5. 不像 RimTalk 预设就 400');
+eq(bad.status, 400, '5. 上传（import）已经去掉，一律 400');
 const empty = await call('POST', '/rp-soul/preset', {});
 eq(empty.status, 400, '5. 什么都没给就 400');
 

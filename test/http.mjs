@@ -95,7 +95,7 @@ has(readFileSync(join(home, 'rp-soul', 'preset.md'), 'utf8'), 'soul-part-off: �
 const badBlocks = await post('/rp-soul/preset', { blocks: 'not an array' });
 eq(badBlocks.status, 400, '5. blocks 不是数组被 400');
 const badJson = await post('/rp-soul/preset', { import: '{oops' });
-eq(badJson.status, 400, '5. 导入坏 JSON 被 400');
+eq(badJson.status, 400, '5. 上传（import）已经去掉，一律 400');
 
 // ---- 未注册路径 ----
 eq((await j('/rp-soul/nope')).status, 404, '6. 未注册子路径 404');

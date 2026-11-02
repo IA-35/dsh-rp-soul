@@ -30,6 +30,19 @@ const plain = parsePreset('守岸人，黑海岸的守望者。\n');
 eq(plain.marked, false, '1. 没有标记的老文件 marked=false');
 eq(plain.blocks.length, 1, '1. 没有标记就整份一块');
 
+// 块名里带换行：写出去不能把标记拆成两行（读回来就认不出是标记了）
+const named = parsePreset(renderPreset([
+  { name: '第一\n行', enabled: true, text: '甲。' },
+  { name: '乙', enabled: true, text: '乙文。' },
+]));
+eq(named.blocks.map((b) => b.name), ['第一 行', '乙'], '1b. 块名里的换行压成空格，块还是两块');
+eq(named.blocks.map((b) => b.text), ['甲。', '乙文。'], '1b. 正文没被换行的块名吞掉');
+// 块里的空行和首行缩进：写出再读回来一字不差
+const shaped = '    缩进的第一行\n下一行\n\n\n隔了两个空行的一段';
+const kept = parsePreset(renderPreset([{ name: '排版', enabled: true, text: shaped }, { name: '后一块', enabled: true, text: '尾。' }]));
+eq(kept.blocks[0].text, shaped, '1b. 块里的连续空行和首行缩进原样保留');
+eq(kept.blocks[1].text, '尾。', '1b. 后一块不受影响');
+
 // ---- 2. 与 RimTalk 预设互导 ----
 const rt = fromRimTalk({
   version: 1,
@@ -57,7 +70,10 @@ mkdirSync(join(home, 'rp-soul', 'presets'), { recursive: true });
 writeFileSync(join(home, 'SOUL.md'), '<!-- soul-part: 根目录 -->\n从 SOUL.md 搬过来的。\n', 'utf8');
 writeFileSync(join(home, 'rp-soul', 'presets', '别的.md'), '<!-- soul-part: 目录里 -->\n预设目录里那份。\n', 'utf8');
 writeFileSync(join(home, 'rp-soul', 'presets', 'rim.json'), JSON.stringify({
-  version: 1, name: 'r', entries: [{ name: 'A', content: '目录里的 RimTalk 预设。' }],
+  version: 1, name: 'r', description: '别动我', entries: [
+    { name: 'A', content: '目录里的 RimTalk 预设。', role: 'User', position: 'Absolute' },
+    { name: '占位', content: '', role: 'System', position: 'Relative' },
+  ],
 }), 'utf8');
 const presetPath = join(home, 'rp-soul', 'preset.md');
 writeFileSync(presetPath, md, 'utf8');
@@ -118,18 +134,17 @@ eq(saved.statusCode, 200, '4. 存块 200');
 eq(sections.get('soul-persona').text(), '重写过的人设。', '4. 存完立刻生效');
 has(readFileSync(presetPath, 'utf8'), '<!-- soul-part: 人设 -->', '4. 落盘带块标记');
 
-const imported = await call('POST', '/rp-soul/preset', {
-  import: JSON.stringify({ name: 'r', entries: [{ name: 'A', content: '从 RimTalk 来的。' }] }),
+// 上传已经去掉：没有盘上位置的内容不收，预设原样不动
+const beforeUpload = readFileSync(presetPath, 'utf8');
+const upload = await call('POST', '/rp-soul/preset', {
+  import: JSON.stringify({ name: 'r', entries: [{ name: 'A', content: '上传来的。' }] }),
 });
-eq(imported.statusCode, 200, '4. 导入 RimTalk JSON 200');
-eq(sections.get('soul-persona').text(), '从 RimTalk 来的。', '4. 导入后合成变了');
-
-const bad = await call('POST', '/rp-soul/preset', { import: '{"entries": []}' });
-eq(bad.statusCode, 400, '4. 空预设导入被拒');
+eq(upload.statusCode, 400, '4. 上传（import）不再收');
+eq(readFileSync(presetPath, 'utf8'), beforeUpload, '4. 被拒的上传没动预设文件');
 
 const exported = await call('GET', '/rp-soul/preset?export=rimtalk');
 eq(exported.statusCode, 200, '4. 导出 200');
-eq(JSON.parse(exported.body).json.entries[0].content, '从 RimTalk 来的。', '4. 导出内容一致');
+eq(JSON.parse(exported.body).json.entries[0].content, '重写过的人设。', '4. 导出内容一致');
 
 ok(existsSync(presetPath), '4. 预设文件还在');
 
@@ -137,7 +152,8 @@ ok(existsSync(presetPath), '4. 预设文件还在');
 const listed = await call('GET', '/rp-soul/preset?files=1');
 eq(listed.statusCode, 200, '5. 列可导入文件 200');
 const rels = JSON.parse(listed.body).files.map((one) => one.rel);
-eq(rels.length, 3, '5. 列了三个能吃的文件');
+eq(rels.length, 4, '5. 列了四个能吃的文件（默认那份也在，打开过别的还能切回来）');
+ok(rels.indexOf('rp-soul/preset.md') >= 0, '5. 默认的 rp-soul/preset.md 在列表里');
 ok(rels.indexOf('SOUL.md') >= 0 && rels.indexOf('rp-soul/presets/别的.md') >= 0 && rels.indexOf('rp-soul/presets/rim.json') >= 0, '5. 根目录 SOUL.md 与预设目录都在列表里');
 eq(JSON.parse(listed.body).files.every((one) => one.bytes > 0), true, '5. 空文件不进列表');
 
@@ -155,6 +171,47 @@ has(JSON.parse(outside.body).error, '没有可导入的文件', '5. 拒绝理由
 
 const escape = await call('POST', '/rp-soul/preset', { from: '../etc/passwd' });
 eq(escape.statusCode, 400, '5. 越界路径被拒');
+
+// ---- 6. 导入就是「打开那份文件」：之后改的是它本身，不是一份副本 ----
+const presetBefore = readFileSync(presetPath, 'utf8');
+const openRoot = await call('POST', '/rp-soul/preset', { from: 'SOUL.md' });
+eq(JSON.parse(openRoot.body).rel, 'SOUL.md', '6. 打开之后，当前预设就是 SOUL.md');
+eq(JSON.parse((await call('GET', '/rp-soul/preset')).body).rel, 'SOUL.md', '6. 再读一次也还是它（记在设置里）');
+const editRoot = await call('POST', '/rp-soul/preset', { blocks: [{ name: '根目录', enabled: true, text: '在 SOUL.md 里直接改的。' }] });
+eq(editRoot.statusCode, 200, '6. 存块 200');
+has(readFileSync(join(home, 'SOUL.md'), 'utf8'), '在 SOUL.md 里直接改的。', '6. 改动写回了 SOUL.md 本身');
+eq(readFileSync(presetPath, 'utf8'), presetBefore, '6. rp-soul/preset.md 没被动过（不再有副本）');
+eq(sections.get('soul-persona').text(), '在 SOUL.md 里直接改的。', '6. 注入的也是 SOUL.md 的内容');
+
+// 没分块的老文件：只改一块的话写回去还是纯文本，不凭空加上块标记
+writeFileSync(join(home, 'rp-soul', 'presets', '纯文本.md'), '一份没分块的老人设。\n', 'utf8');
+await call('POST', '/rp-soul/preset', { from: 'rp-soul/presets/纯文本.md' });
+await call('POST', '/rp-soul/preset', { blocks: [{ name: '人设', enabled: true, text: '改过的老人设。' }] });
+eq(readFileSync(join(home, 'rp-soul', 'presets', '纯文本.md'), 'utf8'), '改过的老人设。\n', '6. 没分块的文件写回去还是纯文本');
+
+// RimTalk 的 JSON：写回去还是它能读的 JSON，role / position / 描述 / 空条目原样留着
+await call('POST', '/rp-soul/preset', { from: 'rp-soul/presets/rim.json' });
+const editRim = await call('POST', '/rp-soul/preset', { blocks: [
+  { name: 'A', enabled: true, text: '改过的 RimTalk 预设。' },
+  { name: '新加的', enabled: false, text: '后来加的一块。' },
+] });
+eq(editRim.statusCode, 200, '6. JSON 预设存块 200');
+const rim = JSON.parse(readFileSync(join(home, 'rp-soul', 'presets', 'rim.json'), 'utf8'));
+eq(rim.description, '别动我', '6. 顶层的其它字段原样留着');
+eq(rim.entries[0].content, '改过的 RimTalk 预设。', '6. 改的那条写回去了');
+eq([rim.entries[0].role, rim.entries[0].position], ['User', 'Absolute'], '6. 原来那条的 role / position 没被冲掉');
+ok(rim.entries.some((e) => e.name === '新加的' && e.enabled === false), '6. 新加的块成了一条新条目');
+ok(rim.entries.some((e) => e.name === '占位' && e.content === ''), '6. 界面上看不见的空条目没被删掉');
+eq(sections.get('soul-persona').text(), '改过的 RimTalk 预设。', '6. 注入的是 JSON 里启用的那几条');
+
+// 整份覆盖一份 RimTalk JSON：读不通的不收，不然等于把人设写坏
+const brokenRim = await call('POST', '/rp-soul/preset', { text: '{oops' });
+eq(brokenRim.statusCode, 400, '6. 往 RimTalk JSON 里整份写一段读不通的被拒');
+eq(JSON.parse(readFileSync(join(home, 'rp-soul', 'presets', 'rim.json'), 'utf8')).entries[0].content, '改过的 RimTalk 预设。', '6. 被拒之后那份 JSON 没被动');
+// 打开过的那份被删了：自动退回默认那份，人设不会变空
+const { rmSync } = await import('node:fs');
+rmSync(join(home, 'rp-soul', 'presets', 'rim.json'));
+eq(JSON.parse((await call('GET', '/rp-soul/preset')).body).rel, 'rp-soul/preset.md', '6. 那份没了就退回 rp-soul/preset.md');
 
 await fiber.dispose();
 done('preset');

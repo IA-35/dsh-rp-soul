@@ -17,14 +17,15 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
   每次新增的只有尾部那几十字节。宿主只在文本真的变了时才追加这条快照。
 - **单文件预设**：一份 `rp-soul/preset.md`，用 `<!-- soul-part: 名字 -->` 分块；
   设置页左边是条目、右边是那一块的内容，勾掉就不注入。
-- **导入导出**：`.md` 备份 / 换机器，`.json` 直接给 RimTalk 读（也吃 RimTalk 的 `preset.json`）。
+- **打开与导出**：盘上的 `.md` / `.txt` / RimTalk 的 `preset.json` 直接打开就能改；导出 `.md` 备份 / 换机器，`.json` 直接给 RimTalk 读。
 - **设置页可视化编辑**：设置 →「角色人设」标签页里加块、改块、勾选启用、
   调分隔符 / 字节上限 / 总开关，并查看**合成预览**。
 - **热更新**：每次组装系统提示都重新读取文件，改完**无需重启**，下一条消息即生效。
 - **安全兜底**：预设缺失 / 为空 / 超过大小上限时自动跳过，不影响其它提示片段。
   `maxBytes` 是**总预算**（字节），超了就截断。
 - **字面渲染**：section 声明 `interpolate: false`，人设里的 `{{variable}}` 原样输出，不会被系统提示渲染器当成严格模板变量（那一类未知引用会抛错）。
-- **只碰一个文件**：读写的是 `rp-soul/preset.md`，路径固定在 `$DSH_HOME` 内。
+- **只碰你打开的那份**：默认读写 `rp-soul/preset.md`；从盘上打开别的预设后就读写那份文件本身，
+  范围只限 `$DSH_HOME` 下的 `SOUL.md` 和 `rp-soul/presets/`。
 - **首装不建文件**：第一次打开设置页时预设还不存在，点「加一块」写点什么保存即可；
   **已存在的预设绝不会被覆盖**。
 - **引擎（可选）**：结构化字段单独放在 `rp-soul/persona.md`（设置页表单可改），
@@ -107,12 +108,13 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 
 - **点左边的块改那一块**，不用在整份文本里找位置；块名只是给人看的。
 - **勾掉 = 不注入**：内容原样留在文件里，随时勾回来。
-- **从文件导入**：点「从文件导入」会扫一遍盘上现成的预设，列出来让你点，不用翻文件对话框。
-  扫两处：`rp-soul/presets/`（自己往里放）和根目录的 `SOUL.md`（老用户现成的就在这儿）。
+- **打开盘上的预设**：扫一遍盘上现成的预设，列出来让你点「打开」，不用翻文件对话框。
+  列的是：默认的 `rp-soul/preset.md`（打开过别的之后靠它切回来）、`rp-soul/presets/`（自己往里放）和根目录的 `SOUL.md`（老用户现成的就在这儿）。
   吃 `.md` / `.txt`（同样格式的预设）和 `.json`（RimTalk 的 `preset.json`，
-  `{entries:[{name, content, enabled}]}` 那种）。RimTalk 的 `role` / `position` 会被丢掉 ——
-  人设永远是一段系统提示，那两个字段在这儿没有对应物。
-- **导入**（旁边的按钮）：直接挑一个文件，不上传、只读内容，一样的三种格式都认。
+  `{entries:[{name, content, enabled}]}` 那种）。
+  **打开就是直接编辑那份文件**，不会拷一份副本：当前打开的是哪份记在设置里（`presetFile`），
+  保存按它自己的格式写回 —— RimTalk 的 JSON 还是 JSON，`role` / `position` 和其它字段原样留着；
+  没分块的老文件只改一块，写回去还是纯文本。那份文件被删了就自动退回 `rp-soul/preset.md`。
 - **导出**：`.md` 用来备份 / 换机器，`.json` 能直接给 RimTalk 读。
 - 没有块标记的老预设照样能用：整份算一块。
 - **编辑**：点左边某一块，右边就是那一块；改完点「保存预设」，下一条消息即生效。
@@ -223,8 +225,8 @@ RimTalk-ExpandMemory 工作台的简化版：
 | GET | `/rp-soul/state` | 快照：配置 + 各文件元信息 + 库列表 + 合成预览 + 预设块 |
 | GET | `/rp-soul/preset` | 读人设预设：块列表 + 合成后的文本 |
 | GET | `/rp-soul/preset?export=rimtalk` | 导出成 RimTalk 的 `preset.json` 形状 |
-| GET | `/rp-soul/preset?files=1` | 列出能导入的文件（`rp-soul/presets/` + 根目录 `SOUL.md`） |
-| POST | `/rp-soul/preset` | 写预设：`{blocks}` / `{text}` / `{import}`（`.md` 文本或 RimTalk JSON）/ `{from}`（盘上的 rel） |
+| GET | `/rp-soul/preset?files=1` | 列出能打开的预设（`rp-soul/preset.md` + `rp-soul/presets/` + 根目录 `SOUL.md`） |
+| POST | `/rp-soul/preset` | `{from}`（盘上的 rel）打开那份当当前预设；`{blocks}` 按块存回当前那份；`{text}` 整份覆盖当前那份（当前是 RimTalk JSON 时得是读得通的预设） |
 | GET | `/rp-soul/config` | 读生效配置 |
 | POST | `/rp-soul/config` | 写配置 `{separator, enabled, maxBytes, title, personaId}` |
 | GET | `/rp-soul/engine` | 引擎健康 + 人设摘要 + 当前这一局 |
@@ -417,7 +419,7 @@ routine:
 | 工具 | 什么时候用 |
 |---|---|
 | `soul_state` | 读这局的工作指令：`agency`、`due_soon`、`known_facts`、`her_knows`、要不要交总结，以及按分数排出来的几条记忆（每轮自动注入的只有被你这句话撞上的那几条）。心情、常识、时间、在场「当前局面」每轮都已写进上下文，这里不再重复一遍。不是每轮都必调——快照里没有的（比如 `agency` 候选）才需要读。`want_twist` 取转折 |
-| `soul_commit` | 写完这一次后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。可选的 `remember` 用第一人称写她会怎么记得这一次；引擎要把 ABM 收进 SCM / 写日记时，这次提交带上 `memory_fold` / `memory_diary`（汇总时可加 `memory_keep` 挑 0~2 条进 CLPA）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。**时间不用写**：引擎按真实时钟自己结算这次过了多久 |
+| `soul_commit` | 写完这一次后提交。`operations` 是账本改动清单（`npc_response` / `npc_action` / `relationship` / `add_thought` / `add_fact` / `offscreen_beat` …，最多 40 条）。只有你们两个人，所以 op 里不写是谁；事实用 `scope` 说清谁知道（`shared` 你们都知道 / `player_only` 只有你知道 / `companion_only` 只有她知道 / `inner` 她心里的）。可选的 `remember` 用第一人称写她会怎么记得这一次；引擎要把 ABM 收进 SCM / 写日记时，这次提交带上 `memory_fold` / `memory_diary`（汇总时可加 `memory_keep` 挑 0~2 条进 CLPA）。引擎校验后要么全收要么全驳（驳回带 `path` 与原因，最多重试 2 次）。工具说明里写着每个 op 的字段；交给引擎前插件先把小毛病就地改掉——常见的错字段名（`npc_action` 写成 `note`、`offscreen_beat` 写成 `action`）换成对的、超长的文字截短、只写了一句心情的 `npc_state` 拿掉，`player_input` 不写就取他刚才那句；引擎那边 `content_tags` / `open_action` 不写也行，没要求的 `memory_fold` / `memory_diary`、用不上的离屏片段直接不收而不是驳回。隔够久要带离屏片段时，快照里会提前写出来。真的缺东西（心事没写分量、依据的事实不存在）照旧驳回，报错会列出能用的事实。**时间不用写**：引擎按真实时钟自己结算这次过了多久 |
 | `soul_admin` | 开局（`start`，全局作用域下通常不必手动开）/ 回滚（`undo`）/ 存档（`save` `load` `delete` `list`）/ 改边界与偏好（`set_safety` `set_preferences`） |
 
 ### 记忆（以 RimTalk-ExpandMemory 为主）

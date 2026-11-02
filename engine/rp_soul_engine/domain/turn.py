@@ -48,18 +48,20 @@ def commit_fields():
     return {
         "action_mode": F(S.Enum(*ST.ACTION_MODES),
                          desc="result 玩家的话成了事实 / attempt 玩家在尝试 / rewrite “其实……” / continue 玩家没说没做 / wait 时间在走"),
-        "player_input": F(S.Str(0, 2000), desc="玩家这一句的原话（继续时可为空字符串）"),
+        "player_input": F(S.Str(0, 2000), required=False, default="",
+                          desc="玩家这一句的原话（继续时可为空字符串；不写就当空）"),
         "player_authorized": F(S.Bool(), required=False, default=False,
                                desc="玩家本人的话授权了玩家角色的承诺、交易、同意或设定修改时为 true"),
         "acts_on_her": F(S.Nullable(S.Bool()), required=False, default=None,
                          desc="玩家这次行动是不是冲着TA（TA的身体、意志、东西）；attempt 不冲着TA时写 false"),
         "operations": F(S.List(OPS.op_spec(), max_items=40), desc="操作列表（可以为空数组）"),
-        "content_tags": F(S.List(S.Enum(*ST.TAG_IDS), max_items=12, unique=True),
-                          desc="本回合正文涉及的内容标签（可为空数组）；只用内置标签表里的 id"),
+        "content_tags": F(S.List(S.Enum(*ST.TAG_IDS), max_items=12, unique=True), required=False, default=[],
+                          desc="本回合正文涉及的内容标签（可为空数组，不写就当空）；只用内置标签表里的 id"),
         "summary": F(S.Str(1, 120), desc="本回合发生了什么，第三方视角，≤120 字"),
         "remember": F(S.Nullable(S.Str(1, 60)), required=False, default=None,
                       desc="可选：TA 会怎么记得这件事，第一人称、带当时的感受，≤60 字；不写就用 summary 记"),
-        "open_action": F(S.Str(1, 80), desc="回合停在哪里、谁在等谁，≤80 字"),
+        "open_action": F(S.Nullable(S.Str(1, 80)), required=False, default=None,
+                         desc="回合停在哪里、谁在等谁，≤80 字；不写就沿用上一个"),
         "quotes": F(S.List(S.Str(1, 80), max_items=3), required=False, default=[],
                     desc="≤3 条对后续有意义的原话，每条 ≤80 字"),
         "memory_fold": F(S.Nullable(S.Str(1, MEM.SUMMARY_MAX)), required=False, default=None,
@@ -93,6 +95,13 @@ def commit_fields():
         "host_memory": F(S.Bool(), required=False, default=False,
                          desc="宿主会在回合结束后自己收 ABM、写日记（由桥接层自动带，模型不用填）；带上时 memory_fold / memory_diary 不再是必填"),
     }
+
+
+def _open_action(memory, commit):
+    """这一回合停在哪里：没写就沿用上一个悬念（模型常常省掉它，不该为此驳回整次）。"""
+    if commit.get("open_action"):
+        return commit["open_action"]
+    return memory.get("open_action") or ""
 
 
 def _raise(errors, **extra):
@@ -353,7 +362,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "day": work["clock"]["day"],
         "mode": commit["action_mode"],
         "summary": commit["summary"],
-        "open_action": commit["open_action"],
+        "open_action": _open_action(memory, commit),
         "quotes": list(commit["quotes"]),
     }
     if ctx.beats:
@@ -374,7 +383,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     plan = OPS.current_plan(work)
     if plan is not None and CL.to_abs(plan["until"]) <= CL.to_abs(work["clock"]):
         OPS.clear_plan(work)
-    memory["open_action"] = commit["open_action"]
+    memory["open_action"] = _open_action(memory, commit)
     memory["last_quotes"] = list(commit["quotes"])
     memory_result = MODULES.run(work, "after_turn", ctx, commit, base).get("memory", {})
     crossed_day = work["clock"]["day"] > before_clock["day"]

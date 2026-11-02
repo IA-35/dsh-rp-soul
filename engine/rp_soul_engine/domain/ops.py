@@ -138,10 +138,22 @@ class TurnContext:
         return not self.state["preferences"]["offscreen_simulation"]
 
 
+def known_fact_hint(state, npc_id, limit=8):
+    """「能用的事实 id」提示：模型编了一个不存在的 id 时，照着这几个挑就行。"""
+    # f2 排在 f10 前面：按长度再按字典序，近似「越新越靠后」
+    ids = sorted((fid for fid in state["facts"] if SS.knows(state, npc_id, fid)), key=lambda fid: (len(fid), fid))
+    if not ids:
+        return "TA 现在还不知道任何事实：先用 add_fact 记下一条，再拿它的 key 当依据"
+    # 带上一小截正文：id 是 f12 这种编号，光看编号挑不出是哪件事
+    shown = ["%s（%s）" % (fid, (state["facts"][fid].get("text") or "")[:12]) for fid in ids[-limit:]]
+    return "只能用 TA 知道的事实 id：%s%s" % ("、".join(shown), " 等" if len(ids) > limit else "")
+
+
 def _basis(ctx, npc_id, fact_ids, path, errs):
     for index, fid in enumerate(fact_ids):
         if fid not in ctx.state["facts"]:
-            errs.append(detail("%s[%d]" % (path, index), "事实不存在：%s" % fid, None, NOT_FOUND))
+            errs.append(detail("%s[%d]" % (path, index), "事实不存在：%s" % fid,
+                               known_fact_hint(ctx.state, npc_id), NOT_FOUND))
         elif not SS.knows(ctx.state, npc_id, fid):
             errs.append(
                 detail(

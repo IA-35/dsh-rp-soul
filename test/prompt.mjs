@@ -218,6 +218,25 @@ try {
   // 连收两次之后不留尾巴：批次冻在二十条的话这里会剩二十条
   const leftovers = folded.filter((row) => row.layer === 'scm');
   ok(leftovers.length === 1, '10. 只落了一条 SCM');
+
+  // 够重的一批交给子代理筛：给它的原文要一轮一组配好对，按时间顺序排
+  const exchangeOf = (said, reply) => [
+    { id: 'u-' + said.slice(0, 8), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
+    { id: 'a-' + reply.slice(0, 8), role: 'assistant', content: [{ type: 'text', text: reply }] },
+  ];
+  const spawnedBefore = subagentsSpawned.length;
+  agentA.session = { deriveMessages: () => exchangeOf('先问第一件事', '第一件的回答' + '好'.repeat(600)) };
+  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  agentA.session = { deriveMessages: () => exchangeOf('再问第二件事' + '啊'.repeat(150), '第二件的回答' + '嗯'.repeat(500)) };
+  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
+  await waitFor(async () => subagentsSpawned.slice(spawnedBefore).some((one) => one.label === '筛记忆'));
+  const sift = subagentsSpawned.slice(spawnedBefore).find((one) => one.label === '筛记忆');
+  ok(sift !== undefined, '11. 够重的一批交给子代理筛');
+  const body = sift?.prompt ?? '';
+  const order = ['主人：先问第一件事', '我：第一件的回答', '主人：再问第二件事', '我：第二件的回答'].map((needle) => body.indexOf(needle));
+  ok(order.every((at) => at >= 0), '11. 每轮都是「主人：… 我：…」配好的一组（' + JSON.stringify(order) + '）');
+  ok(order.every((at, i) => i === 0 || at > order[i - 1]), '11. 按时间顺序：第一轮的问答在第二轮之前');
+  hasNot(body, ' / ', '11. 不再把两边的话各拼成一串');
   delete agentA.session;
   await fiber.dispose();
 

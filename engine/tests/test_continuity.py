@@ -170,7 +170,63 @@ def a_host_backed_commit_is_not_forced_to_pay():
         assert left, "这一批原样留着，等宿主去收"
 
 
+def a_commit_without_the_often_forgotten_fields_goes_through():
+    """模型常漏的 player_input / content_tags / open_action 不再让整次交账被驳回：
+    前两个当空，悬念沿用上一个。"""
+    with game() as (ctx, clock, row):
+        first = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION]))
+        body = {
+            "session_id": row["session_id"], "request_id": e2e.rid(), "expected_revision": first["revision"],
+            "turns": [{"action_mode": "wait", "operations": [ACTION], "summary": "她又看了一眼门口。"}],
+        }
+        result = service.commit_turn(ctx, body)
+        assert result["turn"] == first["turn"] + 1, result
+        state = repo.load_session(ctx.db(), row["session_id"])["state"]
+        assert state["memory"]["open_action"] == "她等着他开口。", state["memory"]["open_action"]
+
+
+def an_unrequested_diary_or_fold_is_ignored_not_rejected():
+    """引擎没在等日记 / 总结时，多写的那一段直接不收，交账照常通过。"""
+    with game() as (ctx, clock, row):
+        result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], memory_diary="今天没什么。", memory_fold="也没什么。"))
+        assert result["turns"][0].get("diary") is None and result["turns"][0].get("folded") is None, result["turns"][0]
+        assert not list(Path(ctx.data_dir).rglob("diary-*.md")), "没要求的日记不落盘"
+
+
+def a_missing_basis_fact_names_the_ones_she_knows():
+    """依据的事实编错了：报错里列出 TA 知道的事实 id，照着挑一个就对。"""
+    with game() as (ctx, clock, row):
+        known = service.commit_turn(ctx, e2e.commit(row, ops=[
+            ACTION, {"op": "add_fact", "key": "rain_umbrella", "text": "你把伞留在门边。", "scope": "shared", "origin": "observed"},
+        ]))
+        body = e2e.commit({"session_id": row["session_id"], "revision": known["revision"]}, ops=[
+            ACTION, {"op": "add_thought", "label": "半夜还在查东西", "delta": 3, "basis_fact_id": "late_night_check"},
+        ])
+        try:
+            service.commit_turn(ctx, body)
+        except service.AppError as exc:
+            hints = " ".join(str(d.get("hint") or "") for d in exc.details)
+            assert "你把伞留在门边" in hints and "（" in hints, hints
+        else:
+            raise AssertionError("不存在的依据应当驳回")
+
+
+def the_context_says_ahead_when_an_offscreen_beat_is_due():
+    """隔了一小时以上：读局面时就说「这次要带离屏片段」，别等交上去被驳回再重交。"""
+    with game() as (ctx, clock, row):
+        service.commit_turn(ctx, e2e.commit(row, ops=[ACTION]))
+        near = service.get_context(ctx, {"session_id": row["session_id"], "depth": "brief"})["context"]
+        assert "offscreen_due" not in near, near.get("offscreen_due")
+        clock.return_value = "2026-10-28T14:30:00+08:00"
+        later = service.get_context(ctx, {"session_id": row["session_id"], "depth": "brief"})["context"]
+        assert later.get("offscreen_due", {}).get("minutes", 0) >= 60, later.get("offscreen_due")
+
+
 check("a diary commit writes its file and replays once", diary_commit_writes_a_file_and_replay_keeps_it)
+check("a commit without the often forgotten fields goes through", a_commit_without_the_often_forgotten_fields_goes_through)
+check("an unrequested diary or fold is ignored, not rejected", an_unrequested_diary_or_fold_is_ignored_not_rejected)
+check("a missing basis fact names the ones she knows", a_missing_basis_fact_names_the_ones_she_knows)
+check("the context says ahead when an offscreen beat is due", the_context_says_ahead_when_an_offscreen_beat_is_due)
 check("the host writes the diary and she keeps the latest", the_host_writes_the_diary_and_she_keeps_the_latest)
 check("a host-backed commit is not forced to pay", a_host_backed_commit_is_not_forced_to_pay)
 check("separate games keep their own diary files", separate_games_keep_their_own_diary_files)

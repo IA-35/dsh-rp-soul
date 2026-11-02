@@ -239,7 +239,7 @@ has(readyText, '角色人设', '5. 标题');
 has(readyText, '2 块', '5. 块数徽标');
 has(readyText, '身份', '5. 条目列出「身份」');
 has(readyText, '口吻', '5. 条目列出「口吻」');
-has(readyText, '单文件预设', '5. 标出这是单文件预设');
+has(readyText, '当前预设 rp-soul/preset.md', '5. 标出当前打开的是哪份预设');
 has(readyText, 'rp-soul/config.json', '5. 显示 store 路径');
 ok(calls.some((c) => c.method === 'GET' && c.url === '/rp-soul/state'), '5. 确实请求了 /state');
 

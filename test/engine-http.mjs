@@ -276,6 +276,14 @@ ok(existsSync(join(engineDir, 'engine.db')), '9. 清空前有数据库');
 mkdirSync(join(engineDir, 'backups'), { recursive: true });
 writeFileSync(join(engineDir, 'backups', 'old.db'), 'x');
 
+// 清空前还有一轮攒着、没到落一条的时候
+const chat = (said, reply) => [
+  { id: 'u-' + said, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
+  { id: 'a-' + said, role: 'assistant', content: [{ type: 'text', text: reply }] },
+];
+const chatter = { id: 'conv-wipe', session: { deriveMessages: () => chat('清空前的最后一句', '嗯。') } };
+await app.events.serial(chatter, 'agent/turn-stopping', { agent: chatter, turn: 1, signal: new AbortController().signal });
+
 // 不带 confirm 必须被挡
 const noConfirm = await j('/rp-soul/engine/wipe', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: '{}' });
 eq(noConfirm.status, 400, '9. 没有 confirm 就拒掉');
@@ -296,6 +304,17 @@ ok(typeof wiped.body.session_id === 'string' && wiped.body.session_id !== sid, '
 const afterWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(wiped.body.session_id));
 ok(Array.isArray(afterWipe.body.entries) && afterWipe.body.entries.length === 0, '9. 新局没有旧记忆');
 eq(afterWipe.body.turn, 0, '9. 新局从第 0 回合开始');
+
+// 清空前攒着、还没落的那几轮，不能在清空之后写进新的一局
+const freshTurns = [['今天从头开始', '好。'], ['你记得我吗', '不太记得。'], ['那就重新认识', '嗯。'], ['我叫小林', '你好。']];
+for (const [said, reply] of freshTurns) {
+  chatter.session = { deriveMessages: () => chat(said, reply) };
+  await app.events.serial(chatter, 'agent/turn-stopping', { agent: chatter, turn: 1, signal: new AbortController().signal });
+}
+const newAbm = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(wiped.body.session_id));
+const newLines = (newAbm.body.entries ?? []).filter((e) => e.layer === 'abm').map((e) => String(e.content));
+ok(newLines.some((line) => line.includes('今天从头开始')), '9. 清空之后新聊的照常记下');
+ok(!newLines.some((line) => line.includes('清空前的最后一句')), '9. 清空之前攒着的那一轮没被带进新局');
 
 // 人设没被动：前面的用例改过标题，所以只验「还读得出来、还是同一个人」
 const personaAfter = await j('/rp-soul/engine');

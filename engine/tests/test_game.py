@@ -314,10 +314,16 @@ def her_own_deadline_needs_no_consent(s):
 
 
 def an_offscreen_beat_needs_time_apart(s):
+    """刚刚还在说话就写离屏片段：这一段不收，但整次交账照常通过（不再逼模型删了重交）。"""
     sid, rev, _ = e2e.start(s)
     beat = {"op": "offscreen_beat", "summary": "她去楼下买了杯咖啡。"}
+    rev, data = play(s, sid, rev, ops=[beat, npc_action()])
+    assert data["turn"] == 1, data
+    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
+    assert not any("买了杯咖啡" in e["content"] for e in entries), entries
+    # 只有这一段、别的什么都没有：那就真的是「什么都没发生」，照旧驳回
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[beat]))
-    assert "刚刚还在说话" in json.dumps(err, ensure_ascii=False), err
+    assert "可观察的变化" in json.dumps(err, ensure_ascii=False), err
 
 
 def undo_takes_the_turn_back(s):

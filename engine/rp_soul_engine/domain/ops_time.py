@@ -45,16 +45,18 @@ def op_offscreen_beat(ctx, op, path):
     errs = []
     state = ctx.state
     npc = ctx.her
+    # 这一段用不上（离屏推演关着、这一回合已经有一段、你们刚刚还在说话）：不收，
+    # 但也不驳回整次交账 —— 多写了一段不该让模型删了重交一遍。记一笔跳过的原因。
+    skip = None
     if simulation.frozen(state):
-        errs.append(detail(path, "离屏推演已关闭，不产生离屏片段", "玩家打开离屏推演后再写", INVARIANT_VIOLATION))
-    else:
-        if npc in ctx.beat_npcs:
-            errs.append(detail(path, "同一回合里只能有一段离屏片段", None, INVARIANT_VIOLATION))
-        if npc not in ctx.beat_candidates and npc not in ctx.required_beats:
-            errs.append(detail(
-                path, "你们刚刚还在说话，这段时间不算分开",
-                "离屏片段只在隔了 16 分钟以上再回来时写", INVARIANT_VIOLATION,
-            ))
+        skip = "离屏推演已关闭，不产生离屏片段"
+    elif npc in ctx.beat_npcs:
+        skip = "同一回合里已经有一段离屏片段"
+    elif npc not in ctx.beat_candidates and npc not in ctx.required_beats:
+        skip = "你们刚刚还在说话，这段时间不算分开（离屏片段只在隔了 16 分钟以上再回来时写）"
+    if skip is not None:
+        ctx.applied.append({"op": "offscreen_beat_skipped", "npc_id": npc, "reason": skip})
+        return
     subs, problems = S.validate(beat_spec(), op["operations"], path + ".operations")
     errs.extend(problems)
     if not _flush(ctx, errs):

@@ -341,10 +341,14 @@ def get_context(ctx, payload):
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
-    state = SETTLE.preview(state, now_iso())
+    now = now_iso()
+    offscreen_due = _offscreen_due(state, now)
+    state = SETTLE.preview(state, now)
     _recount_requests(state)
     project = CX.full if payload["depth"] == "full" else CX.brief
     context = project(state, persona, save_info(session), payload["cue"])
+    if offscreen_due is not None:
+        context["offscreen_due"] = offscreen_due
     out = {"revision": state.get("revision", 0), "turn": state["turn"], "context": context}
     if payload["want_twist"]:
         out["twists"] = list(persona.get("twists") or [])
@@ -354,6 +358,22 @@ def get_context(ctx, payload):
         out["persona"] = persona_report
     out["commit_template"] = CX.commit_template(state, persona)
     return out
+
+
+def _offscreen_due(state, now):
+    """下一次交账会不会被要求补一段离屏片段：{minutes} 或 None。
+
+    和 commit 时的判定同一套（simulation.offscreen：隔够一小时、没关离屏推演）。
+    提前告诉模型，就不会交上去才被驳回、再重交一遍。
+    """
+    from ..domain import settlement as ST_
+    from ..domain import simulation as SIM
+    from ..domain import state as SS_
+
+    minutes, _clock, _at = SS_.real_span(state, now)
+    if SIM.frozen(state) or ST_.tier_for(minutes) != "full":
+        return None
+    return {"minutes": minutes}
 
 
 # ---------------------------------------------------------------------------
@@ -1369,10 +1389,6 @@ def summarize_memory(ctx, payload):
         entry = MEM.apply_fold(state, request, payload["text"], state["turn"],
                                keep=tuple(payload.get("keep") or ()))
         state["requests"]["memory_fold"] = None
-        # 记下「这一回合已经由宿主收过了」：模型手里可能还留着「该收了」，
-        # 跟着这一回合再交一次 memory_fold，那不该把整次提交驳回去。
-        paid = state["counters"].setdefault("host_paid", {})
-        paid["fold"] = state["turn"]
         # 收完 ABM 变了，下一次该不该再收 / 该不该写日记要跟着重算
         MODULES.run(state, "close_record")
         return "收成了一条记忆：%s" % entry["content"][:20], {"memory": MEM.row(state, entry)}
@@ -1397,9 +1413,6 @@ def write_diary(ctx, payload):
                            [detail("$.text", "没有欠着的日记", None, INVALID_INPUT)])
         diary = MEM.apply_diary(state, request, payload["text"])
         state["requests"]["memory_diary"] = None
-        # 模型手里那份上下文可能还写着「该写日记了」，跟着交上来不该被驳
-        paid = state["counters"].setdefault("host_paid", {})
-        paid["diary"] = state["turn"]
         MODULES.run(state, "close_record")
         _plan_journal(ctx, state["session_id"], [{"diary": diary}])
         return "写好了第 %d 天的日记" % diary["day"], {"diary": {"day": diary["day"], "path": diary.get("path")}}
