@@ -42,7 +42,7 @@ const app = new Context();
 let fiber;
 let promptFiber;
 // 宿主真正的 subagent 服务在测试环境里没有，这里放一个假的顶上：
-// 记下每次调用，返回一句编好的汇总，验插件有没有走对这条路。
+// 记下每次调用 —— lite 版一次都不该调。
 const subagentsSpawned = [];
 app.provide('subagents');
 app.set('subagents', {
@@ -61,10 +61,6 @@ const assemble = async (agent, signal) => app.systemPrompt.assemble(agent ? asse
 const engineText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-engine')?.text ?? '';
 // 「她想起来的」单独一段：跟着你这句话变的东西都在这里，局面那段才能保持不变。
 const recallText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-recall')?.text ?? '';
-// 后台的活是异步的：等它做完，最多等两秒
-const waitFor = async (check) => {
-  for (let i = 0; i < 100 && !(await check()); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
-};
 try {
   const a = await commit(await start(), '重启前留下的悬念A');
   const b = await commit(await start(), '另一局留下的悬念B');
@@ -121,7 +117,7 @@ try {
   has(engineText(missing), '外部更新后的悬念A', '5. 账本读取失败就沿用上一次的局面');
   has(renderPrompt(missing), persona.prose, '5. 引擎读取失败仍保留人设提示');
 
-  // 最要紧的一条：记忆和常识按「你这一次说的话」挑，不靠模型自己去调工具。
+  // 最要紧的一条：常识按「你这一次说的话」挑，不靠模型自己去调工具。
   // cue 从 agent 的会话里翻最后一条真实的用户消息，装配期就拿到。
   writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: next, [agentB.id]: b }));
   await client.call('add-common', { request_id: rid(), key: ['deepseek', 'ds'], weight: 0.8, content: 'deepseek 是深度求索旗下的大语言模型。' });
@@ -155,88 +151,18 @@ try {
   const snap = engineText(await assemble(agentA));
   hasNot(snap, '写之前用 soul_state', '8. 快照不要求每轮先调 soul_state');
   has(snap, '写完用 soul_commit 交账', '8. 快照仍要求交账');
-  // 模型忘了交账也不能丢：宿主在回合结束时把这一问一答写进 ABM。
+  // lite 没有记忆：回合结束时宿主什么都不记，子代理服务就在手边也不去起。
   agentA.session = {
     deriveMessages: () => [
       { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '灯还亮着吗' }] },
       { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '亮着。你回来晚了。' }] },
     ],
   };
-  const before = next;
-  // 单轮先攒着：一条 ABM 该讲的是一件事，不是一句话。
-  // 同一轮被重发（重试、刷新）也不会压成两条。
-  const fireOnce = () => app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await fireOnce();
-  await fireOnce();
-  const kept = (await client.call('debug-memories', { session_id: before.session_id })).entries;
-  eq(kept.filter((row) => String(row.content).includes('灯还亮着吗')).length, 0, '9. 一轮先攒着，不成条');
-  // 攒够四轮就落一条，内容是这几轮铺开的样子
-  for (let i = 0; i < 4; i += 1) {
-    agentA.session = {
-      deriveMessages: () => [
-        { id: 'u' + i, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '第' + i + '句' }] },
-        { id: 'a' + i, role: 'assistant', content: [{ type: 'text', text: '嗯' + i }] },
-      ],
-    };
-    await fireOnce();
+  for (let i = 0; i < 5; i += 1) {
+    await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
   }
-  const noted = (await client.call('debug-memories', { session_id: before.session_id })).entries;
-  const line = noted.find((row) => String(row.content).includes('第0句'));
-  ok(line !== undefined, '9. 攒够几轮，回合结束时宿主自己记一条（模型没交账也不丢）');
-  ok(String(line.content).includes('灯还亮着吗'), '9. 攒着的前几轮也一起记进去');
-  eq(noted.filter((row) => String(row.content).includes('第0句')).length, 1, '9. 同一批只落一条');
-  // 攒够二十条之后，收成一条这件事交给子代理，也不再等模型交账。
-  // 这里只验插件有没有真的去起子代理、并把它写的话落进 SCM。
-  const foldGame = await start();
-  let foldRow = foldGame;
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
-  for (let i = 0; i < 20; i += 1) {
-    const step = await client.call('note-turn', {
-      session_id: foldRow.session_id, request_id: rid(), expected_revision: foldRow.revision,
-      said: '第' + i + '句', reply: '嗯。',
-    });
-    foldRow = { ...foldRow, revision: step.revision };
-    writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
-  }
-  ok(subagentsSpawned.length === 0, '10. 还没攒满时没去扰动子代理');
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await waitFor(async () => subagentsSpawned.length > 0
-    && (await client.call('debug-memories', { session_id: foldGame.session_id })).entries.some((row) => row.layer === 'scm'));
-  // 收完 ABM 接着可能就该写日记了，那是另一个子代理，别把它算成「起了两次」。
-  // 只数 label 是「记忆整理」的那几次。
-  const folders = subagentsSpawned.filter((one) => one.label === '记忆整理');
-  eq(folders.length, 1, '10. 攒满了就起一个子代理去收');
-  has(folders[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
-  eq(folders[0]?.provider, 'spawn', '10. 用的是 spawn：全新的子 agent，不复制整个会话的上下文');
-  eq(folders[0]?.label, '记忆整理', '10. 这一次是收 ABM');
-  eq(folders[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
-  ok(folders[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
-  const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
-  eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
-  // 批次跟着 ABM 一起长，所以这一批收完全部收干净，不留尾巴
-  eq(folded.filter((row) => row.layer === 'abm').length, 0, '10. 收完之后 ABM 清空');
-  // 连收两次之后不留尾巴：批次冻在二十条的话这里会剩二十条
-  const leftovers = folded.filter((row) => row.layer === 'scm');
-  ok(leftovers.length === 1, '10. 只落了一条 SCM');
-
-  // 够重的一批交给子代理筛：给它的原文要一轮一组配好对，按时间顺序排
-  const exchangeOf = (said, reply) => [
-    { id: 'u-' + said.slice(0, 8), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
-    { id: 'a-' + reply.slice(0, 8), role: 'assistant', content: [{ type: 'text', text: reply }] },
-  ];
-  const spawnedBefore = subagentsSpawned.length;
-  agentA.session = { deriveMessages: () => exchangeOf('先问第一件事', '第一件的回答' + '好'.repeat(600)) };
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  agentA.session = { deriveMessages: () => exchangeOf('再问第二件事' + '啊'.repeat(150), '第二件的回答' + '嗯'.repeat(500)) };
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await waitFor(async () => subagentsSpawned.slice(spawnedBefore).some((one) => one.label === '筛记忆'));
-  const sift = subagentsSpawned.slice(spawnedBefore).find((one) => one.label === '筛记忆');
-  ok(sift !== undefined, '11. 够重的一批交给子代理筛');
-  const body = sift?.prompt ?? '';
-  const order = ['主人：先问第一件事', '我：第一件的回答', '主人：再问第二件事', '我：第二件的回答'].map((needle) => body.indexOf(needle));
-  ok(order.every((at) => at >= 0), '11. 每轮都是「主人：… 我：…」配好的一组（' + JSON.stringify(order) + '）');
-  ok(order.every((at, i) => i === 0 || at > order[i - 1]), '11. 按时间顺序：第一轮的问答在第二轮之前');
-  hasNot(body, ' / ', '11. 不再把两边的话各拼成一串');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  eq(subagentsSpawned.length, 0, '9. 回合结束不起子代理（没有汇总、筛选、日记）');
   delete agentA.session;
   await fiber.dispose();
 

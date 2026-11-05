@@ -407,23 +407,6 @@ responses.set('GET /rp-soul/engine/activity', () => jsonResponse({
   ],
 }));
 responses.set('DELETE /rp-soul/engine/thought', () => jsonResponse({ ok: true, revision: 8 }));
-responses.set('GET /rp-soul/engine/memories', () => jsonResponse({
-  ok: true, session_id: 's_test01', revision: 11, turn: 3, clock_label: '第三天 21:30',
-  counts: { abm: 2, scm: 1, clpa: 1 }, capacity: { abm: 20, scm: 50, clpa: null },
-  layers: { abm: 'ABM', scm: 'SCM', clpa: 'CLPA' },
-  requests: { memory_fold: { sources: [{ id: 'm2', when: '周三晚上 21:40', text: '下雨那天' }] }, memory_diary: null },
-  deletions: [{ turn: 2, memory_id: 'm0', layer: 'scm', content: '不想记得的事', reason: '设置页手动删除', created_at: 'x' }],
-  entries: [
-    { id: 'm3', layer: 'abm', layer_label: 'ABM', type: 'conversation', content: '他今晚又来了', importance: 0.3, activity: 1,
-      when: '10.29 周四 19:12', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, you: '我来了', quotes: ['坐吧'] },
-    { id: 'm4', layer: 'abm', layer_label: 'ABM', type: 'action', content: '她推过来一杯热水', importance: 0.3, activity: 1,
-      when: '10.29 周四 19:12', keywords: [], origin_ids: [], pinned: false, edited: false, note: '', turn: 3 },
-    { id: 'm2', layer: 'scm', layer_label: 'SCM', type: 'summary', content: '下雨那天', importance: 0.5, activity: 0.4,
-      when: '10.28 周三 21:40', keywords: ['下雨'], origin_ids: [], pinned: false, edited: false, note: '', turn: 2 },
-    { id: 'm1', layer: 'clpa', layer_label: 'CLPA', type: 'summary', content: '我们是在雨夜认识的', importance: 0.6, activity: 0.9,
-      when: '10.22 周四 08:05', keywords: [], origin_ids: ['m9'], pinned: true, edited: false, note: '', turn: 0, milestone: ['stage'] },
-  ],
-}));
 responses.set('GET /rp-soul/engine/common', () => jsonResponse({
   ok: true, count: 2, limit: 4, next_request_id: 'cm_x',
   rows: [
@@ -435,9 +418,6 @@ responses.set('POST /rp-soul/engine/common', () => jsonResponse({ ok: true, rece
 responses.set('PUT /rp-soul/engine/common', () => jsonResponse({ ok: true, receipt: '已改好', count: 2, limit: 4, rows: [] }));
 responses.set('DELETE /rp-soul/engine/common', () => jsonResponse({ ok: true, receipt: '已删除', count: 1, limit: 4, rows: [] }));
 responses.set('PUT /rp-soul/engine/common/limit', () => jsonResponse({ ok: true, receipt: '已改', count: 2, limit: 2, rows: [] }));
-responses.set('PUT /rp-soul/engine/memory', () => jsonResponse({ ok: true, revision: 12, receipt: '已改' }));
-responses.set('DELETE /rp-soul/engine/memory', () => jsonResponse({ ok: true, revision: 12, receipt: '已删除' }));
-responses.set('POST /rp-soul/engine/memory/request', () => jsonResponse({ ok: true, revision: 12, receipt: '下一次提交会先做总结' }));
 responses.set('GET /rp-soul/engine/persona-file', () => jsonResponse({
   ok: true,
   rel: 'rp-soul/persona.md',
@@ -566,53 +546,11 @@ ok(delCall.body.thought_id === 'th1' || delCall.body.thought_id === 'th2', '11. 
 eq(delCall.body.revision, 9, '11. 删除用面板里的最新 revision（不是 /engine 的旧值）');
 has(clientSrc, 'panel && panel.revision', '11. 删除逻辑优先用面板 revision');
 
-// 切到「记忆」
-calls.length = 0;
-findButton(moodTree, '记忆').props.onClick();
-for (let i = 0; i < 20; i++) await Promise.resolve();
-const memTree = await renderUntil((t) => t.props['data-tab'] === 'memory' && textOf(t).includes('下雨那天'));
-eq(memTree.props['data-tab'], 'memory', '11. 切到「记忆」页');
-ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/memories') === 0), '11. 记忆页读 /engine/memories');
-const memText = textOf(memTree);
-has(memText, '他今晚又来了', '11. 列出 ABM');
-has(memText, '你说：我来了', '11. ABM 的条目带你说的话');
-has(memText, '我们是在雨夜认识的', '11. CLPA 篇章带');
-has(memText, 'SCM 1/50', '11. 层过滤按钮带数量/容量');
-has(memText, '收进 SCM（1 条）', '11. 提示下一次提交要收的那批');
-has(memText, '不想记得的事', '11. 删除审计');
-has(memText, '活跃度 40%', '11. 显示活跃度');
-// 点一条 → 详情 → 改内容 → 保存
-const memCard = findAll(memTree, (n) => n.type === 'div' && typeof n.props.onClick === 'function' && textOf(n).includes('下雨那天') && !textOf(n).includes('他今晚'))[0];
-ok(memCard !== undefined, '11. 记忆卡片可点');
-memCard.props.onClick();
-for (let i = 0; i < 20; i++) await Promise.resolve();
-const memDetail = await renderUntil((t) => textOf(t).includes('Pin（不衰减'));
-const memText2 = findAll(memDetail, (n) => n.type === 'textarea' && n.props.value === '下雨那天')[0];
-ok(memText2 !== undefined, '11. 详情里能改内容');
-memText2.props.onChange({ target: { value: '下雨那天他把伞给了我', type: 'textarea' } });
-for (let i = 0; i < 20; i++) await Promise.resolve();
-const memEdited = await renderUntil((t) => findAll(t, (n) => n.type === 'textarea' && n.props.value === '下雨那天他把伞给了我').length === 1);
-calls.length = 0;
-findButton(memEdited, '保存').props.onClick();
-for (let i = 0; i < 30; i++) await Promise.resolve();
-const memPut = calls.find((c) => c.method === 'PUT' && c.url === '/rp-soul/engine/memory');
-ok(memPut !== undefined, '11. 保存发 PUT /engine/memory');
-eq(memPut.body.memory_id, 'm2', '11. PUT 带 memory_id');
-eq(memPut.body.content, '下雨那天他把伞给了我', '11. PUT 带改后的内容');
-eq(memPut.body.revision, 11, '11. PUT 用面板里的 revision');
-eq(memPut.body.keywords, undefined, '11. 没改的关键词不送（原样送回会被当成你改过）');
-eq(memPut.body.importance, undefined, '11. 没改的重要度不送');
-eq(memPut.body.pinned, undefined, '11. 没改的 Pin 不送');
-// 立即汇总
-calls.length = 0;
-findButton(memEdited, '立即汇总').props.onClick();
-for (let i = 0; i < 30; i++) await Promise.resolve();
-const memReq = calls.find((c) => c.method === 'POST' && c.url === '/rp-soul/engine/memory/request');
-ok(memReq !== undefined && memReq.body.kind === 'fold', '11. 立即汇总发 POST kind=fold');
-hasNot(memText, '拼接顺序', '11. 记忆页不渲染人设页内容');
+// lite 没有「记忆」页签
+ok(findAll(moodTree, (n) => n.type === 'button' && textOf(n) === '记忆').length === 0, '11. 页签里没有「记忆」');
 
 // 切到「常识库」
-findButton(memTree, '常识库').props.onClick();
+findButton(moodTree, '常识库').props.onClick();
 for (let i = 0; i < 20; i++) await Promise.resolve();
 const cmnTree = await renderUntil((t) => t.props['data-tab'] === 'facts' && textOf(t).includes('他爱吃米饭'));
 eq(cmnTree.props['data-tab'], 'facts', '11. 切到「常识库」页');

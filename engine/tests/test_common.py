@@ -223,23 +223,17 @@ def the_library_is_shared_across_sessions(s):
 
 @with_sc
 def what_she_learns_while_folding_goes_in(s):
-    """总结 SCM 时顺手提到的常识，要落进这张全局表。"""
+    """交账时顺手提到的常识要落进这张全局表（挂起等确认）。lite 没有总结和日记，哪一回合都能提。"""
     sid, rev, _ = e2e.start(s)
-    # 先聊满 20 条 ABM，引擎才认 memory_fold（不然就是「还没要收 ABM」）。
-    for n in range(21):
-        rev = s.ok("commit-turn", e2e.commit(
-            {"session_id": sid, "revision": rev}, player_input="第 %d 句。" % n,
-            ops=[{"op": "npc_action", "kind": "observe", "action": "她应了一声。", "significant": False}]))["revision"]
     body = e2e.commit({"session_id": sid, "revision": rev},
                       ops=[{"op": "npc_action", "kind": "observe", "action": "她记下了。", "significant": False}],
-                      memory_fold="这一段里他说过 DS 是深度求索的模型。",
                       common=[{"key": ["ds", "deepseek"], "weight": 0.7, "content": "deepseek 是深度求索旗下的大语言模型。"}])
     s.ok("commit-turn", body)
     panel = s.ok("debug-common", {})
     assert panel["count"] == 1, panel
     row = panel["rows"][0]
     assert row["key"] == ["ds", "deepseek"] and row["weight"] == 0.7, row
-    assert row["origin"] in ("fold", "diary"), row
+    assert row["origin"] == "turn", row
     # 模型提的先挂着：确认之前不注入，确认之后才注入
     assert row["pending"] is True and panel["pending"] == 1, panel
     ctx = s.ok("get-context", {"session_id": sid, "depth": "brief", "cue": "DS 是什么"})["context"]

@@ -319,8 +319,7 @@ def an_offscreen_beat_needs_time_apart(s):
     beat = {"op": "offscreen_beat", "summary": "她去楼下买了杯咖啡。"}
     rev, data = play(s, sid, rev, ops=[beat, npc_action()])
     assert data["turn"] == 1, data
-    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
-    assert not any("买了杯咖啡" in e["content"] for e in entries), entries
+    assert not any(item.get("op") == "offscreen_beat" for item in data["turns"][0]["applied"]), data["turns"][0]["applied"]
     # 只有这一段、别的什么都没有：那就真的是「什么都没发生」，照旧驳回
     err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[beat]))
     assert "可观察的变化" in json.dumps(err, ensure_ascii=False), err
@@ -505,7 +504,7 @@ def status_levels(s):
     for key in ("clock_label", "paused", "present", "mood"):
         assert key in brief, sorted(brief)
     assert "place" not in brief, sorted(brief)
-    assert "open_action" in detail and "requests" in detail, sorted(detail)
+    assert "open_action" in detail and "recent" in detail, sorted(detail)
     for key in ("facts", "undo_points", "turns_logged", "persona", "thought_deletions"):
         assert key in debug, sorted(debug)
     assert debug["persona"]["name"] == "林晚", debug["persona"]
@@ -592,121 +591,6 @@ def a_relationship_move_is_felt_by_her(s):
     assert any("信任" in label for label in labels), labels
     # The player id is not an addressable mood subject at all.
     assert s.fail("debug-mood", {"session_id": sid, "npc_id": "player"})["code"] == "NOT_FOUND"
-
-
-def the_memory_page_shows_her_memories(s):
-    sid, rev, _ = e2e.start(s)
-    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="她第一次对我笑")
-    data = s.ok("debug-memories", {"session_id": sid})
-    assert data["revision"] == rev and data["counts"]["abm"] >= 1, data["counts"]
-    mine = [e for e in data["entries"] if e["content"] == "她第一次对我笑"]
-    assert mine and mine[0]["layer_label"] == "ABM" and mine[0]["activity"] == 1.0, data["entries"]
-    assert data["layers"]["clpa"] == "CLPA" and data["capacity"]["scm"] == 50
-
-
-def editing_a_memory_marks_it_yours(s):
-    sid, rev, _ = e2e.start(s)
-    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="下雨那天")
-    mid = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["content"] == "下雨那天"][0]["id"]
-    out = s.ok("edit-memory", {"session_id": sid, "request_id": e2e.rid("r_m"), "expected_revision": rev,
-                               "memory_id": mid, "content": "下雨那天他把伞给了我", "pinned": True, "note": "别忘"})
-    assert out["revision"] == rev + 1 and "已改" in out["receipt"], out
-    row = out["memory"]
-    assert row["edited"] is True and row["pinned"] is True and row["note"] == "别忘", row
-    assert "雨伞" not in row["keywords"] and "把伞" in row["keywords"], row["keywords"]
-    err = s.fail("edit-memory", {"session_id": sid, "request_id": e2e.rid("r_m"), "expected_revision": rev,
-                                 "memory_id": mid, "note": "旧版本"})
-    assert err["code"] == "STALE_REVISION", err
-
-
-def deleting_a_memory_leaves_an_audit(s):
-    sid, rev, _ = e2e.start(s)
-    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="不想记得的事")
-    mid = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["content"] == "不想记得的事"][0]["id"]
-    s.ok("delete-memory", {"session_id": sid, "request_id": e2e.rid("r_d"), "expected_revision": rev,
-                           "memory_id": mid, "reason": "测试"})
-    data = s.ok("debug-memories", {"session_id": sid})
-    assert all(e["id"] != mid for e in data["entries"]), data["entries"]
-    assert data["deletions"][0]["memory_id"] == mid and data["deletions"][0]["reason"] == "测试", data["deletions"]
-    err = s.fail("delete-memory", {"session_id": sid, "request_id": e2e.rid("r_d"), "expected_revision": data["revision"],
-                                   "memory_id": mid})
-    assert err["code"] == "NOT_FOUND", err
-
-
-def the_host_notes_a_turn_by_itself(s):
-    """宿主在回合结束时递来两句原话，不经过 soul_commit 也能记进 ABM。"""
-    sid, rev, _ = e2e.start(s)
-    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
-                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
-    assert out["noted"] is True and out["revision"] == rev + 1, out
-    assert out["memory"]["content"] == "你：灯还亮着吗 她：亮着。你回来晚了。", out["memory"]
-    # 同一回合重发不重复记（宿主重试）
-    again = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": out["revision"],
-                               "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
-    assert again["noted"] is False and again["revision"] == out["revision"], again
-    entries = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "abm"]
-    assert len(entries) == 1, entries
-
-
-def summarize_now_is_paid_by_the_next_commit(s):
-    sid, rev, _ = e2e.start(s)
-    rev, _ = play(s, sid, rev, ops=[npc_action()], remember="今天陪她值了夜班")
-    out = s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
-    rev = out["revision"]
-    assert out["request"]["sources"][0]["text"] == "今天陪她值了夜班", out
-    ctx = s.ok("get-context", {"session_id": sid})["context"]
-    assert ctx["memory_fold_sources"]["sources"], ctx.get("memory_fold_sources")
-    err = s.fail("commit-turn", e2e.commit({"session_id": sid, "revision": rev}, ops=[npc_action(significant=False)]))
-    assert "SCM" in json.dumps(err, ensure_ascii=False), err
-    play(s, sid, rev, ops=[npc_action(significant=False)], memory_fold="那晚我值夜班，有人陪着，没那么难熬")
-    scm = [e for e in s.ok("debug-memories", {"session_id": sid})["entries"] if e["layer"] == "scm"]
-    assert scm and scm[0]["content"].startswith("那晚我值夜班"), scm
-
-
-def the_host_folds_abm_by_itself(s):
-    """宿主起的子代理把 ABM 收成一条 SCM，模型一次 soul_commit 都没交。"""
-    sid, rev, _ = e2e.start(s)
-    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
-                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
-    rev = out["revision"]
-    s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
-    rev = s.ok("debug-memories", {"session_id": sid})["revision"]
-    folded = s.ok("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s"), "expected_revision": rev,
-                                       "text": "那天他回来得晚，灯一直亮着。"})
-    assert folded["memory"]["content"].startswith("那天他回来得晚"), folded
-    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
-    assert [e for e in entries if e["layer"] == "scm"], entries
-    assert not [e for e in entries if e["layer"] == "abm"], entries
-    # 收完了就不该再有待收的批次
-    again = s.fail("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s2"),
-                                        "expected_revision": folded["revision"],
-                                        "text": "再说一次"})
-    assert again["code"] == "INVALID_INPUT", again
-
-
-def a_fold_the_subagent_already_paid_is_not_paid_twice(s):
-    """子代理先收了这一批，模型这次交的 fold 就不该再落一条 —— 那会是一段没有来源的记忆。"""
-    sid, rev, _ = e2e.start(s)
-    out = s.ok("note-turn", {"session_id": sid, "request_id": e2e.rid("r_n"), "expected_revision": rev,
-                             "said": "灯还亮着吗", "reply": "亮着。你回来晚了。"})
-    rev = out["revision"]
-    s.ok("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "fold"})
-    rev = s.ok("debug-memories", {"session_id": sid})["revision"]
-    folded = s.ok("summarize-memory", {"session_id": sid, "request_id": e2e.rid("r_s"), "expected_revision": rev,
-                                       "text": "那天他回来得晚，灯一直亮着。"})
-    rev = folded["revision"]
-    # 模型手里还留着「该收了」的旧印象，照样交了 memory_fold
-    play(s, sid, rev, ops=[npc_action()], memory_fold="他回来得晚，灯亮着。")
-    entries = s.ok("debug-memories", {"session_id": sid})["entries"]
-    scm = [e for e in entries if e["layer"] == "scm"]
-    assert len(scm) == 1, scm
-    assert scm[0]["content"].startswith("那天他回来得晚"), scm
-
-
-def nothing_to_archive_is_refused(s):
-    sid, rev, _ = e2e.start(s)
-    err = s.fail("request-memory", {"session_id": sid, "request_id": e2e.rid("r_q"), "expected_revision": rev, "kind": "diary"})
-    assert err["code"] == "INVALID_INPUT" and "没有可以写日记的记忆" in err["message"], err
 
 
 def settings_moods_page_lists_her(s):
@@ -828,15 +712,6 @@ check("an unknown session is NOT_FOUND", with_sc(missing_session_is_not_found))
 check("the same request_id replays instead of writing twice", with_sc(idempotency_returns_the_same_turn))
 check("a relationship move is felt by her", with_sc(a_relationship_move_is_felt_by_her))
 check("the mood page lists her", with_sc(settings_moods_page_lists_her))
-check("the memory page shows her memories", with_sc(the_memory_page_shows_her_memories))
-check("editing a memory marks it yours", with_sc(editing_a_memory_marks_it_yours))
-check("the host notes a turn by itself", with_sc(the_host_notes_a_turn_by_itself))
-check("the host folds ABM by itself", with_sc(the_host_folds_abm_by_itself))
-check("a fold the subagent already paid is not paid twice",
-      with_sc(a_fold_the_subagent_already_paid_is_not_paid_twice))
-check("deleting a memory leaves an audit", with_sc(deleting_a_memory_leaves_an_audit))
-check("summarize now is paid by the next commit", with_sc(summarize_now_is_paid_by_the_next_commit))
-check("nothing to archive is refused", with_sc(nothing_to_archive_is_refused))
 check("the mood page never writes", with_sc(settings_moods_page_is_read_only))
 check("the activity page reads the turn log", with_sc(settings_activity_page_reads_the_turn_log))
 check("the activity page honours its limit", with_sc(settings_activity_respects_the_limit))

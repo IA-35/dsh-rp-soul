@@ -1,8 +1,8 @@
 """Built-in responsibilities and lifecycle order; one process and transaction."""
 
-from . import mood, memory, agency, wake
+from . import mood, common, agency, wake
 
-REGISTRY = {"mood": mood, "memory": memory, "agency": agency, "wake": wake}
+REGISTRY = {"mood": mood, "common": common, "agency": agency, "wake": wake}
 
 
 def run(state, stage, *args, **kwargs):

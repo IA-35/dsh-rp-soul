@@ -67,17 +67,12 @@ def new_session(persona, seed=None, player=None, now=None):
             "fact": 1,
             "event": 1,
             "thought": 1,
-            "memory": 1,
             "boundary": 1,
         },
         # 上一次重大自主行动的时刻（游戏时钟），冷却按时间算
         "major_action_at": {},
         # 上一次给完整上下文的时刻；空 = 下次给完整
         "full_context_at": None,
-        # 已经达成过的里程碑（第一次立约……），只自动 Pin 第一次
-        "milestones": [],
-        # 最近一次把 SCM 写进日记的那一天；空 = 还没写过
-        "last_diary_day": None,
     }
     state = {
         "schema": STATE_SCHEMA_VERSION,
@@ -106,15 +101,16 @@ def new_session(persona, seed=None, player=None, now=None):
         # 她自己定下的下一件事：{"note": "去洗澡", "until": {"day","minute"}, "set_turn": N}
         # 旧存档没有这个键，读的地方一律用 .get("plan")
         "plan": None,
-        # turns：回合流水（最近 40 条）；entries：她的记忆（ABM / SCM / CLPA，见 domain/memories.py）
-        "memory": {"turns": [], "last_quotes": [], "open_action": "", "entries": []},
+        # 回合流水（最近 40 条）、上一个悬念、最近的原话。lite 没有记忆层，只剩这些记账用的
+        "memory": {"turns": [], "last_quotes": [], "open_action": ""},
         "preferences": {
             "offscreen_simulation": True,
             "pace": "standard",
             "explicitness": "standard",
         },
         "safety": {"paused": False, "boundaries": []},
-        "requests": {"memory_fold": None, "memory_diary": None},
+        # 引擎要模型下一次交账时顺带写的东西；lite 没有（以前是记忆总结和日记）
+        "requests": {},
         "undo_floor": 0,
         "session_id": None,
     }

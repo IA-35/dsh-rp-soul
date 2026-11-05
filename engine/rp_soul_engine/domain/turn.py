@@ -29,7 +29,6 @@ from . import clock as CL
 from . import common as CM
 from . import facts as FA
 from . import invariants
-from . import memories as MEM
 from . import mood as MO
 from . import ops as OPS
 from . import simulation
@@ -38,7 +37,7 @@ from . import structure as ST
 from .. import modules as MODULES
 
 F = S.Field
-MAX_MEMORY_TURNS = 40          # the rolling turn log; her memory lives in memories.py
+MAX_MEMORY_TURNS = 40          # the rolling turn log (lite: there is no other memory)
 UNDO_KEEP = 30                 # undo points kept per session
 REWRITE_OPS = ("add_fact", "npc_action", "npc_state", "offscreen_beat", "add_thought")
 
@@ -58,18 +57,10 @@ def commit_fields():
         "content_tags": F(S.List(S.Enum(*ST.TAG_IDS), max_items=12, unique=True), required=False, default=[],
                           desc="本回合正文涉及的内容标签（可为空数组，不写就当空）；只用内置标签表里的 id"),
         "summary": F(S.Str(1, 120), desc="本回合发生了什么，第三方视角，≤120 字"),
-        "remember": F(S.Nullable(S.Str(1, 60)), required=False, default=None,
-                      desc="可选：TA 会怎么记得这件事，第一人称、带当时的感受，≤60 字；不写就用 summary 记"),
         "open_action": F(S.Nullable(S.Str(1, 80)), required=False, default=None,
                          desc="回合停在哪里、谁在等谁，≤80 字；不写就沿用上一个"),
         "quotes": F(S.List(S.Str(1, 80), max_items=3), required=False, default=[],
                     desc="≤3 条对后续有意义的原话，每条 ≤80 字"),
-        "memory_fold": F(S.Nullable(S.Str(1, MEM.SUMMARY_MAX)), required=False, default=None,
-                         desc="requests.memory_fold 有值时在第一项必填：读 memory_fold_sources，把这一批 ABM 收成一条 SCM（第一人称，保留发生了什么和当时的感受，带得住的细节，≤300 字）"),
-        "memory_diary": F(S.Nullable(S.Str(1, MEM.DIARY_MAX)), required=False, default=None,
-                          desc="requests.memory_diary 有值时在第一项必填：读 memory_diary_sources，把这一天写成一篇日记（第一人称，按时间顺下来，记得感受和变化，≤300 字）"),
-        "memory_keep": F(S.List(S.Str(1, 40), max_items=2), required=False, default=[],
-                         desc="可选：这一批里值得一直记着的 0~2 条经历 id；它们会被单独放进 CLPA，不随这一批淡掉"),
         "common": F(
             S.List(
                 S.Obj(
@@ -86,14 +77,12 @@ def commit_fields():
             ),
             required=False,
             default=[],
-            desc="可选：这一回合里他解释过、以后还会提到的客观常识（一个名词、一个简称指代什么），0~3 条。随时都能记，不必等到收 SCM 或写日记 —— 解释往往就发生在他第一次说起的那个回合，等日记就错过了。你提的会先挂起，等他在设置页点确认后才注入；你们之间的事属于记忆，不要写在这里",
+            desc="可选：这一回合里他解释过、以后还会提到的客观常识（一个名词、一个简称指代什么），0~3 条。随时都能记 —— 解释往往就发生在他第一次说起的那个回合。你提的会先挂起，等他在设置页点确认后才注入；你们之间的事属于记忆，不要写在这里",
         ),
         "replaces_turn": F(S.Nullable(S.Int(1, 1000000)), required=False, default=None,
                            desc="“刚才不算，改成……”：填当前最后一个回合的回合号，只能写在记录的第一项"),
         "together": F(S.Bool(), required=False, default=True,
                       desc="这一回合你们在不在一起；她自己醒来的那个回合是 false（由桥接层自动带，模型不用填）"),
-        "host_memory": F(S.Bool(), required=False, default=False,
-                         desc="宿主会在回合结束后自己收 ABM、写日记（由桥接层自动带，模型不用填）；带上时 memory_fold / memory_diary 不再是必填"),
     }
 
 
@@ -367,10 +356,9 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
     }
     if ctx.beats:
         entry["offscreen"] = [{"npc_id": b["npc_id"], "summary": b["summary"]} for b in ctx.beats]
-    payment = MODULES.run(work, "pay_requests", commit, ctx.turn).get("memory", {})
-    folded, diary = payment.get("folded"), payment.get("diary")
-    learned = payment.get("common") or []
-    archive = _archive_ended_events(work, ctx.turn) if folded else []
+    learned = MODULES.run(work, "pay_requests", commit, ctx.turn).get("common", {}).get("common") or []
+    # 结束了的事件每过一天收进归档表一次（以前跟着记忆总结走，lite 没有总结了）
+    archive = _archive_ended_events(work, ctx.turn) if work["clock"]["day"] > before_clock["day"] else []
     memory["turns"].append(entry)
     overflow = memory["turns"][:-MAX_MEMORY_TURNS]
     if overflow:
@@ -385,7 +373,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         OPS.clear_plan(work)
     memory["open_action"] = _open_action(memory, commit)
     memory["last_quotes"] = list(commit["quotes"])
-    memory_result = MODULES.run(work, "after_turn", ctx, commit, base).get("memory", {})
+    MODULES.run(work, "after_turn", ctx, commit, base)
     crossed_day = work["clock"]["day"] > before_clock["day"]
     work["facts"] = work["facts"].settle()
     scene_changed = any(s["scene"] for s in ctx.settlements)
@@ -399,11 +387,7 @@ def commit_turn(state, persona, commit, undo_snapshot=None, now=None):
         "time_settled": span,
         "scene_changed": scene_changed,
         "crossed_day": crossed_day,
-        "folded": folded["id"] if folded else None,
-        "diary": diary,
-        "remembered": memory_result.get("remembered", []),
-        "forgetting": memory_result.get("forgetting", {}),
-        # 模型在这次总结 / 写日记里顺手记下的常识，由 application 写进全局库
+        # 模型这一回合顺手提的常识，由 application 写进全局库（挂起等确认）
         "learned_common": learned,
         "replaced_turn": replaced,
         "mood": {

@@ -61,8 +61,7 @@ const ctx = {
     section(def) { sections.set(def.name, def); return () => { sections.delete(def.name); }; },
   },
 };
-// noteBatchMinutes：攒着的一批多久没下文就自己落。默认半小时，测试里调成 3 秒
-mod.apply(ctx, { maxBytes: 65536, noteBatchMinutes: 0.05 });
+mod.apply(ctx, { maxBytes: 65536 });
 
 // ---- 1. 三个工具都注册了 ----
 eq(tools.size, 3, '1. 注册了 3 个工具');
@@ -98,7 +97,7 @@ eq(brief.context.world, undefined, '3. 没有 world 段');
 ok(Array.isArray(brief.context.agency), '3. agency 是数组');
 // 常识跟着提示词走（装配时按你这句话挑好），工具结果里再来一遍是重复；
 // 记忆在快照里只有被这句话撞上的那几条，其余的在这里给模型自己翻。
-ok(Array.isArray(brief.context.memories), '3. memories 在工具结果里（快照只放被勾起的那几条）');
+eq(brief.context.memories, undefined, '3. lite 没有记忆，工具结果里没有 memories');
 eq(brief.context.common, undefined, '3. common 不在工具结果里（提示词里已有）');
 ok(brief.context.mood !== undefined, '3. 心情块提到顶层');
 has(JSON.stringify(brief.context.mood), 'band', '3. 心情带档位');
@@ -130,7 +129,6 @@ const committed = await call('soul_commit', {
   ],
   content_tags: [],
   summary: '玩家进门，和林晚搭了两句。',
-  remember: '他冒着雨进来，问我忙不忙，我心里松了一下',
   open_action: '林晚从里屋走出来了吗',
 });
 ok(committed.committed === true, '6. commit 成功（' + JSON.stringify(committed.error ?? '') + '）');
@@ -143,7 +141,7 @@ const recalled = await call('soul_state', { cue: '今晚雨真大' });
 ok(Array.isArray(recalled.context?.her_knows), '6b. context 带 her_knows');
 eq(recalled.context?.recent, undefined, '6b. 旧的 recent 摘要不再单独给');
 // 常识由装配钩子按你这句话挑好、写进「想起来的」那段（见 prompt.mjs 第 8 条）。
-ok(Array.isArray(recalled.context?.memories), '6b. memories 在工具结果里，供模型多回忆一点');
+eq(recalled.context?.memories, undefined, '6b. lite 没有记忆，也就没有 memories');
 eq(recalled.context?.common, undefined, '6b. common 不进工具结果（提示词里已有）');
 
 // ---- 6c. 常识库：工具 schema 收得下；注入靠提示词快照，不靠工具结果 ----
@@ -161,64 +159,9 @@ eq((await tools.get('soul_commit').execute({ action_mode: 'continue', summary: '
 const deepExec = { signal: undefined, agent: { id: 'child-2', session: { header: { delegationDepth: 1 }, deriveMessages: () => [] } } };
 eq((await tools.get('soul_state').execute({}, deepExec)).started, false, '6d. 委派深度大于 0 的同样算子代理');
 
-// ---- 6e. 这一轮交过账，回合结束宿主就不再记一条（哪怕她交完账又说了一句） ----
-const { EngineClient } = await import(new URL('../lib/engine-client.js', import.meta.url).href);
-const peek = new EngineClient({ dataDir: join(home, 'rp-soul', 'engine') });
-// 宿主替她记的那条长这样：「你：… 她：…」；交账那条是她自己的记法，小动作另记一条 action
-const notedOf = async () => (await peek.call('debug-memories', { session_id: sessionId })).entries.filter((e) => e.layer === 'abm' && e.content.startsWith('你：'));
-const stopping = handlers.get('agent/turn-stopping');
-ok(typeof stopping === 'function', '6e. 挂上了回合结束的钩子');
-const talk = (said, reply) => [
-  { id: 'u-' + said, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
-  { id: 'a-' + said, role: 'assistant', content: [{ type: 'text', text: reply }] },
-];
-const noteAgent = { id: 'conv-1', session: { deriveMessages: () => talk('今晚忙吗', '还行，就是雨大。') } };
-const before6e = (await notedOf()).length;
-const turnArgs = {
-  action_mode: 'result', player_input: '今晚忙吗',
-  operations: [{ op: 'npc_action', kind: 'observe', action: 'TA 抬头看了一眼窗外。', significant: false }],
-  content_tags: [], summary: '你问 TA 忙不忙。', open_action: '等你接话',
-};
-const turnCommitted = await tools.get('soul_commit').execute(turnArgs, { signal: undefined, agent: noteAgent });
-ok(turnCommitted.committed === true, '6e. 这一轮交了账（' + JSON.stringify(turnCommitted.error ?? '') + '）');
-// 交完账她又说了一句：最后一条消息变了，但这一轮仍算交过
-noteAgent.session = { deriveMessages: () => [...talk('今晚忙吗', '还行，就是雨大。'), { id: 'a-more', role: 'assistant', content: [{ type: 'text', text: '你先坐。' }] }] };
-await stopping({ agent: noteAgent });
-eq((await notedOf()).length, before6e, '6e. 交过账的那一轮只有交账那一条，不会再记一条「你：… 她：…」');
-// 没交账：攒够几轮之后由宿主自己记一条（一条 ABM 讲的是一件事，不是一句话）
-const lines = [['伞放哪儿', '门边就行。'], ['雨这么大', '伞还在门口。'], ['你带伞了吗', '我不用。'], ['那我走了', '路上慢点。']];
-for (const [one, two] of lines) {
-  noteAgent.session = { deriveMessages: () => talk(one, two) };
-  await stopping({ agent: noteAgent });
-}
-const after6e = await notedOf();
-eq(after6e.length, before6e + 1, '6e. 攒够几轮，宿主自己记一条');
-ok(after6e.some((e) => String(e.content).includes('伞放哪儿') && String(e.content).includes('路上慢点')), '6e. 记的是这几轮铺开的样子');
-// 子代理那一轮结束也不记
-await stopping({ agent: { id: 'child-1', session: { header: { origin: 'subagent' }, deriveMessages: () => talk('把下面这一批收成一条', '那天雨很大。') } } });
-eq((await notedOf()).length, after6e.length, '6e. 子代理那一轮结束不当成她的对话记下来');
-
-// ---- 6f. 攒着的一批不会悄悄丢 ----
-const waitFor = async (check, ms = 6000) => {
-  const until = Date.now() + ms;
-  while (Date.now() < until && !(await check())) await new Promise((r) => setTimeout(r, 100));
-};
-// agent 的一轮回复动辄上千字：两轮拼起来超过引擎 4000 字的上限，也得落下来（截短），不能整批被驳回
-noteAgent.session = { deriveMessages: () => talk('先看看这个', '好'.repeat(1000)) };
-await stopping({ agent: noteAgent });
-noteAgent.session = { deriveMessages: () => talk('再说一遍'.repeat(200), '嗯'.repeat(2400)) };
-await stopping({ agent: noteAgent });
-await waitFor(async () => (await notedOf()).some((e) => String(e.content).includes('先看看这个')));
-const longNoted = (await notedOf()).find((e) => String(e.content).includes('先看看这个'));
-ok(longNoted !== undefined, '6f. 超过 4000 字的一批截短后照样记下，不会整批丢掉');
-ok(longNoted !== undefined && String(longNoted.content).includes('再说一遍'), '6f. 截短时两轮都还在，不是只剩开头那一轮');
-// 聊一句就走：搁够久（测试里 3 秒）没下文就自己落一条，不等下一轮
-const beforeIdle = (await notedOf()).length;
-noteAgent.session = { deriveMessages: () => talk('我先走了', '嗯，明天见。') };
-await stopping({ agent: noteAgent });
-eq((await notedOf()).length, beforeIdle, '6f. 一轮还不够落一条');
-await waitFor(async () => (await notedOf()).length > beforeIdle);
-ok((await notedOf()).some((e) => String(e.content).includes('我先走了')), '6f. 搁够久没下文，自己落下来');
+// ---- 6e. lite 没有记忆：回合结束时宿主不再自己记一笔，也不起子代理去整理 ----
+eq(handlers.get('agent/turn-stopping'), undefined, '6e. 没挂回合结束的钩子');
+const noteAgent = { id: 'conv-1', session: { deriveMessages: () => [] } };
 
 // ---- 6g. 真实会话里交账失败过的那几次，原样再交一遍 ----
 // 以前这几次全被驳回（字段名猜错、漏了 content_tags / player_input / open_action、
@@ -231,7 +174,7 @@ const replay = async (args, label) => {
 };
 await replay({"action_mode": "wait", "player_input": "1", "summary": "主人只发来一个「1」，没头没尾。守岸人没懂，抬眼看过去，问他在数什么。", "remember": "他丢过来一个「1」，我看不懂，只好看着他。", "open_action": "等他说明这个「1」是什么意思。", "operations": [{"op": "npc_action", "kind": "silence", "note": "没出声，先抬眼看他"}], "acts_on_her": false}, '6g. npc_action 写成 note、漏了 content_tags：照样记上');
 await replay({"action_mode": "continue", "content_tags": [], "operations": [{"action": "把 openclaw 卸载掉，npm 全局包和配置都清了，还剩三个项目没动", "kind": "action", "op": "npc_action", "significant": false}, {"op": "npc_state", "state": "平常"}], "summary": "清理 openclaw：卸载 npm 全局包，删掉配置与数据，释放 23.5G"}, '6g. kind 写成 action、npc_state 只写了一句心情、漏了原话和悬念：照样记上');
-await replay({"action_mode": "wait", "acts_on_her": false, "content_tags": [], "player_input": "1", "summary": "主人只发来一个「1」，没头没尾。", "open_action": "等他说明这个「1」是什么意思。", "operations": [{"op": "offscreen_beat", "action": "他不在的这段时间，我把桌上那堆临时产物收了收，等着。"}, {"op": "npc_action", "kind": "observe", "action": "没出声，先把杯子转了半圈，抬眼看他", "significant": false}], "memory_fold": "那一天很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长", "memory_diary": "第四天。今天没什么特别的。"}, '6g. offscreen_beat 写成 action、总结超了几个字、没要求的日记：照样记上');
+await replay({"action_mode": "wait", "acts_on_her": false, "content_tags": [], "player_input": "1", "summary": "主人只发来一个「1」，没头没尾。", "open_action": "等他说明这个「1」是什么意思。", "operations": [{"op": "offscreen_beat", "action": "他不在的这段时间，我把桌上那堆临时产物收了收，等着。"}, {"op": "npc_action", "kind": "observe", "action": "没出声，先把杯子转了半圈，抬眼看他", "significant": false}], "memory_fold": "那一天很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长", "memory_diary": "第四天。今天没什么特别的。"}, '6g. offscreen_beat 写成 action、多带了 memory_fold / memory_diary（lite 不认，直接略过）：照样记上');
 // 真的缺东西（心事没写分量和依据）还是要驳回，而且说得清缺什么
 const missing = await tools.get('soul_commit').execute({"action_mode": "result", "acts_on_her": false, "player_input": "这个改动怎么被丢弃了？", "operations": [{"op": "add_thought", "text": "他半夜在翻一个提交的下落。"}, {"op": "npc_action", "kind": "observe", "action": "把灯往他那边推了推", "significant": false}], "summary": "他深夜问起一个提交的去向。", "open_action": "等他看完那个提交。"}, { signal: undefined, agent: noteAgent });
 eq(missing.committed, false, '6g. add_thought 缺了 delta / basis_fact_id 仍然驳回（不替模型编数值）');
@@ -239,11 +182,6 @@ has(String(missing.error ?? ''), 'delta', '6g. 驳回理由点名缺的是 delta
 // 工具说明里写清了每个 op 的字段：模型第一次就能写对
 has(tools.get('soul_commit').parameters.properties.operations.description, 'offscreen_beat {summary', '6g. 说明里写了 offscreen_beat 的字段是 summary');
 has(tools.get('soul_commit').parameters.properties.operations.description, 'npc_action {action', '6g. 说明里写了 npc_action 的字段是 action');
-await peek.stop();
-// 后面的步骤按「只交过一回合」来数：把 6e 这一回合撤掉
-const undo6e = await call('soul_admin', { action: 'undo' });
-ok(undo6e.ok !== false, '6e. 撤掉这一节加的回合（' + JSON.stringify(undo6e.error ?? '') + '）');
-revision = undo6e.revision ?? revision;
 
 // ---- 7. stale revision 会被引擎拒，但带当前 revision ----
 const staleClient = tools.get('soul_commit');

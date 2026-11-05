@@ -76,8 +76,7 @@ def settlement_requests(state, report, turn):
 def finalize_requests(state, crossed_day):
     """Step 5 once per record, after every operation: what the next record pays.
 
-    Her daily memory summary (the oldest finished day that is not summarised
-    yet) and, once 这几天 fills up, the month's diary entry.
+    lite 没有记忆总结和日记，这里通常什么都不排；留着这道钩子给以后的模块。
     """
     MODULES.run(state, "close_record")
     return state["requests"]

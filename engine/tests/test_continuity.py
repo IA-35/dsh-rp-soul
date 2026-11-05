@@ -12,7 +12,6 @@ import e2e
 from harness import check, run
 from rp_soul_engine.application import service
 from rp_soul_engine.application.context import Context
-from rp_soul_engine.domain import memories as MEM
 from rp_soul_engine.persistence import db, repo
 
 T0 = "2026-10-28T12:00:00+08:00"
@@ -28,72 +27,6 @@ def game():
             yield ctx, clock, row
     finally:
         ctx.close()
-
-
-def request(ctx, row, kind):
-    conn = ctx.db()
-    db.begin_write(conn)
-    state = repo.load_session(conn, row["session_id"])["state"]
-    entry = MEM.add(state, "abm" if kind == "fold" else "scm", "conversation", "你来陪我吃了午饭。", 0.7, turn=0)
-    state["requests"]["memory_" + kind] = {"ids": [entry["id"]]}
-    if kind == "diary":
-        state["requests"]["memory_diary"]["day"] = 1
-    repo.update_session(conn, state, T0)
-    conn.execute("COMMIT")
-
-
-def diary_commit_writes_a_file_and_replay_keeps_it():
-    with game() as (ctx, clock, row):
-        request(ctx, row, "diary")
-        body = e2e.commit(row, ops=[ACTION], memory_diary="今天你来陪我吃午饭，我很开心。")
-        result = service.commit_turn(ctx, body)
-        diary = result["turns"][0].get("diary")
-        assert diary and diary["day"] == 1 and diary["entries"] == 1, result["turns"][0]
-        path = Path(diary["path"])
-        text = path.read_text(encoding="utf-8")
-        assert text.startswith("# 第 1 天") and "今天你来陪我吃午饭" in text, text
-        replay = service.commit_turn(ctx, body)
-        assert replay["replayed"] and replay["turns"][0]["diary"] == diary
-        assert path.read_text(encoding="utf-8") == text
-
-
-def separate_games_keep_their_own_diary_files():
-    with game() as (ctx, clock, row):
-        paths = []
-        for day_text in ("这局的第一天。", "另一局的第一天。"):
-            request(ctx, row, "diary")
-            result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], memory_diary=day_text))
-            paths.append(Path(result["turns"][0]["diary"]["path"]))
-            row = service.new_game(ctx, {"request_id": e2e.rid(), "persona": e2e.persona_payload(), "seed": 7})
-        assert paths[0] != paths[1], paths
-        assert "这局的第一天。" in paths[0].read_text(encoding="utf-8")
-        assert "另一局的第一天。" in paths[1].read_text(encoding="utf-8")
-
-
-def fold_receipt_names_the_new_scm_entry():
-    with game() as (ctx, clock, row):
-        request(ctx, row, "fold")
-        result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], memory_fold="你来陪我吃午饭，我记得你带来的汤。"))
-        folded = result["turns"][0].get("folded")
-        state = repo.load_session(ctx.db(), row["session_id"])["state"]
-        assert folded and MEM.find(state, folded)["layer"] == "scm", result["turns"][0]
-
-
-def rejected_diary_commit_leaves_the_request_and_no_file():
-    with game() as (ctx, clock, row):
-        request(ctx, row, "diary")
-        body = e2e.commit(row, together=False, memory_diary="今天的午饭。", ops=[
-            {"op": "npc_response", "response": "genuine", "note": "谢谢。"},
-        ])
-        try:
-            service.commit_turn(ctx, body)
-        except service.AppError:
-            pass
-        else:
-            raise AssertionError("a player response while apart must be rejected")
-        state = repo.load_session(ctx.db(), row["session_id"])["state"]
-        assert state["requests"]["memory_diary"]
-        assert not list(Path(ctx.data_dir).rglob("diary-*.md"))
 
 
 def read_previews_keep_the_unanswered_wakes_absence():
@@ -128,46 +61,26 @@ def a_real_reply_restores_presence_without_waiting_a_whole_minute():
         assert state["last_player_at"] == clock.return_value
 
 
-def the_host_writes_the_diary_and_she_keeps_the_latest():
-    """宿主子代理写日记：落盘、不删 SCM，最近一篇留在账本里随上下文带上。"""
+def an_old_ledger_drops_its_memory_on_load():
+    """lite 没有记忆层：旧存档里的记忆条、待交的总结 / 日记读进来就扔掉，回合流水留着。"""
     with game() as (ctx, clock, row):
-        request(ctx, row, "diary")
-        rev = repo.load_session(ctx.db(), row["session_id"])["revision"]
-        out = service.write_diary(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
-                                        "expected_revision": rev, "text": "今天你来陪我吃了午饭。"})
-        path = Path(out["diary"]["path"])
-        assert "今天你来陪我吃了午饭" in path.read_text(encoding="utf-8"), path
-        state = repo.load_session(ctx.db(), row["session_id"])["state"]
-        assert state["requests"]["memory_diary"] is None, state["requests"]
-        assert [e for e in MEM.entries(state) if e["layer"] == "scm"], "写日记不删 SCM"
-        context = service.get_context(ctx, {"session_id": row["session_id"], "depth": "brief"})["context"]
-        assert context["last_diary"]["text"] == "今天你来陪我吃了午饭。", context.get("last_diary")
-        assert context["last_diary"]["label"].startswith("第 1 天"), context["last_diary"]
-        # 再写一次：没有欠着的了
-        try:
-            service.write_diary(ctx, {"session_id": row["session_id"], "request_id": e2e.rid(),
-                                      "expected_revision": out["revision"], "text": "又一篇。"})
-        except Exception as exc:  # AppError
-            assert "没有要写的日记" in str(exc), exc
-        else:
-            raise AssertionError("没有欠着的日记也写进去了")
-
-
-def a_host_backed_commit_is_not_forced_to_pay():
-    """宿主能收的时候，对话里那次提交不交 memory_fold / memory_diary 也不驳。"""
-    with game() as (ctx, clock, row):
-        request(ctx, row, "fold")
-        rejected = False
-        try:
-            service.commit_turn(ctx, e2e.commit(row, ops=[ACTION]))
-        except Exception:
-            rejected = True
-        assert rejected, "没有宿主兜底时，照旧要交"
-        result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], host_memory=True))
-        assert result["turns"][0].get("folded") is None, result["turns"][0]
-        state = repo.load_session(ctx.db(), row["session_id"])["state"]
-        left = [e for e in MEM.entries(state) if e["layer"] == "abm" and e["content"] == "你来陪我吃了午饭。"]
-        assert left, "这一批原样留着，等宿主去收"
+        service.commit_turn(ctx, e2e.commit(row, ops=[ACTION]))
+        conn = ctx.db()
+        db.begin_write(conn)
+        state = repo.load_session(conn, row["session_id"])["state"]
+        state["memory"]["entries"] = [{"id": "m1", "layer": "scm", "content": "旧版的一条记忆"}]
+        state["memory"]["diary_last"] = {"day": 1, "text": "旧日记"}
+        state["requests"] = {"memory_fold": {"ids": ["m1"]}, "memory_diary": None}
+        state["counters"]["last_diary_day"] = 1
+        repo.update_session(conn, state, T0)
+        conn.execute("COMMIT")
+        loaded = repo.load_session(ctx.db(), row["session_id"])["state"]
+        assert "entries" not in loaded["memory"] and "diary_last" not in loaded["memory"], loaded["memory"].keys()
+        assert loaded["requests"] == {}, loaded["requests"]
+        assert "last_diary_day" not in loaded["counters"], loaded["counters"].keys()
+        assert len(loaded["memory"]["turns"]) == 1, "回合流水留着"
+        # 读进来之后照常能交账
+        service.commit_turn(ctx, e2e.commit({"session_id": row["session_id"], "revision": state["revision"]}, ops=[ACTION]))
 
 
 def a_commit_without_the_often_forgotten_fields_goes_through():
@@ -183,14 +96,6 @@ def a_commit_without_the_often_forgotten_fields_goes_through():
         assert result["turn"] == first["turn"] + 1, result
         state = repo.load_session(ctx.db(), row["session_id"])["state"]
         assert state["memory"]["open_action"] == "她等着他开口。", state["memory"]["open_action"]
-
-
-def an_unrequested_diary_or_fold_is_ignored_not_rejected():
-    """引擎没在等日记 / 总结时，多写的那一段直接不收，交账照常通过。"""
-    with game() as (ctx, clock, row):
-        result = service.commit_turn(ctx, e2e.commit(row, ops=[ACTION], memory_diary="今天没什么。", memory_fold="也没什么。"))
-        assert result["turns"][0].get("diary") is None and result["turns"][0].get("folded") is None, result["turns"][0]
-        assert not list(Path(ctx.data_dir).rglob("diary-*.md")), "没要求的日记不落盘"
 
 
 def a_missing_basis_fact_names_the_ones_she_knows():
@@ -222,48 +127,10 @@ def the_context_says_ahead_when_an_offscreen_beat_is_due():
         assert later.get("offscreen_due", {}).get("minutes", 0) >= 60, later.get("offscreen_due")
 
 
-check("a diary commit writes its file and replays once", diary_commit_writes_a_file_and_replay_keeps_it)
+check("an old ledger drops its memory on load", an_old_ledger_drops_its_memory_on_load)
 check("a commit without the often forgotten fields goes through", a_commit_without_the_often_forgotten_fields_goes_through)
-check("an unrequested diary or fold is ignored, not rejected", an_unrequested_diary_or_fold_is_ignored_not_rejected)
 check("a missing basis fact names the ones she knows", a_missing_basis_fact_names_the_ones_she_knows)
 check("the context says ahead when an offscreen beat is due", the_context_says_ahead_when_an_offscreen_beat_is_due)
-check("the host writes the diary and she keeps the latest", the_host_writes_the_diary_and_she_keeps_the_latest)
-check("a host-backed commit is not forced to pay", a_host_backed_commit_is_not_forced_to_pay)
-check("separate games keep their own diary files", separate_games_keep_their_own_diary_files)
-check("fold receipts identify the SCM entry", fold_receipt_names_the_new_scm_entry)
-check("a rejected diary commit leaves no file", rejected_diary_commit_leaves_the_request_and_no_file)
-def a_diary_due_after_the_last_commit_shows_up_in_the_snapshot():
-    """23:30 的唤醒到达时，上一轮 commit 早过了：这一轮必须看得见该写日记了。"""
-    with game() as (ctx, clock, row):
-        conn = ctx.db()
-        db.begin_write(conn)
-        state = repo.load_session(conn, row["session_id"])["state"]
-        MEM.add(state, "scm", "summary", "你今天来陪我吃了午饭。", 0.9, at={"day": 1, "minute": 1200})
-        repo.update_session(conn, state, T0)
-        conn.execute("COMMIT")
-        clock.return_value = "2026-10-28T23:30:00+08:00"
-        context = service.get_context(ctx, {"session_id": row["session_id"]})["context"]
-        assert context.get("memory_diary_sources"), context
-
-
-def the_pending_batch_grows_with_abm():
-    """收过一次之后剩下的要进下一批：批次冻在二十条的话剩下的永远收不走。"""
-    with game() as (ctx, clock, row):
-        conn = ctx.db()
-        db.begin_write(conn)
-        state = repo.load_session(conn, row["session_id"])["state"]
-        for i in range(42):
-            MEM.note_exchange(state, "第%d句话" % i, "嗯，我在。", turn=state["turn"])
-            service._recount_requests(state)
-        request = state["requests"]["memory_fold"]
-        assert request and len(MEM.sources(state, request)) == 42, request
-        MEM.apply_fold(state, request, "那天他一直在说话。", state["turn"])
-        state["requests"]["memory_fold"] = None
-        service._recount_requests(state)
-        assert MEM.of_layer(state, "abm") == [], MEM.of_layer(state, "abm")
-        conn.execute("COMMIT")
-
-
 def trimming_undo_points_keeps_the_hand_deleted_record():
     """turn 0 不是回合，是「设置页手动删过」的凭据。清理旧撤销点时把它
     一起删掉，revert_turn_facts 就认不出哪些事实该保持消失。"""
@@ -289,24 +156,6 @@ def trimming_undo_points_keeps_the_hand_deleted_record():
 check("trimming undo points keeps the hand deleted record",
       trimming_undo_points_keeps_the_hand_deleted_record)
 
-def a_hand_asked_batch_survives_the_recount():
-    """设置页点过「立即汇总」的那一批不能被宿主重算掉。"""
-    with game() as (ctx, clock, row):
-        conn = ctx.db()
-        db.begin_write(conn)
-        state = repo.load_session(conn, row["session_id"])["state"]
-        entry = MEM.add(state, "abm", "conversation", "你来陪我吃了午饭。", 0.7, turn=0)
-        state["requests"]["memory_fold"] = {"ids": [entry["id"]], "manual": True}
-        service._recount_requests(state)
-        request = state["requests"]["memory_fold"]
-        assert request and request["ids"] == [entry["id"]], request
-        conn.execute("COMMIT")
-
-
-check("a diary due after the last commit shows in the snapshot",
-      a_diary_due_after_the_last_commit_shows_up_in_the_snapshot)
-check("the pending batch grows with abm", the_pending_batch_grows_with_abm)
-check("a hand asked batch survives the recount", a_hand_asked_batch_survives_the_recount)
 check("read previews keep unanswered wake absence without writes", read_previews_keep_the_unanswered_wakes_absence)
 check("a real reply restores presence within the same minute", a_real_reply_restores_presence_without_waiting_a_whole_minute)
 run("continuity")

@@ -18,10 +18,8 @@ content store. A persona arrives with the call, is validated by
 import hashlib
 import os
 import re
-import sys
 from datetime import datetime
 
-from .. import paths
 from .. import persona as PE
 from .. import schema as S
 from ..errors import (
@@ -123,8 +121,6 @@ def session_write(ctx, command, payload, handler):
         response["replayed"] = False
         repo.idem_put(conn, payload["session_id"], payload["request_id"], digest, response, now)
         conn.execute("COMMIT")
-        # 事务成了才落盘日记文件；文件失败不影响已提交的局面。
-        _flush_journal(ctx)
         return response
     except BaseException:
         if conn.in_transaction:
@@ -294,30 +290,6 @@ def _refresh_persona(conn, state, persona, raw, now):
 # get-context
 
 
-def _recount_requests(state):
-    """Recompute what the model owes before handing it a snapshot.
-
-    `requests` used to be written only at the end of a commit, so anything that
-    became due while nobody was talking — 23:30 arriving mid-awakening, ABM
-    filling up on host-noted turns — stayed invisible until the next commit.
-    A batch the settings page asked for by hand survives until it is written;
-    the engine's own batches are recomputed, so they grow with ABM instead of
-    freezing at the size they had when they first came due.
-    """
-    from .. import modules as MODULES
-    from ..domain import memories as MEM
-
-    requests = state["requests"]
-    # 设置页手动点过的那一批（还在等模型写）不能被重算掉
-    kept = {key: requests.get(key) for key in ("memory_fold", "memory_diary")}
-    MODULES.run(state, "close_record")
-    for key, value in kept.items():
-        # 只保住手动那一批：引擎自己排的批次必须跟着 ABM 一起长，
-        # 冻在第一次满二十条那一刻的话，收完二十条剩下的永远收不走。
-        if isinstance(value, dict) and value.get("manual") and MEM.sources(state, value):
-            requests[key] = value
-
-
 def get_context(ctx, payload):
     payload = validate(specs.GET_CONTEXT, payload)
     conn = ctx.db()
@@ -344,7 +316,6 @@ def get_context(ctx, payload):
     now = now_iso()
     offscreen_due = _offscreen_due(state, now)
     state = SETTLE.preview(state, now)
-    _recount_requests(state)
     project = CX.full if payload["depth"] == "full" else CX.brief
     context = project(state, persona, save_info(session), payload["cue"])
     if offscreen_due is not None:
@@ -388,16 +359,11 @@ DOMAIN_KEYS = (
     "operations",
     "content_tags",
     "summary",
-    "remember",
     "open_action",
     "quotes",
-    "memory_fold",
-    "memory_diary",
-    "memory_keep",
     "common",
     "replaces_turn",
     "together",
-    "host_memory",
 )
 # A failed commit with one of these codes makes the next context full.
 FAILURE_CODES = (INVALID_INPUT, INVARIANT_VIOLATION, NOT_FOUND, SAFETY_BLOCK)
@@ -418,9 +384,6 @@ def choose_depth(state, results, failed_before=False):
         return "full"
     result = results[0]
     if result["scene_changed"] or result["crossed_day"]:
-        return "full"
-    requests = dict(state["requests"])
-    if requests.get("memory_fold") or requests.get("memory_diary"):
         return "full"
     last = (state["counters"] or {}).get("full_context_at")
     if not last or CL.minutes_between(last, state["clock"]) >= FULL_CONTEXT_MINUTES:
@@ -487,7 +450,6 @@ def _commit_turn(ctx, payload):
                 raise
             results.append(result)
         _engine_outcomes_last(results)
-        _plan_journal(ctx, sid, results)
         turn.close_record(state, results)
         depth = choose_depth(state, results, failed_before)
         if depth == "full":
@@ -504,42 +466,6 @@ def _commit_turn(ctx, payload):
         }
 
     return session_write(ctx, "commit-turn", payload, handler)
-
-
-def _plan_journal(ctx, session_id, results):
-    """排好月份日记的落盘任务，真正写文件留到 COMMIT 之后。
-
-    分层：DB 是事务性的，文件系统不是。写在 COMMIT 之前的话，事务一回滚就留下
-    孤儿文件；写盘失败（磁盘满/无权限）又会把整回合判失败，而模型无从修复。
-    所以这里只算路径、挂到 ctx 上，由 session_write 在 COMMIT 之后调用
-    _flush_journal 落盘 —— 文件写失败只是少一份日记，回合照样算数。
-    """
-    written = [r["diary"] for r in results if r.get("diary")]
-    if not written:
-        return
-    folder = os.path.join(paths.journal_dir(ctx.data_dir), session_id)
-    pending = ctx.__dict__.setdefault("_journal_pending", [])
-    for entry in written:
-        path = os.path.join(folder, "diary-%04d.md" % entry["day"])
-        entry["path"] = path
-        pending.append((path, entry["markdown"]))
-
-
-def _flush_journal(ctx):
-    """COMMIT 之后把排好的日记写到盘上。失败不抛，但要留痕。"""
-    pending = getattr(ctx, "_journal_pending", None)
-    if not pending:
-        return
-    ctx._journal_pending = []
-    for path, markdown in pending:
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(markdown)
-        except OSError as exc:
-            # 日记是副本，写不进去不该让已提交的回合失败。但也不能一声不响：
-            # 回合的响应里已经带着这个路径，静默失败等于告诉调用方写成了。
-            sys.stderr.write("journal write failed: %s (%s)\n" % (path, exc))
 
 
 def _record_end(state, results):
@@ -600,7 +526,7 @@ def _apply_turn(conn, session, state, persona, commit, unsaved, now, undo_base=N
         {"operations": commit["operations"], "applied": result["applied"],
          "resolved_events": result["resolved_events"], "content_tags": commit["content_tags"]},
         commit["summary"],
-        commit["open_action"],
+        new_state["memory"].get("open_action") or "",
         now,
     )
     # The next turn of the record reads the facts as just written.
@@ -617,12 +543,9 @@ def _turn_result(result):
         "time_settled": result["time_settled"],
         "mood": result.get("mood") or {},
     }
-    for key in ("folded", "replaced_turn", "thoughts", "remembered"):
+    for key in ("replaced_turn", "thoughts"):
         if result.get(key) is not None:
             out[key] = result[key]
-    if result.get("diary"):
-        out["diary"] = {"day": result["diary"]["day"], "entries": len(result["diary"]["ids"]),
-                        "path": result["diary"].get("path")}
     return out
 
 
@@ -777,15 +700,8 @@ def save_slot(ctx, payload):
 
 
 def _resume(state):
-    from ..domain import memories as MEM
-
     turns = state["memory"]["turns"]
-    kept = MEM.of_layer(state, "clpa")
-    recent = MEM.of_layer(state, "scm")
     return {
-        # 接着玩时先看 CLPA 里她最看重的那一条，再是 SCM 里最新的一条
-        "last_event": kept[-1]["content"] if kept else None,
-        "last_chapter": recent[-1]["content"] if recent else None,
         "recent": [t["summary"] for t in turns[-3:]],
         "last_quotes": list(state["memory"].get("last_quotes") or []),
         "open_action": state["memory"].get("open_action") or "",
@@ -1107,7 +1023,6 @@ def status(ctx, payload):
         out["recent"] = [t["summary"] for t in state["memory"]["turns"][-3:]]
         out["due_soon"] = CX.brief(state, persona, save_info(session))["due_soon"]
         out["boundaries"] = list(state["safety"]["boundaries"])
-        out["requests"] = dict(state["requests"])
         out["counters"] = dict(state["counters"].get("next") or {})
     if level == "debug":
         out["facts"] = repo.count_facts(conn, state["session_id"])
@@ -1255,190 +1170,6 @@ def debug_delete_thought(ctx, payload):
         }
 
     return session_write(ctx, "debug-delete-thought", payload, handler)
-
-
-# ---------------------------------------------------------------------------
-# settings page: her memory (RimTalk's workbench, simplified)
-
-
-def debug_memories(ctx, payload):
-    from ..domain import clock as CL
-    from ..domain import memories as MEM
-
-    payload = validate(specs.DEBUG_MEMORIES, payload)
-    conn = ctx.db()
-    session = repo.load_session(conn, payload["session_id"])
-    # 只读也要走一遍时间结算：面板抬头给的是「现在几点」，存储里的 clock 停在上一次 settle，不 preview 就比真实时间慢一段。
-    state = SETTLE.preview(session["state"], now_iso())
-    out = {
-        "session_id": state["session_id"],
-        "revision": state.get("revision", 0),
-        "turn": state["turn"],
-        "clock_label": CL.label(state["clock"]),
-        "requests": {key: MEM.request_view(state, state["requests"].get(key)) for key in ("memory_fold", "memory_diary")},
-        "deletions": repo.memory_deletions(conn, state["session_id"]),
-    }
-    out.update(MEM.panel(state))
-    return out
-
-
-def _memory_write(ctx, command, spec, payload, change):
-    """A settings-page write on her memory: change(state, now) -> (receipt, extra)."""
-    from ..domain import memories as MEM
-
-    payload = validate(spec, payload)
-
-    def handler(conn, session, now):
-        state = session["state"]
-        receipt, extra = change(conn, state, payload, now)
-        # 删掉 / 钉住之后，待交的总结或归档要是没东西可写了就撤掉
-        MEM.prune_requests(state)
-        state["revision"] = state.get("revision", 0) + 1
-        repo.update_session(conn, state, now)
-        out = {"revision": state["revision"], "turn": state["turn"], "receipt": receipt}
-        out.update(extra)
-        out["memories"] = MEM.panel(state)
-        return out
-
-    return session_write(ctx, command, payload, handler)
-
-
-def _missing_memory(memory_id):
-    return AppError(NOT_FOUND, "没有这条记忆：%s" % memory_id,
-                    [detail("$.memory_id", "记忆不存在", "用 debug-memories 看当前条目", NOT_FOUND)])
-
-
-def edit_memory(ctx, payload):
-    from ..domain import memories as MEM
-
-    def change(conn, state, payload, now):
-        keys = ("content", "importance", "activity", "keywords", "note", "pinned")
-        entry = MEM.edit(state, payload["memory_id"], {k: payload[k] for k in keys})
-        if entry is None:
-            raise _missing_memory(payload["memory_id"])
-        return "已改「%s」" % entry["content"][:20], {"memory": MEM.row(state, entry)}
-
-    return _memory_write(ctx, "edit-memory", specs.EDIT_MEMORY, payload, change)
-
-
-def delete_memory(ctx, payload):
-    from ..domain import memories as MEM
-
-    def change(conn, state, payload, now):
-        entry = MEM.remove(state, payload["memory_id"])
-        if entry is None:
-            raise _missing_memory(payload["memory_id"])
-        repo.log_memory_delete(conn, state["session_id"], state["turn"], entry["id"], entry["layer"],
-                               entry["content"], payload["reason"], now)
-        return "已删除「%s」" % entry["content"][:20], {"removed": {"id": entry["id"], "layer": entry["layer"], "content": entry["content"]}}
-
-    return _memory_write(ctx, "delete-memory", specs.DELETE_MEMORY, payload, change)
-
-
-def note_turn(ctx, payload):
-    """Remember this exchange without the model having to commit a turn.
-
-    The host fires this when a turn ends. Nothing here advances the clock or
-    the turn counter -- that stays the model's job through commit-turn -- so
-    an unplayed exchange is remembered without ageing the ledger.
-    """
-    from ..domain import memories as MEM
-
-    payload = validate(specs.NOTE_TURN, payload)
-
-    def handler(conn, session, now):
-        state = session["state"]
-        said = payload["said"].strip()
-        reply = payload["reply"].strip()
-        entry, duplicate = MEM.note_exchange(
-            state, said, reply, turn=state["turn"],
-            together=bool(state.get("together", True)) if payload["together"] is None else payload["together"],
-            text=payload["text"].strip(),
-        )
-        if entry is None:
-            return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮没有可记的话"}
-        if duplicate:
-            return {"revision": state.get("revision", 0), "turn": state["turn"],
-                    "noted": False, "receipt": "这一轮已经记过了"}
-        # 记进 ABM 之后，「该收了」的判断要跟着更新：不重算的话要等到下一次
-        # 模型交账才会提示，而模型不交账正是这个命令存在的理由。
-        _recount_requests(state)
-        state["revision"] = state.get("revision", 0) + 1
-        repo.update_session(conn, state, now)
-        return {"revision": state["revision"], "turn": state["turn"], "noted": True,
-                "receipt": "记住了", "memory": MEM.row(state, entry)}
-
-    return session_write(ctx, "note-turn", payload, handler)
-
-
-def summarize_memory(ctx, payload):
-    """The host's subagent hands back the batch of ABM already folded into one line.
-
-    Like note-turn, this exists because the model may never commit a turn: the
-    fold is the one step that has to keep happening or ABM grows without end.
-    """
-    from .. import modules as MODULES
-    from ..domain import memories as MEM
-
-    def change(conn, state, payload, now):
-        request = state["requests"].get("memory_fold")
-        if not request or not MEM.sources(state, request):
-            raise AppError(INVALID_INPUT, "现在没有可以收进 SCM 的记忆",
-                           [detail("$.text", "ABM 里没有待收的条目", None, INVALID_INPUT)])
-        entry = MEM.apply_fold(state, request, payload["text"], state["turn"],
-                               keep=tuple(payload.get("keep") or ()))
-        state["requests"]["memory_fold"] = None
-        # 收完 ABM 变了，下一次该不该再收 / 该不该写日记要跟着重算
-        MODULES.run(state, "close_record")
-        return "收成了一条记忆：%s" % entry["content"][:20], {"memory": MEM.row(state, entry)}
-
-    return _memory_write(ctx, "summarize-memory", specs.SUMMARIZE_MEMORY, payload, change)
-
-
-def write_diary(ctx, payload):
-    """The host's subagent hands back the owed day's diary, already written.
-
-    Same reason as summarize-memory: the diary must not wait for the model to
-    stop mid-conversation and write it. The file lands after COMMIT, like a
-    diary paid through commit-turn.
-    """
-    from .. import modules as MODULES
-    from ..domain import memories as MEM
-
-    def change(conn, state, payload, now):
-        request = state["requests"].get("memory_diary") or MEM.diary_request(state)
-        if not request or not MEM.sources(state, request):
-            raise AppError(INVALID_INPUT, "现在没有要写的日记",
-                           [detail("$.text", "没有欠着的日记", None, INVALID_INPUT)])
-        diary = MEM.apply_diary(state, request, payload["text"])
-        state["requests"]["memory_diary"] = None
-        MODULES.run(state, "close_record")
-        _plan_journal(ctx, state["session_id"], [{"diary": diary}])
-        return "写好了第 %d 天的日记" % diary["day"], {"diary": {"day": diary["day"], "path": diary.get("path")}}
-
-    return _memory_write(ctx, "write-diary", specs.WRITE_DIARY, payload, change)
-
-
-def request_memory(ctx, payload):
-    from ..domain import memories as MEM
-
-    def change(conn, state, payload, now):
-        if payload["kind"] == "fold":
-            request = MEM.manual_fold_request(state)
-            key, what = "memory_fold", "收进 SCM"
-        else:
-            request = MEM.diary_request(state)
-            key, what = "memory_diary", "写日记"
-        if request is None:
-            raise AppError(INVALID_INPUT, "现在没有可以%s的记忆" % what,
-                           [detail("$.kind", "没有可%s的记忆" % what, None, INVALID_INPUT)])
-
-        # 打上 manual：重算时只保住手动点过的这一批，引擎自己排的会跟着 ABM 长
-        state["requests"][key] = dict(request, manual=True)
-        return "下一次提交会先做%s（%d 条）" % (what, len(request["ids"])), {"request": MEM.request_view(state, request)}
-
-    return _memory_write(ctx, "request-memory", specs.REQUEST_MEMORY, payload, change)
 
 
 # ---------------------------------------------------------------------------

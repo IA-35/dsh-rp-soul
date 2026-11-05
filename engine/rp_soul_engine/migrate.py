@@ -23,7 +23,6 @@ same way.
 from . import persona as PE
 from . import schema as S
 from .domain import clock as CL
-from .domain import memories as MEM
 from .domain import relationship as RL
 from .jsonio import copy
 
@@ -155,61 +154,24 @@ def keep_of(state):
 # schema 2 -> 3: the turns / chapters / prologue chain becomes her memory
 
 
-def _entry(state, layer, kind, text, importance, day, a0_at, turn=0, **extra):
-    """A migrated entry: starts fading from the migration, not from the day it happened.
-
-    Today's turns sit at the current minute, never later: an entry in the future
-    would outrank the conversations that follow the upgrade."""
-    day = max(1, day)
-    minute = min(UNKNOWN_MINUTE, state["clock"]["minute"]) if day >= state["clock"]["day"] else UNKNOWN_MINUTE
-    at = {"day": day, "minute": minute}
-    entry = MEM.add(state, layer, kind, text, importance, at=at, turn=turn, **extra)
-    MEM.touch(entry, a0_at, 1.0)
-    return entry
-
-
 def state_v2_to_v3(state):
-    """A schema-2 state with her memory in three layers. Pure; other schemas pass through.
+    """A schema-2 state, upgraded. Pure; other schemas pass through.
 
-    - the rolling turn log stays (`memory.turns`); each turn also becomes an
-      entry: today's latest twenty in ABM, the rest in SCM;
-    - every chapter and the prologue become CLPA entries: they are the things
-      worth keeping for good, and CLPA never fades.
+    lite 没有记忆层：旧的章节摘要和前情（chapters / prologue）直接丢掉，回合流水
+    （memory.turns）原样留着 —— 那是记账，不是记忆。
     """
     if not isinstance(state, dict) or state.get("schema") != TO_SCHEMA:
         return state
     s = copy(state)
     memory = s["memory"]
-    chapters = memory.pop("chapters", None) or []
-    chapters = [c for c in chapters if isinstance(c, dict)]
-    prologue = (memory.pop("prologue", "") or "").strip()
+    memory.pop("chapters", None)
+    memory.pop("prologue", None)
     counters = s["counters"]
-    covered = counters.pop("last_chapter_turn", 0) or 0
+    counters.pop("last_chapter_turn", None)
     counters["next"].pop("chapter", None)
-    counters["next"]["memory"] = 1
-    counters.setdefault("milestones", [])
-    memory["entries"] = []
-    now = CL.to_abs(s["clock"])
-    if prologue:
-        first_day = min([c.get("day") or 1 for c in chapters] or [1])
-        _entry(s, "clpa", "summary", prologue, 0.6, first_day, now)
-    for chapter in chapters:
-        _entry(s, "clpa", "summary", chapter.get("summary") or "", 0.5, chapter.get("day") or 1, now,
-               turn=chapter.get("to_turn") or 0)
-    turns = [t for t in memory.get("turns") or [] if isinstance(t, dict) and (t.get("summary") or "").strip()]
-    today = [t for t in turns if t.get("day") == s["clock"]["day"]][-MEM.CAPACITY["abm"]:]
-    for item in turns:
-        layer = "abm" if item in today else "scm"
-        _entry(s, layer, "conversation", item["summary"], 0.3, item.get("day") or 1, now,
-               turn=item.get("turn") or 0, quotes=list(item.get("quotes") or [])[:3],
-               summarized=(item.get("turn") or 0) <= covered)
     requests = s.setdefault("requests", {})
-    requests.pop("chapter_summary", None)
-    requests.pop("prologue", None)
-    requests.pop("memory_summary", None)
-    requests.pop("memory_journal", None)
-    requests["memory_fold"] = None
-    requests["memory_diary"] = None
+    for key in ("chapter_summary", "prologue", "memory_summary", "memory_journal"):
+        requests.pop(key, None)
     s["schema"] = TO_SCHEMA_V3
     return s
 

@@ -18,7 +18,6 @@ import zlib
 
 from .. import STATE_SCHEMA_VERSION as STATE_VERSION
 from ..domain import facts as FA
-from ..domain import memories as MEM
 from ..errors import NOT_FOUND, UNSUPPORTED_VERSION, AppError, detail
 
 IDEMPOTENCY_KEEP = 200
@@ -247,13 +246,34 @@ def _missing_session(session_id):
     )
 
 
+def strip_memory(state):
+    """lite 没有记忆层和日记：旧存档里留下的那些（记忆条、待交的总结 / 日记、
+    日记写到哪天、算过轻重的心事、里程碑）读进来就扔掉，下一次写回时就干净了。
+    回合流水、悬念、最近的原话（memory.turns / open_action / last_quotes）是记账本身，留着。"""
+    memory = state.get("memory")
+    if isinstance(memory, dict):
+        for key in ("entries", "diary_last"):
+            memory.pop(key, None)
+    requests = state.get("requests")
+    if isinstance(requests, dict):
+        for key in ("memory_fold", "memory_diary", "memory_summary", "memory_journal", "memory_archive"):
+            requests.pop(key, None)
+    counters = state.get("counters")
+    if isinstance(counters, dict):
+        for key in ("last_diary_day", "weighed_thoughts", "milestones", "host_paid"):
+            counters.pop(key, None)
+        if isinstance(counters.get("next"), dict):
+            counters["next"].pop("memory", None)
+    return state
+
+
 def load_session(conn, session_id, with_persona=True):
     columns = ", ".join(SESSION_COLUMNS) + ", state" + (", persona" if with_persona else "")
     row = conn.execute("SELECT %s FROM sessions WHERE session_id=?" % columns, (session_id,)).fetchone()
     if row is None:
         raise _missing_session(session_id)
     info = dict(zip(SESSION_COLUMNS, row[: len(SESSION_COLUMNS)]))
-    info["state"] = MEM.normalize_legacy(_check_state(unpack(row[len(SESSION_COLUMNS)]), "session %s" % session_id))
+    info["state"] = strip_memory(_check_state(unpack(row[len(SESSION_COLUMNS)]), "session %s" % session_id))
     # 老存档的 state 里没有时间锚点（写它们的代码是后来才有的），而续写全靠它们
     # 算「过了多久」：缺一个，整局就从此刻重新起算，中间那几天被静默吃掉。
     # 会话的 created_at 是唯一还留着的真实时刻，拿它补。
@@ -503,24 +523,6 @@ def thought_deletions(conn, session_id, limit=DELETIONS_KEEP):
         (session_id, limit),
     ).fetchall()
     keys = ("turn", "npc_id", "thought_id", "label", "delta", "reason", "created_at")
-    return [dict(zip(keys, row)) for row in rows]
-
-
-def log_memory_delete(conn, session_id, turn, memory_id, layer, content, reason, now):
-    conn.execute(
-        "INSERT INTO memory_debug(session_id, turn, memory_id, layer, content, reason, created_at) VALUES(?,?,?,?,?,?,?)",
-        (session_id, turn, memory_id, layer, content, reason, now),
-    )
-    _keep_newest(conn, "memory_debug", session_id)
-
-
-def memory_deletions(conn, session_id, limit=DELETIONS_KEEP):
-    rows = conn.execute(
-        "SELECT turn, memory_id, layer, content, reason, created_at FROM memory_debug "
-        "WHERE session_id=? ORDER BY id DESC LIMIT ?",
-        (session_id, limit),
-    ).fetchall()
-    keys = ("turn", "memory_id", "layer", "content", "reason", "created_at")
     return [dict(zip(keys, row)) for row in rows]
 
 

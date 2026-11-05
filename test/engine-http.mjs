@@ -201,63 +201,16 @@ if (mood2.body.thoughts.length > 0) {
   ok(false, '7. 开局居然没有情绪条目');
 }
 
-// ---- 7b. 记忆页：真引擎读 / 改 / 删 / 立即总结 ----
-const mem400 = await j('/rp-soul/engine/memories');
-eq(mem400.status, 400, '7b. /engine/memories 缺 session_id 400');
-const mems = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
-eq(mems.status, 200, '7b. /engine/memories 200');
-ok(mems.body.ok === true && Array.isArray(mems.body.entries) && mems.body.entries.length >= 1, '7b. 有记忆条目（' + JSON.stringify(mems.body.error ?? '') + '）');
-eq(mems.body.layers.abm, 'ABM', '7b. 带三层名字');
-const target = mems.body.entries.find((e) => e.type === 'conversation') ?? mems.body.entries[0];
-const pinned = await j('/rp-soul/engine/memory', {
-  method: 'PUT',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ session_id: sid, memory_id: target.id, revision: mems.body.revision, pinned: true, note: '设置页钉住' }),
-});
-eq(pinned.body.ok, true, '7b. 改记忆成功（' + JSON.stringify(pinned.body.error ?? '') + '）');
-eq(pinned.body.memory.pinned, true, '7b. 钉住了');
-const noId = await j('/rp-soul/engine/memory', { method: 'PUT', body: JSON.stringify({ session_id: sid }) });
-eq(noId.status, 400, '7b. 缺 memory_id 400');
-const mapAfterPin = JSON.parse(readFileSync(join(home, 'rp-soul', 'engine-sessions.json'), 'utf8'));
-eq(mapAfterPin.shared.revision, pinned.body.revision, '7b. 改完同步了会话映射的 revision');
-const asked = await j('/rp-soul/engine/memory/request', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ session_id: sid, revision: pinned.body.revision, kind: 'fold' }),
-});
-eq(asked.body.ok, true, '7b. 立即总结成功（' + JSON.stringify(asked.body.error ?? '') + '）');
-ok(asked.body.request.sources.length >= 1, '7b. 列出要总结的那几条');
-const gone = await j('/rp-soul/engine/memory', {
-  method: 'DELETE',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ session_id: sid, memory_id: target.id, revision: asked.body.revision, reason: '测试删除' }),
-});
-eq(gone.body.ok, true, '7b. 删记忆成功（' + JSON.stringify(gone.body.error ?? '') + '）');
-const memsAfter = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
-ok(!memsAfter.body.entries.some((e) => e.id === target.id), '7b. 那条真的没了');
-eq(memsAfter.body.deletions[0].memory_id, target.id, '7b. 留了审计');
-
 // ---- 8. GET /engine/session 能读上下文 ----
 const ctxr = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(sid));
 eq(ctxr.status, 200, '8. /engine/session 200');
 ok(ctxr.body.context !== undefined && typeof ctxr.body.context === 'object', '8. 带回 context');
 eq(ctxr.body.context.depth, 'brief', '8. 默认 brief');
 
-// ---- 8b. GET /engine/diaries：读她的日记文件，新的在前；路径伸不出数据目录 ----
-const diaryDir = join(home, 'rp-soul', 'engine', 'journal', sid);
-mkdirSync(diaryDir, { recursive: true });
-writeFileSync(join(diaryDir, 'diary-0001.md'), '# 第 1 天 · 周一\n\n第一天，他来得很晚。\n');
-writeFileSync(join(diaryDir, 'diary-0002.md'), '# 第 2 天 · 周二\n\n下了一天雨。\n');
-writeFileSync(join(diaryDir, 'notes.txt'), '不是日记');
-const diaryList = await j('/rp-soul/engine/diaries?session_id=' + encodeURIComponent(sid));
-eq(diaryList.body.ok, true, '8b. 日记读得出来（' + JSON.stringify(diaryList.body.error ?? '') + '）');
-eq(diaryList.body.diaries.map((d) => d.day), [2, 1], '8b. 新的在前，别的文件不算');
-eq(diaryList.body.diaries[0].title, '第 2 天 · 周二', '8b. 标题是第一行');
-eq(diaryList.body.diaries[0].text, '下了一天雨。', '8b. 正文去掉了标题');
-const sneaky = await j('/rp-soul/engine/diaries?session_id=' + encodeURIComponent('../../etc'));
-eq(sneaky.body.ok, false, '8b. 不像会话 id 的一律拒掉（不拼进路径）');
-const noDiary = await j('/rp-soul/engine/diaries?session_id=s_nothinghere');
-eq(noDiary.body.diaries, [], '8b. 还没写过日记就是空列表');
+// ---- 8b. lite 没有记忆页和日记：那几条路由都不在了 ----
+for (const path of ['/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid), '/rp-soul/engine/diaries?session_id=' + encodeURIComponent(sid)]) {
+  eq((await j(path)).status, 404, '8b. ' + path.split('?')[0] + ' 不在了');
+}
 
 // ---- 8c. POST /engine/common/approve：确认一条待确认的常识 ----
 const missingCommon = await j('/rp-soul/engine/common/approve', {
@@ -269,20 +222,12 @@ eq(noCommonId.status, 400, '8c. 没带 common_id 就 400');
 
 // ---- 9. DELETE /engine/wipe：从零开始 ----
 // 先确认确实有东西可删，否则「删干净了」证明不了什么
-const beforeWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(sid));
-ok(Array.isArray(beforeWipe.body.entries) && beforeWipe.body.entries.length > 0, '9. 清空前有记忆');
+const beforeWipe = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(sid));
+ok(beforeWipe.body.context !== undefined, '9. 清空前那一局读得到');
 const engineDir = join(home, 'rp-soul', 'engine');
 ok(existsSync(join(engineDir, 'engine.db')), '9. 清空前有数据库');
 mkdirSync(join(engineDir, 'backups'), { recursive: true });
 writeFileSync(join(engineDir, 'backups', 'old.db'), 'x');
-
-// 清空前还有一轮攒着、没到落一条的时候
-const chat = (said, reply) => [
-  { id: 'u-' + said, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
-  { id: 'a-' + said, role: 'assistant', content: [{ type: 'text', text: reply }] },
-];
-const chatter = { id: 'conv-wipe', session: { deriveMessages: () => chat('清空前的最后一句', '嗯。') } };
-await app.events.serial(chatter, 'agent/turn-stopping', { agent: chatter, turn: 1, signal: new AbortController().signal });
 
 // 不带 confirm 必须被挡
 const noConfirm = await j('/rp-soul/engine/wipe', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: '{}' });
@@ -300,21 +245,11 @@ ok(wiped.body.backups >= 1, '9. 备份目录里那一份也被删了（' + wiped
 // 开了新局，且它跟旧局不是同一个
 ok(typeof wiped.body.session_id === 'string' && wiped.body.session_id !== sid, '9. 新局已开好');
 
-// 新局是空的：记忆一条都没有
-const afterWipe = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(wiped.body.session_id));
-ok(Array.isArray(afterWipe.body.entries) && afterWipe.body.entries.length === 0, '9. 新局没有旧记忆');
+// 新局是空的：从第 0 回合开始，旧局读不到了
+const afterWipe = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(wiped.body.session_id));
 eq(afterWipe.body.turn, 0, '9. 新局从第 0 回合开始');
-
-// 清空前攒着、还没落的那几轮，不能在清空之后写进新的一局
-const freshTurns = [['今天从头开始', '好。'], ['你记得我吗', '不太记得。'], ['那就重新认识', '嗯。'], ['我叫小林', '你好。']];
-for (const [said, reply] of freshTurns) {
-  chatter.session = { deriveMessages: () => chat(said, reply) };
-  await app.events.serial(chatter, 'agent/turn-stopping', { agent: chatter, turn: 1, signal: new AbortController().signal });
-}
-const newAbm = await j('/rp-soul/engine/memories?session_id=' + encodeURIComponent(wiped.body.session_id));
-const newLines = (newAbm.body.entries ?? []).filter((e) => e.layer === 'abm').map((e) => String(e.content));
-ok(newLines.some((line) => line.includes('今天从头开始')), '9. 清空之后新聊的照常记下');
-ok(!newLines.some((line) => line.includes('清空前的最后一句')), '9. 清空之前攒着的那一轮没被带进新局');
+const oldGone = await j('/rp-soul/engine/session?session_id=' + encodeURIComponent(sid));
+ok(oldGone.body.ok === false || oldGone.status !== 200 || oldGone.body.error !== undefined, '9. 旧局读不到了');
 
 // 人设没被动：前面的用例改过标题，所以只验「还读得出来、还是同一个人」
 const personaAfter = await j('/rp-soul/engine');

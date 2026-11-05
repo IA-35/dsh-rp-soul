@@ -158,8 +158,6 @@ DEBUG_ACTIVITY = _obj(
     "debug-activity",
 )
 
-DEBUG_MEMORIES = _obj({"session_id": F(SESSION_ID)}, "debug-memories")
-
 DEBUG_FACTS = _obj({"session_id": F(SESSION_ID)}, "debug-facts")
 
 DELETE_FACT = _obj(dict(session_write_fields(), fact_id=F(S.Id())), "delete-fact")
@@ -198,65 +196,6 @@ DELETE_COMMON = _obj(dict(request_id=F(S.RequestId()), common_id=F(S.Id())), "de
 APPROVE_COMMON = _obj(dict(request_id=F(S.RequestId()), common_id=F(S.Id())), "approve-common")
 
 SET_COMMON_LIMIT = _obj(dict(request_id=F(S.RequestId()), limit=F(S.Int(2, 4))), "set-common-limit")
-
-EDIT_MEMORY = _obj(
-    dict(
-        session_write_fields(),
-        memory_id=F(S.Id()),
-        content=F(S.Nullable(S.Str(1, 300)), required=False, default=None),
-        importance=F(S.Nullable(S.Num(0, 1)), required=False, default=None),
-        activity=F(S.Nullable(S.Num(0, 1)), required=False, default=None),
-        keywords=F(S.Nullable(S.List(S.Str(1, 20), max_items=32)), required=False, default=None),
-        note=F(S.Nullable(S.Str(0, 200)), required=False, default=None),
-        pinned=F(S.Nullable(S.Bool()), required=False, default=None),
-    ),
-    "edit-memory",
-)
-
-DELETE_MEMORY = _obj(
-    dict(
-        session_write_fields(),
-        memory_id=F(S.Id()),
-        reason=F(S.Nullable(S.Str(1, 120)), required=False, default=None, desc="为什么要删（写进审计）"),
-    ),
-    "delete-memory",
-)
-
-NOTE_TURN = _obj(
-    dict(
-        session_write_fields(),
-        text=F(S.Str(0, 4000), required=False, default="",
-               desc="攒了若干轮之后合成的一段：这期间到底发生了什么。带了它就不看 said / reply"),
-        said=F(S.Str(0, 800), required=False, default="", desc="主人这一轮说的话（宿主从会话里取的原文）"),
-        reply=F(S.Str(0, 2400), required=False, default="", desc="TA这一轮说的话（宿主从会话里取的原文）"),
-        together=F(S.Nullable(S.Bool()), required=False, default=None,
-                   desc="这一轮你在不在；她自己醒来的那一轮是 false。不带就沿用账本里上一次的"),
-    ),
-    "note-turn",
-)
-
-REQUEST_MEMORY = _obj(
-    dict(session_write_fields(), kind=F(S.Enum("fold", "diary"), desc="fold 立即把 ABM 收进 SCM / diary 立即写今天的日记")),
-    "request-memory",
-)
-
-SUMMARIZE_MEMORY = _obj(
-    dict(
-        session_write_fields(),
-        text=F(S.Str(1, 300), desc="这一批收成的那条：第一人称（我），记得发生了什么、当时的感受，留下带得住的细节"),
-        keep=F(S.List(S.Id(), max_items=2), required=False, default=[],
-               desc="值得一直记着的 0~2 条经历 id（会进 CLPA）"),
-    ),
-    "summarize-memory",
-)
-
-WRITE_DIARY = _obj(
-    dict(
-        session_write_fields(),
-        text=F(S.Str(1, 300), desc="那一天的日记：第一人称，按时间顺下来，记得感受和变化"),
-    ),
-    "write-diary",
-)
 
 DEBUG_DELETE_THOUGHT = _obj(
     dict(

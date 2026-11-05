@@ -189,7 +189,7 @@ def brief(state, persona, save=None, cue=""):
     known = CM.select(state.get("common") or (), cue, CM.limit_of(state.get("common_limit")))
     if known:
         context["common"] = CM.render(known, cue)
-    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "last_diary", "memories", "agency", "common"))
+    _fit(context, BRIEF_LIMIT, ("known_facts", "her_knows", "due_soon", "scene_responses", "agency", "common"))
     return context
 
 
@@ -295,12 +295,6 @@ def _template(state, body):
     turn["summary"] = "<第三方视角一两句>"
     turn["open_action"] = "<停在哪个未决动作>"
     turn["quotes"] = ["<本回合值得记住的原话，原样一句，<=80 字；没有就删掉这条>"]
-    turn["remember"] = "<可选：TA 会怎么记得这件事，第一人称、带感受，<=60 字；不写就删掉这条>"
-    if dict(state["requests"]).get("memory_fold"):
-        turn["memory_fold"] = "<读 memory_fold_sources，把这一批收成一条 SCM：第一人称（我），发生了什么、当时的感受，留下带得住的细节，<=300 字>"
-        turn["memory_keep"] = ["<可选：值得一直记着的 0~2 条经历 id（会进 CLPA），没有就删掉这条>"]
-    if dict(state["requests"]).get("memory_diary"):
-        turn["memory_diary"] = "<读 memory_diary_sources，把这一天写成一篇日记：第一人称（我），按时间顺下来，感受和变化，<=300 字>"
     return {
         "session_id": state["session_id"],
         "request_id": "<上一次返回的 next_request_id>",
@@ -334,15 +328,11 @@ def _fit_steps(context):
         while context.get("events") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["events"].pop()
 
-    def memories_cut():
-        while context.get("memories") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
-            context["memories"].pop()
-
     def agency_cut():
         while context.get("agency") and size_of(context) > FULL_LIMIT - SIZE_FIELD_RESERVE:
             context["agency"].pop()
 
-    return [rules_cut, card_clipped, facts_cut, events_cut, memories_cut, agency_cut]
+    return [rules_cut, card_clipped, facts_cut, events_cut, agency_cut]
 
 
 def _fit_full(context):

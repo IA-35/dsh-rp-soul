@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fixture import PERSONA
 from harness import check, run
 from rp_soul_engine import opening, persona, schema, modules
-from rp_soul_engine.domain import turn, memories
+from rp_soul_engine.domain import turn
 from rp_soul_engine.errors import AppError
 from rp_soul_engine.projections import context
 
@@ -38,23 +38,23 @@ def commit_body(**changes):
 def projections_are_composed_without_mutating_the_ledger():
     state, pack = fresh()
     before = copy.deepcopy(state)
-    assert tuple(modules.REGISTRY) == ("mood", "memory", "agency", "wake")
+    assert tuple(modules.REGISTRY) == ("mood", "common", "agency", "wake")
     fields = modules.project(state, pack, full=True)
     assert fields["companion"]["mood"]["value"] == 55
-    assert fields["context"]["memories"] == [] and fields["context"]["agency"]
+    assert "memories" not in fields["context"] and fields["context"]["agency"]
     assert fields["card"]["mood"]["base"] == 55
     assert state == before
 
 
 def lifecycle_keeps_memory_and_core_audit_together():
+    """lite 没有记忆层：一回合只在回合流水里留一条，状态里不再有记忆条。"""
     state, pack = fresh()
-    after, result = turn.commit_turn(state, pack, commit_body(remember="他坐在旁边，我安心了一点。"), now=T0)
+    after, result = turn.commit_turn(state, pack, commit_body(), now=T0)
     turn.close_record(after, [result])
-    assert state["turn"] == 0 and state["memory"]["entries"] == []
+    assert state["turn"] == 0 and state["memory"]["turns"] == []
     assert after["turn"] == 1 and len(after["memory"]["turns"]) == 1
-    assert any(e["content"] == "他坐在旁边，我安心了一点。" for e in after["memory"]["entries"])
+    assert "entries" not in after["memory"], after["memory"].keys()
     assert context.full(after, pack)["companion"]["mood"]["band"] == "normal"
-
 
 def an_implementation_can_be_replaced_at_one_registration():
     state, pack = fresh()
@@ -62,26 +62,11 @@ def an_implementation_can_be_replaced_at_one_registration():
     with patch.dict(modules.REGISTRY, {"agency": replacement}):
         view = context.brief(state, pack)
         assert view["agency"] == [{"example": "replacement"}]
-        assert "mood" in view["companion"] and "memories" in view
+        assert "mood" in view["companion"] and "memories" not in view
     assert "options" in context.brief(state, pack)["agency"][0]
-
-
-def memory_validation_stays_inside_the_atomic_turn():
-    state, pack = fresh()
-    entry = memories.add(state, "scm", "conversation", "你留下了一把伞。", 0.8)
-    state["requests"]["memory_fold"] = {"ids": [entry["id"]]}
-    before = copy.deepcopy(state)
-    try:
-        turn.commit_turn(state, pack, commit_body(), now=T0)
-    except AppError as err:
-        assert "SCM" in str(err), str(err)
-    else:
-        raise AssertionError("pending fold must be validated")
-    assert state == before
 
 
 check("module projections compose without writes", projections_are_composed_without_mutating_the_ledger)
 check("memory lifecycle shares the core transaction", lifecycle_keeps_memory_and_core_audit_together)
 check("one registration replaces one implementation", an_implementation_can_be_replaced_at_one_registration)
-check("module validation preserves atomic turns", memory_validation_stays_inside_the_atomic_turn)
 run("modules")
