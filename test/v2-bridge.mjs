@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, ok, has, hasNot, done } from './_check.mjs';
+import { makeV1Db } from './_v1-fixture.mjs';
 
 const home = mkdtempSync(join(tmpdir(), 'soulv2bridge-'));
 process.env.DSH_HOME = home;
@@ -246,6 +247,18 @@ const req = await send('/engine/memory/request', 'POST', { session_id: 'main', k
 ok(req.ok && typeof req.receipt === 'string' && req.receipt !== '', '11. 立即汇总：给回执（这里没有子代理服务）' + (req.error ? '：' + req.error : ''));
 eq((await json('/engine/diaries?session_id=main')).diaries, [], '11. 还没写过日记');
 ok((await send('/engine/memory', 'DELETE', { session_id: 'main', memory_id: one.id })).ok, '11. 删一条');
+
+// ---- 12. soul_admin import：导入旧引擎的存档，日记按日历日搬 ----
+makeV1Db(join(home, 'rp-soul', 'engine', 'engine.db'));
+mkdirSync(join(home, 'rp-soul', 'engine', 'journal', 's_old'), { recursive: true });
+writeFileSync(join(home, 'rp-soul', 'engine', 'journal', 's_old', 'diary-0012.md'), '# 第 12 天 · 周二\n\n今天修了一天灯。\n', 'utf8');
+ok(!(await call('soul_admin', { action: 'import' }, a)).ok, '12. 不带 confirm：挡住');
+const imported = await call('soul_admin', { action: 'import', confirm: true }, a);
+ok(imported.ok && imported.all_match, '12. 导入，逐项都对上' + (imported.ok ? '' : '：' + imported.error) + (imported.all_match === false ? JSON.stringify(imported.check.filter((r) => !r.ok)) : ''));
+eq(imported.diaries, 1, '12. 搬了一篇日记');
+const moved = (await json('/engine/diaries?session_id=main')).diaries;
+eq(moved.map((d) => [d.day, d.title, d.text]), [['2026-11-10', '11月10日 · 周二', '今天修了一天灯。']], '12. 设置页读得到，标题换成日历日');
+ok((await call('soul_admin', { action: 'list' }, a)).slots.some((x) => x.name === '导入前'), '12. 导入前那一局存成了存档');
 server.close();
 
 await fiber.dispose();

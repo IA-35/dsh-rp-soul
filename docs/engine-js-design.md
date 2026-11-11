@@ -359,6 +359,15 @@ lib/engine/
      （`journal/main/diary-YYYY-MM-DD.md`），今天的过了 23:30 才写，昨天欠着的第二天补；唤醒表多一条 23:30 的「写日记」。
    - 没搬的：宿主收不了时让模型交 `memory_fold` 的退路——改成 ABM 超过两倍容量就丢最老的，别无限涨。
 8. **导入旧存档**：在真实库副本上跑通，逐项核对第 0.1 节第 3 条。
+   - 已做：`lib/engine/import-v1.js`（`readV1` 只读旧库、`convertV1` 纯函数转换、`compareV1` 逐项核对），`engine.importV1(file)`；
+     `soul_admin { action: "import", confirm: true }` 导入数据目录下的 `engine.db`（不删），导入前的这一局先存成「导入前」存档，
+     日记文件 `journal/<旧局号>/diary-NNNN.md` 按日历日搬到 `journal/main/diary-YYYY-MM-DD.md`、标题换成日历日。
+   - 时钟换算锚在最后一次交账：`{day, minute}` = `real_at`（截到整分钟）+ 和 `clock` 差的分钟；回合号换成那一回合交账的时刻。
+   - 带过来的：心情基准与记下的心事（情境心事不带，新引擎现算）、态度与它的历史、状况（没到期的）、事实与谁知道（谁都不知道的不带）、
+     还挂着的约定（promise 且有你 → 约定，没有你 → 她自己的事；rumor 这类新引擎没有的说一声不带）、安排、离屏片段、
+     重大行动冷却、三层记忆（含写过日记的日子）、最近一篇日记、流水（撤掉的不带）、常识库（关键词重复的不带）、安全与偏好。
+   - 核对：真实库副本（`s_0798aa5c`，18 回合）和 10 月 28 日那份更早的备份都八项对上；那份真实库里没有心事、约定和没过点的安排，
+     这几项另用 `test/v2-import.mjs` 里一份造的旧库（每样都有）核对。试导入不碰正在用的数据：`node test/tools/import-v1-check.mjs <旧库>`。
 9. **切换**：三条验收标准都达到后默认切到 js；再用一阵子没问题，删掉 Python 引擎、`engine-client.js`、
    schema 同步测试，`feat/lite` 分支也删掉（等同于 `memory` 关掉）。
 
