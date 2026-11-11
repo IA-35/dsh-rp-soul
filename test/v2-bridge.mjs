@@ -173,6 +173,17 @@ const again = await json('/engine/thought', { method: 'DELETE', headers: { 'cont
 ok(again.ok === false, '7. 再删一次：明说删不掉');
 const facts = await json('/engine/facts?session_id=main');
 ok(facts.ok === false && String(facts.error).includes('还不支持'), '7. 还没接上的页签照旧明说');
+
+// ---- 8. 唤醒：交账里的 plan → 宿主问 next-wake 拿到下一次该醒的时刻 ----
+ok('plan' in tools.get('soul_commit').parameters.properties && 'away' in tools.get('soul_commit').parameters.properties, '8. 交账表里有唤醒模块的字段');
+await call('soul_state', {}, a); // 设置页刚删过一条心事：先重读一次局面
+const planned = await call('soul_commit', { summary: '她说去巡一圈灯。', plan: { note: '去巡灯', in_minutes: 30 } }, a);
+ok(planned.committed, '8. 带 plan 交账' + (planned.committed ? '' : '：' + JSON.stringify(planned)));
+await json('/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wakeEnabled: true, wakeSessionId: 'a1', wakeQuiet: '' }) });
+const woke = await json('/wake'); // 保存时重排是异步的：再读一次
+eq(woke.state?.reason, 'plan', '8. 打开唤醒：下一次是她说好的那个时间' + (woke.state?.lastError ? '（' + woke.state.lastError + '）' : ''));
+ok(Math.abs(Date.parse(woke.state.at) - (Date.now() + 30 * 60000)) < 120000, '8. 大约 30 分钟后');
+await json('/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wakeEnabled: false }) });
 server.close();
 
 await fiber.dispose();
