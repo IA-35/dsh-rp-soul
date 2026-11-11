@@ -80,8 +80,6 @@
 
 ## 2. 内核与模块
 
-| 名字 | 是什么 | 能关？ | 依赖 |
-|---|---|---|---|
 | 名字 | 管什么 | 交账里归它的字段 | 依赖 |
 |---|---|---|---|
 | **内核**（不能关） | 真实时间、一段相处、事实与「谁知道」、她这一次的回应与状况、**你们的约定和她自己的事**（到期 / 兑现 / 取消）、作息（从人设读）、安全边界与亲密门禁、交账流水、存档 / 撤销 / 导出 | `summary` `her` `learned` `reveal` `promise` `open` `quotes` `tags` `consent` | — |
@@ -117,14 +115,13 @@ export default {
 
   // ---- 引擎这一半（纯函数，拿到的是自己那块切片） ----
   init(persona, now) { return { /* 开局时的切片 */ } },
-  view(slice, now) { /* 这一刻的样子：拿记下的时刻和 now 比，现算过期 / 衰减；不改切片 */ },
-  tidy(slice, now) { /* 交账落定时把已经过期的清掉，返回新切片 */ return slice },
+  tidy(slice, now) { /* 交账落定时把已经没影响的清掉，返回新切片 */ return slice },
   fields: { feel: FeelSpec },        // 交账表里归它管的字段（校验 + 给模型的说明都从这里生成）
   validate(slice, input, ctx) { /* 返回问题清单 */ },
   apply(slice, input, ctx) { /* 返回新切片；可 ctx.emit 通知别人 */ },
   on: { "event.failed": (slice, payload, ctx) => slice }, // 听内核或别的模块发的信号（约定没兑现 → 一条心事）
   answers: { band: (slice, ctx) => "normal" },             // 别人 ctx.ask("mood.band") 时回答
-  project(slice, ctx) { /* 快照里的几行 + soul_state 里的字段 */ },
+  project(slice, ctx) { /* 快照里的几行 + soul_state 里的字段：拿记下的时刻和 ctx.now 比，现算过期 / 衰减 */ },
 
   // ---- 宿主这一半（可选：要碰 DSH 才写） ----
   host: {
@@ -136,6 +133,10 @@ export default {
 };
 ```
 
+`ctx` 里还有：`ctx.now`、`ctx.alone`（她自己醒来的那一次）、`ctx.persona`、`ctx.note(text)`（写进回执）、
+`ctx.ask("core.xxx")`（问内核：她知道这条事实吗、还挂着的约定、隔了多久……）、
+`ctx.noteInner(text)`（交账时把一句话记成「她心里的」事实，返回它的 key）。
+
 模块注册表是固定的一个列表（内置的这几个），不从磁盘动态加载——可拔插指的是**开关**，不是装第三方代码。
 
 ### 2.2 开关
@@ -143,7 +144,7 @@ export default {
 - 存在 `rp-soul/config.json` 的 `modules: { "memory": false, … }`，设置页「引擎」卡片里一排开关，
   每个模块自己的设置也在那里。
 - **关掉**：切片原样留在账本里，不再结算、不再注入、它的字段从工具说明里拿掉；宿主那一半（钩子、定时器、路由）一起停。
-- **再打开**：什么都不用补——切片里记的是时刻，打开那一下 `view(slice, now)` 现算就是对的（关着期间该过期的心事自然算作过期）。
+- **再打开**：什么都不用补——切片里记的是时刻，打开那一下 `project` 现算就是对的（关着期间该过期的心事自然算作过期）。
 - 工具说明随开关变，所以开关那一下会让前缀缓存失效一次；平时不变。
 
 ## 3. 模型交账：新的 `soul_commit`
@@ -245,7 +246,7 @@ lib/engine/
     facts.js      事实与「谁知道」
     events.js     你们的约定、她自己的事：到期、兑现、取消
     her.js        她的回应、状况、作息、安全边界与亲密门禁
-    commit.js     一次交账：各模块 view(now) → 校验 → 应用 → 信号 → tidy(now) → 回执
+    commit.js     开一局；一次交账：校验（内核 + 各模块）→ 应用 → 分发信号 → tidy(now) → 回执
     context.js    快照（局面）与 soul_state 的返回：内核几行 + 各模块 project
     registry.js   模块清单、开关、依赖检查、ctx.ask / ctx.emit
   modules/
