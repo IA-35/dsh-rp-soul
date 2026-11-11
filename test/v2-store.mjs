@@ -101,6 +101,14 @@ try { engine.context({ persona }); } catch (e) { threw = e.code; }
 eq(threw, 'NO_LEDGER', '8. 清空后就是没开局');
 eq(engine.log().length, 0, '8. 流水也没了');
 eq(engine.start(persona).created, true, '8. 清空后能重新开局');
+
+// ---- 9. 快照不跟着分钟变（宿主文本一变就追加一条，分钟级会让快照越攒越多） ----
+nowMs = Date.parse('2026-11-12T20:00:00+08:00');
+const at20 = engine.context({ persona }).lines.join('\n');
+tick(7);
+eq(engine.context({ persona }).lines.join('\n'), at20, '9. 过了 7 分钟、什么都没发生：快照一字不变');
+tick(60 * 3);
+ok(engine.context({ persona }).lines.join('\n') !== at20, '9. 跨进深夜：快照才变');
 engine.close();
 
 done('v2-store');

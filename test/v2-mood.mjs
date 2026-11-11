@@ -137,7 +137,7 @@ ok(run(happy, { summary: 'x', tags: ['intimate'], consent: true, her: { did: '�
 const lines = look(trust, at(6)).lines.join('\n');
 has(lines, '对主人的态度：陌生', '7. 快照里有态度');
 has(lines, '心情：平稳', '7. 有心情档位');
-has(lines, '心里对你多了几分信任（+3，1 分钟前）', '7. 想法带分量和多久以前');
+has(lines, '心里对你多了几分信任（+3，刚才）', '7. 想法带分量和多久以前（快照里只粗到「刚才 / N 小时前」，不跟着分钟变）');
 has(lines, '可能发生：', '7. 有候选');
 
 // ---- 8. 关掉情绪：内核照常跑 ----

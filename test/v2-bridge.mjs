@@ -1,6 +1,7 @@
 /* 新引擎第四阶段：engine: "js" 时插件挂的是新桥接。真实 cordis 容器 + 假工具宿主。
  * 第 5 段是上周真实会话里被驳回过的交账，按新合同的写法（连同模型常犯的小毛病）重放，要求一次过。 */
 import { Context } from '@deepseek-ai/cordis';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +32,8 @@ app.provide('systemPrompt', {
   section() { return () => {}; },
   context(def) { contexts.set(def.name, def); return () => { contexts.delete(def.name); }; },
 });
-app.provide('webServer', { register() { return () => {}; } });
+const routes = [];
+app.provide('webServer', { register(def) { routes.push(def); return () => {}; }, host: '127.0.0.1', protocol: 'http:' });
 app.provide('connection', { requestRejection() { return undefined; } });
 const tools = new Map();
 app.provide('tools', { register(def) { tools.set(def.name, def); return () => { tools.delete(def.name); }; } });
@@ -141,6 +143,37 @@ eq(log.log.length, 3, '6. soul_admin log');
 ok((await call('soul_admin', { action: 'undo' }, a)).ok, '6. soul_admin undo');
 ok(!(await call('soul_admin', { action: 'start' }, a)).ok, '6. 重开不带 confirm：挡住');
 hasNot(snap, '{{', '6. 快照里没有模板变量');
+
+// ---- 7. 设置页「情绪」页：真 HTTP，和页面走的是同一条路 ----
+const server = createServer((req, res) => {
+  const route = routes.find((r) => r.kind === 'prefix' && req.url.startsWith(r.path));
+  if (route) return route.handler(req, res);
+  res.statusCode = 404; res.end();
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = 'http://127.0.0.1:' + server.address().port + '/rp-soul';
+const json = async (path, init) => (await fetch(base + path, init)).json();
+const eng = await json('/engine');
+eq(eng.session?.session_id, 'main', '7. /engine 给出这一局（新引擎固定叫 main）');
+const moods = await json('/engine/moods?session_id=main');
+ok(moods.ok !== false, '7. 读情绪不再报「不支持」' + (moods.error ? '：' + moods.error : ''));
+const her = moods.npcs?.[0];
+eq(her?.name, '守岸人', '7. 一张卡，是她');
+ok(Number.isInteger(her.value) && typeof her.band === 'string' && her.stage === 'familiar', '7. 心情、档位、阶段都在');
+ok(moods.thresholds && Number.isInteger(moods.thresholds.open), '7. 阈值在');
+const stored = her.thoughts.find((t) => t.kind === 'memory');
+ok(stored !== undefined && typeof stored.id === 'string' && Number.isInteger(stored.remaining_minutes), '7. 记下的心事带 id 和剩余分钟');
+ok(her.thoughts.some((t) => t.kind === 'situational' && t.label === '在场'), '7. 推出来的情境也列出来');
+const del = await json('/engine/thought', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'main', npc_id: her.id, thought_id: stored.id, revision: moods.revision }) });
+ok(del.ok !== false && del.deleted === stored.id, '7. 删掉一条心事' + (del.error ? '：' + del.error : ''));
+const after = await json('/engine/moods?session_id=main');
+ok(!after.npcs[0].thoughts.some((t) => t.id === stored.id), '7. 删掉的不见了');
+ok(after.revision === moods.revision + 1, '7. 删除也算一次改动（revision 加一，能撤销）');
+const again = await json('/engine/thought', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'main', npc_id: her.id, thought_id: stored.id }) });
+ok(again.ok === false, '7. 再删一次：明说删不掉');
+const facts = await json('/engine/facts?session_id=main');
+ok(facts.ok === false && String(facts.error).includes('还不支持'), '7. 还没接上的页签照旧明说');
+server.close();
 
 await fiber.dispose();
 done('v2-bridge');
