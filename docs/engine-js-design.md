@@ -334,6 +334,15 @@ lib/engine/
      快照里提前一行说明，只在跨过一小时那一下变一次。
    - 唤醒消息的默认措辞不再点名 `plan_next`（新引擎里安排是交账的一个字段）。
 6. **常识模块**，以及设置页：路由、页签、模块开关那一排、存档 / 导出导入。
+   - 已做：`lib/engine/modules/common/`（纯函数：命中、排序、渲染、合并），表在 store 的 common 表里，
+     交账提的 `common` 和账本同一个事务写进去、一律挂起等确认；`engine.recall(cue)` 接到「想起来的」那段动态上下文。
+     撤销交账不动常识库（它不属于这一局）；她自己醒着的那一次不收常识。
+   - 设置页命令放在 `lib/engine-v2-settings.js`：常识库增删改 / 确认 / 条数、自主行动记录（流水里多存一份这次的 input，
+     账本里那 40 条不存）、人设校验（新引擎读的那几个字段）。`debug-facts` / `delete-fact` 页面上没用到，没接。
+   - 模块开关：`PUT /rp-soul/engine/modules`，写进 config.json 的 `modules`，立刻生效（soul_commit 摘下按新的交账表重挂）；
+     引擎卡上一排勾选框。
+   - 存档 / 导出：旧引擎是 `soul_admin` 的动作，新的照搬：save / list / load / delete / export（写成数据目录下 exports/*.json），
+     读档能撤销；另加 pause / resume（安全暂停）。导入旧存档是第 8 阶段的事。
 7. **记忆模块**：攒批、汇总、日记、注入（`recall` 用关键词），连同它的页签。
 8. **导入旧存档**：在真实库副本上跑通，逐项核对第 0.1 节第 3 条。
 9. **切换**：三条验收标准都达到后默认切到 js；再用一阵子没问题，删掉 Python 引擎、`engine-client.js`、

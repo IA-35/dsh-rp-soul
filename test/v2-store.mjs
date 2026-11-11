@@ -85,7 +85,7 @@ while (engine.undo().ok) undos += 1;
 eq(undos, 30, '6. 最多能撤销 30 次');
 
 // ---- 7. 模块开关 ----
-eq(engine.modules(), [{ id: 'mood', label: '情绪', on: true, why: null }, { id: 'wake', label: '唤醒', on: true, why: null }], '7. 默认都开着');
+eq(engine.modules(), [{ id: 'mood', label: '情绪', on: true, why: null }, { id: 'wake', label: '唤醒', on: true, why: null }, { id: 'common', label: '常识', on: true, why: null }], '7. 默认都开着');
 engine.setToggles({ mood: false });
 eq(engine.modules()[0].on, false, '7. 关掉');
 ok(!('feel' in engine.spec().fields), '7. 关掉后交账表里没有它的字段');
@@ -109,6 +109,28 @@ tick(7);
 eq(engine.context({ persona }).lines.join('\n'), at20, '9. 过了 7 分钟、什么都没发生：快照一字不变');
 tick(60 * 3);
 ok(engine.context({ persona }).lines.join('\n') !== at20, '9. 跨进深夜：快照才变');
+// ---- 10. 存档、读档、导出、暂停 ----
+engine.commit({ summary: '存档前。', learned: [{ key: 'slot.before', text: '存档前知道的' }] }, { persona, said: true });
+ok(engine.save('周末').ok, '10. 存一份');
+ok(!engine.save('周末').ok, '10. 同名不覆盖');
+ok(engine.save('周末', { overwrite: true }).ok, '10. 带 overwrite 才覆盖');
+tick(5);
+engine.commit({ summary: '存档后。', learned: [{ key: 'slot.after', text: '存档后才知道的' }] }, { persona, said: true });
+eq(engine.slots().map((x) => x.name), ['周末'], '10. 存档列表');
+const revBefore = engine.context({ persona }).revision;
+const loaded = engine.load('周末');
+ok(loaded.ok && loaded.revision === revBefore + 1, '10. 读档：revision 接着往上加');
+const keys = () => engine.context({ persona }).fields.known_facts.map((f) => f.key);
+ok(keys().includes('slot.before') && !keys().includes('slot.after'), '10. 读回存档那一刻');
+ok(engine.undo().ok && keys().includes('slot.after'), '10. 读档也能撤销');
+ok(!engine.load('没有').ok, '10. 读不存在的：明说');
+const dump = engine.exportAll();
+ok(dump.ledger.revision === engine.context({ persona }).revision && Array.isArray(dump.common), '10. 导出：整份账本 + 常识库');
+ok(engine.setPaused(true).changed, '10. 暂停');
+ok(!engine.commit({ summary: 'x', tags: ['intimate'], consent: true, her: { response: 'genuine' } }, { persona, said: true }).ok, '10. 暂停时亲密内容驳回');
+ok(!engine.setPaused(true).changed, '10. 再暂停一次：没变化');
+ok(engine.setPaused(false).changed, '10. 恢复');
+ok(engine.dropSlot('周末').ok && engine.slots().length === 0, '10. 删存档');
 engine.close();
 
 done('v2-store');

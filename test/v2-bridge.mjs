@@ -184,6 +184,47 @@ const woke = await json('/wake'); // 保存时重排是异步的：再读一次
 eq(woke.state?.reason, 'plan', '8. 打开唤醒：下一次是她说好的那个时间' + (woke.state?.lastError ? '（' + woke.state.lastError + '）' : ''));
 ok(Math.abs(Date.parse(woke.state.at) - (Date.now() + 30 * 60000)) < 120000, '8. 大约 30 分钟后');
 await json('/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wakeEnabled: false }) });
+
+// ---- 9. 设置页：常识库、自主行动记录、人设校验、模块开关 ----
+const send = (path, method, body) => json(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const added = await send('/engine/common', 'POST', { key: ['灯塔'], weight: 0.7, content: '灯塔每晚八点亮灯' });
+ok(added.ok && added.count === 1 && added.receipt === '已加上', '9. 加一条常识' + (added.error ? '：' + added.error : ''));
+const cid = added.rows[0].id;
+has(contexts.get('soul-recall').text(agent('a1', '灯塔几点亮？')), '灯塔每晚八点亮灯', '9. 你手动加的直接生效：话里有关键词就注入');
+eq(contexts.get('soul-recall').text(agent('a1', '今天下雨')), '', '9. 没命中不注入');
+ok((await send('/engine/common', 'PUT', { common_id: cid, key: ['灯塔'], weight: 0.9, content: '灯塔每晚七点亮灯' })).rows[0].weight === 0.9, '9. 改一条');
+ok((await send('/engine/common/limit', 'PUT', { limit: 3 })).limit === 3, '9. 改注入条数');
+ok((await send('/engine/common', 'DELETE', { common_id: 'c99' })).ok === false, '9. 删不存在的：明说');
+ok((await send('/engine/common', 'DELETE', { common_id: cid })).count === 0, '9. 删掉');
+await call('soul_state', {}, a);
+await call('soul_commit', { summary: '他说 DS 是 deepseek。', common: [{ key: ['ds'], content: 'DS 指 deepseek' }] }, a);
+const pend = await json('/engine/common');
+eq(pend.pending, 1, '9. 模型提的挂起等确认');
+ok((await send('/engine/common/approve', 'POST', { common_id: pend.rows[0].id })).pending === 0, '9. 确认');
+const act = await json('/engine/activity?session_id=main&limit=5');
+ok(act.ok && act.rows.length > 0 && act.rows[0].summary === '他说 DS 是 deepseek。', '9. 自主行动记录：最近的在前' + (act.error ? '：' + act.error : ''));
+const check = await json('/engine/persona');
+eq(check.ok, true, '9. 人设校验：这份能用' + (check.error ? '（' + check.error + '）' : ''));
+const mods = await json('/engine/modules');
+eq(mods.modules.map((m) => m.id), ['mood', 'wake', 'common'], '9. 模块清单');
+const off = await send('/engine/modules', 'PUT', { modules: { mood: true, wake: true, common: false } });
+ok(off.ok && off.modules.find((m) => m.id === 'common').on === false, '9. 关掉常识');
+ok(!('common' in tools.get('soul_commit').parameters.properties), '9. 交账表立刻重挂，没有 common 了');
+eq(contexts.get('soul-recall').text(agent('a1', 'DS 呢')), '', '9. 也不再注入');
+ok((await json('/engine')).modules.find((m) => m.id === 'common').why === '你关掉了', '9. 引擎卡上看得到');
+await send('/engine/modules', 'PUT', { modules: {} });
+ok('common' in tools.get('soul_commit').parameters.properties, '9. 再打开就回来了');
+
+// ---- 10. soul_admin：存档、导出、暂停 ----
+ok((await call('soul_admin', { action: 'save', name: '灯塔' }, a)).ok, '10. 存档');
+eq((await call('soul_admin', { action: 'list' }, a)).slots[0].name, '灯塔', '10. 列存档');
+ok((await call('soul_admin', { action: 'load', name: '灯塔' }, a)).ok, '10. 读档');
+ok(!(await call('soul_admin', { action: 'delete', name: '灯塔' }, a)).ok, '10. 删存档不带 confirm：挡住');
+const exported = await call('soul_admin', { action: 'export' }, a);
+ok(exported.ok && existsSync(exported.file), '10. 导出成文件');
+ok((await call('soul_admin', { action: 'pause' }, a)).paused === true, '10. 暂停');
+ok((await call('soul_admin', { action: 'resume' }, a)).paused === false, '10. 恢复');
+ok(!('input' in (await call('soul_admin', { action: 'log', limit: 1 }, a)).log[0]), '10. log 不带每次交了什么（太长）');
 server.close();
 
 await fiber.dispose();
