@@ -32,7 +32,17 @@ ok(!labels(moodOf(s0, at(1), { alone: true })).includes('在场'), '1. 她自己
 const f1 = run(s0, { summary: '他把伞给她。', feel: [{ label: '他把伞留给了我', delta: 6, because: 'rain.umbrella' }] }, at(5));
 ok(f1.ok, '2. 来由是她知道的事实');
 const bogus = run(s0, { summary: 'x', feel: [{ label: '半夜还在查', delta: 3, because: 'late_night.check' }] }, at(5));
-ok(!bogus.ok && bogus.problems[0].hint.includes('rain.umbrella'), '2. 编了一个不存在的 key：驳回，并列出她知道的');
+// 真实会话里驳回过两次（late_night_check / her_work_power_audit）：不再驳回，退回成心事本身并说一声
+ok(bogus.ok && bogus.notes.some((n) => n.includes('late_night.check')), '2. 编了一个不存在的 key：不驳回，记一条说明');
+ok(Object.values(bogus.state.facts).some((f) => f.who === 'inner' && f.text === '半夜还在查'), '2. 来由退回成这条心事本身');
+const snake = run(s0, { summary: 'x', feel: [{ label: '半夜还在查', delta: 3, because: 'late_night_check' }] }, at(5));
+ok(snake.ok && !Object.values(snake.state.facts).some((f) => f.text === 'late_night_check'), '2. 下划线的 key 也当 key 认，不把它当一句话存');
+const same = run(s0, {
+  summary: '他说起电源的活。',
+  learned: [{ key: 'her_work_power_audit', text: '他被分去负责机器人电源设计' }],
+  feel: [{ label: '替他留意', delta: 8, because: 'her_work_power_audit' }],
+}, at(5));
+ok(same.ok && same.state.modules.mood.thoughts.some((t) => t.because === 'her_work_power_audit'), '2. 同一次里先记事实再拿它当来由：认');
 const sentence = run(s0, { summary: 'x', feel: [{ label: '他今天来晚了', delta: -4, because: '他说好八点到，九点才来' }] }, at(5));
 ok(sentence.ok, '2. 来由直接写一句话也行');
 ok(Object.values(sentence.state.facts).some((f) => f.who === 'inner' && f.text.includes('九点才来')), '2. 那句话记成了她心里的事实');
@@ -60,7 +70,9 @@ ok(!run(s0, { summary: 'x', bond: { trust: 3 } }, at(5)).ok, '4. 一次最多 ±
 let high = s0;
 for (let i = 0; i < 4; i += 1) high = run(high, { summary: 'x', bond: { trust: 2, reason: '又一件好事' } }, at(5 + i)).state;
 eq(high.modules.mood.bond.trust, 5, '4. 信任夹在 5 以内，不驳回');
-ok(!run(s0, { summary: 'x', bond: { reason: '没变' } }, at(5)).ok, '4. 什么都没变：驳回');
+const empty = run(s0, { summary: 'x', bond: { reason: '没变' } }, at(5));
+ok(empty.ok && empty.notes.some((n) => n.includes('bond')), '4. 什么都没变：不驳回，当没写并说一声');
+eq(empty.state.modules.mood.bond.history.length, 0, '4. 当没写：态度历史里不多一条');
 const noYes = run(s0, { summary: 'x', bond: { stage: 'advance', reason: '更近了' } }, at(5));
 ok(!noYes.ok && noYes.problems.some((p) => p.hint.includes('genuine')), '4. 前进阶段要她这一次是配合的');
 const adv = run(s0, { summary: 'x', her: { response: 'genuine' }, bond: { stage: 'advance', reason: '更近了' } }, at(5));
