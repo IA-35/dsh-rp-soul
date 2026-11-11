@@ -71,7 +71,7 @@ try {
   writeFileSync(mappingPath, JSON.stringify({ shared: a }));
   promptFiber = app.plugin(SystemPrompt, SystemPrompt.Config({ includeHarnessIdentity: false }));
   await promptFiber;
-  fiber = app.plugin(plugin, plugin.Config({}));
+  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
   await fiber;
 
   // 没有 tools 服务，没有调用 soul_state：直接走宿主的真实装配入口。
@@ -93,7 +93,7 @@ try {
   eq(promptB, promptA, '2. 账本更新后系统提示词逐字节不变（缓存前缀可一直命中）');
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({}));
+  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
   await fiber;
   has(engineText(await assemble(agentA)), '外部更新后的悬念A', '3. 插件重启后第一次装配仍有状态');
 
@@ -243,7 +243,7 @@ try {
   // 新建一个干净的引擎目录，验证首次自动开局及两个装配同时发生的情况。
   writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'global', engineDataDir: join(home, 'fresh-engine') }));
   writeFileSync(mappingPath, '{}');
-  fiber = app.plugin(plugin, plugin.Config({}));
+  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
   await fiber;
   const cold = await Promise.all([assemble(agentA), assemble(agentB)]);
   ok(cold.every((p) => engineText(p).includes('心情：')), '6. 全新安装第一次并行装配也有引擎状态');
@@ -254,7 +254,7 @@ try {
   } finally { await freshClient.stop(); }
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({ engineEnabled: false }));
+  fiber = app.plugin(plugin, plugin.Config({ engine: 'python', engineEnabled: false }));
   await fiber;
   eq(engineText(await assemble(agentA)), '', '7. 引擎关闭时不注入账本');
   done('prompt');

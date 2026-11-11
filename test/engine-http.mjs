@@ -44,7 +44,7 @@ app.provide('webServer', { register(def) { routes.push(def); return () => {}; },
 app.provide('connection', { requestRejection() { return undefined; } });
 const tools = new Map();
 app.provide('tools', { register(def) { tools.set(def.name, def); return () => { tools.delete(def.name); }; } });
-await app.plugin(plugin.apply, plugin.Config({}));
+await app.plugin(plugin.apply, plugin.Config({ engine: 'python' }));
 
 const server = createServer((req, res) => {
   for (const r of routes) {

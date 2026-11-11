@@ -62,7 +62,7 @@ const ctx = {
   },
 };
 // noteBatchMinutes：攒着的一批多久没下文就自己落。默认半小时，测试里调成 3 秒
-mod.apply(ctx, { maxBytes: 65536, noteBatchMinutes: 0.05 });
+mod.apply(ctx, { maxBytes: 65536, noteBatchMinutes: 0.05, engine: 'python' });
 
 // ---- 1. 三个工具都注册了 ----
 eq(tools.size, 3, '1. 注册了 3 个工具');

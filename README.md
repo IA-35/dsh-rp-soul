@@ -67,6 +67,18 @@ DSH 原生只把 `AGENTS.md` / `CLAUDE.md` 当作「工作区指令」（以 use
 这么改是因为：一份空的种子文件除了让人以为「已经配好了」以外没有任何作用，
 而「谁写了什么」只有一个地方可查显然更省事。
 
+## 引擎：默认是新的进程内引擎（engine: js）
+
+默认用 `lib/engine`（JS，进程内，`node:sqlite`，要求 Node ≥ 24.12），不再需要 Python。内核加四个可开关的模块
+（情绪 / 唤醒 / 常识 / 记忆），只用真实时间，数据在 `rp-soul/engine/engine-v2.db`。设计与各阶段记录见
+[docs/engine-js-design.md](docs/engine-js-design.md)。
+
+- 切回旧引擎：`rp-soul/config.json` 里写 `"engine": "python"`（优先于插件配置），重启 DSH。
+- 导入旧引擎的存档：让她调 `soul_admin { action: "import", confirm: true }`，读数据目录下的 `engine.db`（不删），
+  导入前的那一局存成「导入前」存档。先在副本上试：`node test/tools/import-v1-check.mjs <旧 engine.db>`。
+
+下面这一节说的是旧引擎（Python 侧车）。
+
 ## 内部模块划分
 
 插件按两部分组织：角色预设拼接，以及人设引擎。引擎内部的四个职责保持正常运行，

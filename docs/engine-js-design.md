@@ -370,6 +370,9 @@ lib/engine/
      这几项另用 `test/v2-import.mjs` 里一份造的旧库（每样都有）核对。试导入不碰正在用的数据：`node test/tools/import-v1-check.mjs <旧库>`。
 9. **切换**：三条验收标准都达到后默认切到 js；再用一阵子没问题，删掉 Python 引擎、`engine-client.js`、
    schema 同步测试，`feat/lite` 分支也删掉（等同于 `memory` 关掉）。
+   - 已切：插件配置 `engine` 默认 `js`（你拍板：验收在另一台机器上量，这台上新引擎只交过 1 次账，第 1 条没在这里量）。
+     第 2 条：三个工具 10,449 字节（soul_commit 9,056），小于 11 KB，余量不到 1 KB；第 3 条：真实库副本八项对上。
+     旧引擎的测试（engine / engine-http / prompt）改成显式 `engine: "python"`。Python 引擎还没删。
 
 ## 9. 要你拍板的
 

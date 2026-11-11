@@ -23,7 +23,7 @@ writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->\n'
 ].join('\n'), 'utf8');
 
 const plugin = await import(new URL('../lib/index.js', import.meta.url).href);
-eq(plugin.Config({}).engine, 'python', '0. 默认还是旧引擎');
+eq(plugin.Config({}).engine, 'js', '0. 默认是新引擎');
 
 const app = new Context();
 const contexts = new Map();
