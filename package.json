@@ -3,6 +3,9 @@
   "version": "0.6.2",
   "description": "Compose the DSH system-prompt persona from multiple files under $DSH_HOME, with a settings-page editor and a Python roleplay engine (mood / relationships / autonomous action).",
   "type": "module",
+  "engines": {
+    "node": ">=24.12"
+  },
   "main": "lib/index.js",
   "files": [
     "lib",
