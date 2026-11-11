@@ -1,5 +1,5 @@
 /* 新引擎第七阶段：记忆模块（三层、收成 SCM、日记、想起来）和它的宿主那一半。时间全是传进去的 now。 */
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq, ok, has, hasNot, done } from './_check.mjs';
@@ -95,7 +95,9 @@ has(recallText({ ...mem, diary_last: { day: '2026-11-11', text: '今天下雨。
 const persona = { id: 'lin_wan', name: '林晚', mood_base: 55 };
 let nowMs = Date.parse(t0);
 const tick = (minutes) => { nowMs += minutes * 60000; };
-const dataDir = mkdtempSync(join(tmpdir(), 'engine-memory-'));
+// 目录结构照真的来：<根>/engine 是数据目录，日记落在 <根>/memory
+const rootDir = mkdtempSync(join(tmpdir(), 'engine-memory-'));
+const dataDir = join(rootDir, 'engine');
 const engine = createEngine({ dataDir, clock: () => new Date(nowMs) });
 const memOf = () => engine.panel('memory', { persona });
 engine.start(persona);
@@ -191,8 +193,16 @@ eq(host.tidyNow('diary'), 'started', '8. 立即写日记：后台起');
 await new Promise((r) => setTimeout(r, 20));
 const files = await host.diaries();
 ok(files.length === 1 && files[0].text === '今天下了雨，他记得伞。' && files[0].title.includes('·'), '8. 日记落成文件，设置页读得到');
-ok(existsSync(join(dataDir, 'journal', 'main', 'diary-' + files[0].day + '.md')), '8. 文件在数据目录的 journal/main 下');
-has(readFileSync(join(dataDir, 'journal', 'main', 'diary-' + files[0].day + '.md'), 'utf8'), '# ', '8. 第一行是标题');
+// 日记和旧引擎放一处：<数据目录的上一层>/memory（数据目录是 rp-soul/engine）
+const journalDir = join(dataDir, '..', 'memory');
+ok(existsSync(join(journalDir, 'diary-' + files[0].day + '.md')), '8. 文件在数据目录上一层的 memory 下');
+has(readFileSync(join(journalDir, 'diary-' + files[0].day + '.md'), 'utf8'), '# ', '8. 第一行是标题');
+
+// 旧引擎的日记叫 diary-0014.md（按第几天）：同一处也读得到，日期取文件修改时间
+writeFileSync(join(journalDir, 'diary-0002.md'), '# 第 2 天 · 周三\n\n那天他带伞来了。\n', 'utf8');
+const mixed = await host.diaries();
+ok(mixed.length === 2, '8. 新的日历日命名和旧的编号命名一起列出来');
+ok(mixed.some((f) => f.text === '那天他带伞来了。' && f.title === '第 2 天 · 周三'), '8. 旧日记也读得到，标题原样');
 host.forget();
 engine.close();
 
