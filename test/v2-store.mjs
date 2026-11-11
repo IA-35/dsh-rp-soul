@@ -85,7 +85,7 @@ while (engine.undo().ok) undos += 1;
 eq(undos, 30, '6. 最多能撤销 30 次');
 
 // ---- 7. 模块开关 ----
-eq(engine.modules(), [{ id: 'mood', label: '情绪', on: true, why: null }, { id: 'wake', label: '唤醒', on: true, why: null }, { id: 'common', label: '常识', on: true, why: null }], '7. 默认都开着');
+eq(engine.modules(), [{ id: 'mood', label: '情绪', on: true, why: null }, { id: 'wake', label: '唤醒', on: true, why: null }, { id: 'common', label: '常识', on: true, why: null }, { id: 'memory', label: '记忆', on: true, why: null }], '7. 默认都开着');
 engine.setToggles({ mood: false });
 eq(engine.modules()[0].on, false, '7. 关掉');
 ok(!('feel' in engine.spec().fields), '7. 关掉后交账表里没有它的字段');

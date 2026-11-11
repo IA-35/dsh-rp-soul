@@ -65,7 +65,7 @@ has(snap, '## 【当前现状】', '2. 快照有标题');
 has(snap, '时间：', '2. 快照有时间');
 has(snap, '心情：', '2. 快照有心情');
 ok(existsSync(join(home, 'rp-soul', 'engine', 'engine-v2.db')), '2. 库建在 rp-soul/engine/engine-v2.db');
-eq(contexts.get('soul-recall').text(a), '', '2. 记忆还没移植：「想起来的」是空的');
+eq(contexts.get('soul-recall').text(a), '', '2. 刚开局：「想起来的」是空的');
 
 // ---- 3. soul_state / soul_commit ----
 const st = await call('soul_state', {}, a);
@@ -206,7 +206,7 @@ ok(act.ok && act.rows.length > 0 && act.rows[0].summary === '他说 DS 是 deeps
 const check = await json('/engine/persona');
 eq(check.ok, true, '9. 人设校验：这份能用' + (check.error ? '（' + check.error + '）' : ''));
 const mods = await json('/engine/modules');
-eq(mods.modules.map((m) => m.id), ['mood', 'wake', 'common'], '9. 模块清单');
+eq(mods.modules.map((m) => m.id), ['mood', 'wake', 'common', 'memory'], '9. 模块清单');
 const off = await send('/engine/modules', 'PUT', { modules: { mood: true, wake: true, common: false } });
 ok(off.ok && off.modules.find((m) => m.id === 'common').on === false, '9. 关掉常识');
 ok(!('common' in tools.get('soul_commit').parameters.properties), '9. 交账表立刻重挂，没有 common 了');
@@ -225,6 +225,27 @@ ok(exported.ok && existsSync(exported.file), '10. 导出成文件');
 ok((await call('soul_admin', { action: 'pause' }, a)).paused === true, '10. 暂停');
 ok((await call('soul_admin', { action: 'resume' }, a)).paused === false, '10. 恢复');
 ok(!('input' in (await call('soul_admin', { action: 'log', limit: 1 }, a)).log[0]), '10. log 不带每次交了什么（太长）');
+
+// ---- 11. 设置页「记忆」页 ----
+// 回合结束的钩子（宿主真的会发）：攒够四轮落一条原文
+for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我能上去看吗', '可以，小心台阶。'], ['好冷', '把外套给你。'], ['谢谢', '嗯。']]) {
+  const ag = { agent: { id: 'a1', session: { header: {}, deriveMessages: () => [
+    { role: 'user', content: [{ type: 'text', text: said }] },
+    { role: 'assistant', content: [{ type: 'text', text: answer }] },
+  ] } } };
+  await app.serial('agent/turn-stopping', ag);
+}
+const memo = await json('/engine/memories?session_id=main');
+ok(memo.ok && memo.entries.some((e) => e.content.includes('你：好冷\n她：把外套给你。')), '11. 回合结束的钩子记下了原文' + (memo.error ? '：' + memo.error : ''));
+ok(memo.counts && memo.capacity.abm === 20 && memo.capacity.clpa === null, '11. 各层条数和容量');
+const one = memo.entries[0];
+const edited = await send('/engine/memory', 'PUT', { session_id: 'main', memory_id: one.id, note: '设置页备注' });
+ok(edited.ok && edited.receipt === '已保存', '11. 改一条' + (edited.error ? '：' + edited.error : ''));
+eq((await json('/engine/memories?session_id=main')).entries[0].note, '设置页备注', '11. 改上了');
+const req = await send('/engine/memory/request', 'POST', { session_id: 'main', kind: 'fold' });
+ok(req.ok && typeof req.receipt === 'string' && req.receipt !== '', '11. 立即汇总：给回执（这里没有子代理服务）' + (req.error ? '：' + req.error : ''));
+eq((await json('/engine/diaries?session_id=main')).diaries, [], '11. 还没写过日记');
+ok((await send('/engine/memory', 'DELETE', { session_id: 'main', memory_id: one.id })).ok, '11. 删一条');
 server.close();
 
 await fiber.dispose();
