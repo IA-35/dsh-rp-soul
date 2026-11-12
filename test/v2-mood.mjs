@@ -137,6 +137,8 @@ ok(run(happy, { summary: 'x', tags: ['intimate'], consent: true, her: { did: '�
 const lines = look(trust, at(6)).lines.join('\n');
 has(lines, '对主人的态度：陌生', '7. 快照里有态度');
 has(lines, '心情：平稳', '7. 有心情档位');
+has(lines, '平稳：照常的尺度', '7. 档位后面跟着这一轮说话的尺度');
+ok(look(broken, at(1), { persona: breakPersona }).lines.some((l) => l.includes('很难过') && l.includes('几乎不想说话')), '7. 难过时的尺度是收着的');
 has(lines, '心里对你多了几分信任（+3，刚才）', '7. 想法带分量和多久以前（快照里只粗到「刚才 / N 小时前」，不跟着分钟变）');
 has(lines, '可能发生：', '7. 有候选');
 
