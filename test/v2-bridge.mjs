@@ -57,6 +57,7 @@ eq([...tools.keys()].sort(), ['soul_admin', 'soul_commit', 'soul_state'], '1. �
 const bytes = [...tools.values()].reduce((n, t) => n + Buffer.byteLength(JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters })), 0);
 ok(bytes < 11 * 1024, '1. 工具定义一共 ' + bytes + ' 字节，小于 11 KB');
 ok('feel' in tools.get('soul_commit').parameters.properties, '1. 交账表里有情绪模块的字段');
+ok('remember' in tools.get('soul_commit').parameters.properties, '1. 交账表里有记忆模块的 remember');
 ok(contexts.has('soul-engine'), '1. 快照照旧注册成动态上下文');
 
 // ---- 2. 快照：第一次装配就地开局 ----
@@ -228,7 +229,8 @@ ok((await call('soul_admin', { action: 'resume' }, a)).paused === false, '10. �
 ok(!('input' in (await call('soul_admin', { action: 'log', limit: 1 }, a)).log[0]), '10. log 不带每次交了什么（太长）');
 
 // ---- 11. 设置页「记忆」页 ----
-// 回合结束的钩子（宿主真的会发）：攒够四轮落一条原文
+// 回合结束的钩子只加召回活跃度；ABM 的正文是她在交账时自己写的
+const before11 = (await json('/engine/memories?session_id=main')).entries.length;
 for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我能上去看吗', '可以，小心台阶。'], ['好冷', '把外套给你。'], ['谢谢', '嗯。']]) {
   const ag = { agent: { id: 'a1', session: { header: {}, deriveMessages: () => [
     { role: 'user', content: [{ type: 'text', text: said }] },
@@ -236,8 +238,12 @@ for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我�
   ] } } };
   await app.serial('agent/turn-stopping', ag);
 }
+eq((await json('/engine/memories?session_id=main')).entries.length, before11, '11. 钩子不再记原文：一句也没多');
+contexts.get('soul-engine').text(a);
+const wrote = await call('soul_commit', { summary: '他上来看了灯。', remember: '他摸黑上塔，到顶的时候风很大。' }, a);
+ok(wrote.committed, '11. 她在交账时写了 remember：' + JSON.stringify(wrote));
 const memo = await json('/engine/memories?session_id=main');
-ok(memo.ok && memo.entries.some((e) => e.content.includes('你：好冷\n她：把外套给你。')), '11. 回合结束的钩子记下了原文' + (memo.error ? '：' + memo.error : ''));
+ok(memo.ok && memo.entries.some((e) => e.content === '他摸黑上塔，到顶的时候风很大。'), '11. ABM 里是她自己写的那一句' + (memo.error ? '：' + memo.error : ''));
 ok(memo.counts && memo.capacity.abm === 20 && memo.capacity.clpa === null, '11. 各层条数和容量');
 const one = memo.entries[0];
 const edited = await send('/engine/memory', 'PUT', { session_id: 'main', memory_id: one.id, note: '设置页备注' });

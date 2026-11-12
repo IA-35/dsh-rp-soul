@@ -8,19 +8,19 @@ import * as L from '../lib/engine/modules/memory/layers.js';
 import * as RC from '../lib/engine/modules/memory/recall.js';
 import { recallText } from '../lib/engine/modules/memory/index.js';
 import { createEngine } from '../lib/engine/index.js';
-import { mountMemoryHost, batchText, splitFold, foldLimit, clipMiddle, tidyText, budgetSources } from '../lib/engine-v2-memory.js';
+import { mountMemoryHost, splitFold, foldLimit, clipMiddle, budgetSources } from '../lib/engine-v2-memory.js';
 
 const t0 = '2026-11-11T20:00:00+08:00'; // 周三
 const at = (minutes) => T.addMinutes(t0, minutes);
 const abm = (slice, text, minutes, extra = {}) => L.add(slice, { layer: 'abm', type: 'conversation', content: text, importance: 0.3, at: at(minutes), ...extra }).slice;
 
-// ---- 1. 三层：记、去重、衰减 ----
+// ---- 1. 三层：记、衰减 ----
 let s = L.init();
-const n1 = L.noteExchange(s, { text: '你：今天下雨了 她：我把伞放门口了' }, at(0));
-ok(n1.entry.layer === 'abm' && n1.entry.type === 'conversation', '1. 宿主记的一段进 ABM');
+const n1 = L.add(s, { layer: 'abm', type: 'conversation', content: '今天下雨了，我把伞放门口了', importance: 0.3, at: at(0) });
+s = n1.slice;
+ok(n1.entry.layer === 'abm' && n1.entry.type === 'conversation', '1. 她自己写的一条进 ABM');
 ok(n1.entry.keywords.includes('下雨'), '1. 汉字两两切成关键词');
-ok(L.noteExchange(n1.slice, { text: '你：今天下雨了 她：我把伞放门口了' }, at(1)).duplicate, '1. 同一段再来一次：不重复记');
-eq(L.noteExchange(s, { text: '你：x', together: false }, at(0)).entry.type, 'experience', '1. 她自己醒着：记成 experience');
+eq(L.add(s, { layer: 'abm', type: 'experience', content: '我自己醒着', importance: 0.3, at: at(0) }).entry.type, 'experience', '1. 她自己醒着的那一轮：记成 experience');
 const scm = { id: 'm9', layer: 'scm', a0: 1, t0: at(0), pinned: false };
 ok(Math.abs(L.activity(scm, at(30 * 1440)) - 0.995 ** 720) < 1e-9, '1. SCM 每小时衰减 0.005');
 eq(L.activity({ ...scm, layer: 'clpa' }, at(30 * 1440)), 1, '1. CLPA 不衰减');
@@ -91,7 +91,7 @@ has(text, '（周三晚上 20:00）', '6. 带着那是什么时候');
 eq(recallText(mem, '今天吃什么', at(60)), '', '6. 什么都没勾起：空串');
 has(recallText({ ...mem, diary_last: { day: '2026-11-11', text: '今天下雨。' } }, '', at(60), { firstTurn: true }), '你最近的一篇日记（11月11日 · 周三）', '6. 新会话第一轮带上最近一篇日记');
 
-// ---- 7. 引擎：ABM 的正文是原文；交账只留原文里没有的；宿主记的不动 revision ----
+// ---- 7. 引擎：ABM 的正文是她自己写的 remember；里程碑和原话并进那一条 ----
 const persona = { id: 'lin_wan', name: '林晚', mood_base: 55 };
 let nowMs = Date.parse(t0);
 const tick = (minutes) => { nowMs += minutes * 60000; };
@@ -102,27 +102,27 @@ const engine = createEngine({ dataDir, clock: () => new Date(nowMs) });
 const memOf = () => engine.panel('memory', { persona });
 engine.start(persona);
 engine.commit({ summary: '他说起下雨。', quotes: ['伞放门口了'], feel: [{ label: '他还记得', delta: 9, because: '他记得伞' }] }, { persona, said: true });
-eq(memOf().counts.abm, 0, '7. 交账的 summary 不进记忆（那是第三人称的流水）');
+eq(memOf().counts.abm, 0, '7. 只交 summary、不写 remember：这一轮不进记忆');
 const rev = engine.context({ persona }).revision;
 tick(1);
-ok(engine.noteExchange({ text: '你：今天下雨了\n她：伞放门口了，你别淋着。' }).id, '7. 宿主记原文');
+ok(engine.commit({ summary: '聊了下雨。', remember: '他说起下雨，我把伞放门口了。' }, { persona, said: true, revision: rev }).ok, '7. 带着 remember 交账：过');
 const first = memOf().entries[0];
-eq(first.quotes, ['伞放门口了'], '7. 交账挂着的原话并进这条原文');
+eq(first.content, '他说起下雨，我把伞放门口了。', '7. ABM 的正文就是她写的那一句');
+eq(first.quotes, ['伞放门口了'], '7. 前面挂着的那句原话并进这一条');
 ok(first.importance > 0.3, '7. 这一次的心事让它更重（' + first.importance + '）');
-has(first.content, '你：今天下雨了\n她：', '7. 一轮一组，换行留着');
-eq(engine.context({ persona }).revision, rev, '7. 宿主记的不动 revision');
-ok(engine.commit({ summary: '接着聊。' }, { persona, said: true, revision: rev }).ok, '7. 模型拿着记之前的 revision 交账：照样过');
 tick(1);
 engine.commit({ summary: '说好周末去看海。', promise: [{ title: '去看海', in_minutes: 3000 }], away: '她下午去花店进了一批洋桔梗' }, { persona, said: true });
-eq(memOf().entries[0].content, '她下午去花店进了一批洋桔梗', '7. away 原文里没有：交账时直接记成一段经历');
-engine.noteExchange({ text: '你：周末去看海吧\n她：好，说定了。' });
-const pinned = memOf().entries.find((e) => e.content.includes('说定了'));
-ok(pinned.pinned && pinned.milestone.includes('first_promise'), '7. 第一次立约定：里程碑落在那一轮的原文上，钉住');
-engine.noteExchange({ text: '你：嗯\n她：嗯。' });
-ok(!memOf().entries.find((e) => e.content.includes('嗯。')).pinned, '7. 里程碑只并进一条');
+eq(memOf().entries[0].content, '她下午去花店进了一批洋桔梗', '7. away 照旧记成一段经历');
+const before7 = memOf().counts.abm;
+engine.commit({ summary: '说定了。', remember: '我们第一次说好周末去看海。', promise: [{ title: '去海边', in_minutes: 3000 }] }, { persona, said: true });
+const pinned = memOf().entries.find((e) => e.content.includes('看海'));
+ok(pinned.pinned && pinned.milestone.includes('first_promise'), '7. 第一次立约定：里程碑落在她这一条上，钉住');
+eq(memOf().counts.abm, before7 + 1, '7. 一次 remember 只落一条');
+engine.commit({ summary: '嗯。' }, { persona, said: true });
+eq(memOf().counts.abm, before7 + 1, '7. 不写 remember：不落');
 tick(90);
 const due = engine.memoryDue();
-ok(due.fold !== null && due.fold.sources.length >= 3, '7. 停了一个半小时：该收了');
+ok(due.fold !== null && due.fold.sources.length >= 2, '7. 停了一个半小时：该收了');
 ok(engine.applyFold(due.fold.ids, '那晚聊了下雨和看海。', []).ok, '7. 收成一条 SCM');
 eq(memOf().counts.abm, 0, '7. ABM 清空');
 eq(memOf().counts.clpa, 1, '7. 里程碑进了 CLPA');
@@ -141,12 +141,13 @@ ok(owed !== null && engine.applyDiary(owed.day, owed.ids, '今天下雨。').ok,
 eq(engine.memoryDue().diary, null, '7. 写过就不欠了');
 engine.setToggles({ memory: false });
 eq(engine.recall('下雨'), '', '7. 关掉记忆：不再想起来');
-eq(engine.noteExchange({ text: 'x' }), null, '7. 也不再记');
+eq(memOf(), null, '7. 关掉记忆：设置页那一层也不给');
+engine.commit({ summary: '关着的时候记一笔。', remember: '下雨了。' }, { persona, said: true });
 engine.setToggles({});
+eq(memOf().counts.abm, 0, '7. 关着的时候写 remember：不落');
 
-// ---- 8. 宿主那一半：攒批（不过子代理）、原文收窄、子代理整理、日记文件 ----
+// ---- 8. 宿主那一半：不再记原文、子代理整理、日记文件 ----
 eq(clipMiddle('一二三四五六七八九十', 7), '一二三四…九十', '8. 掐中间留头尾');
-eq(tidyText('看这段：\n```js\nconst a = 1;\n```\n好了'), '看这段： 〔代码〕 好了', '8. 代码块换成〔代码〕');
 eq(budgetSources([{ text: 'a'.repeat(9000) }, { text: 'b'.repeat(9000) }], 12000).map((s) => s.text.length), [6000, 6000], '8. 喂子代理的总量超了：每条平分');
 const prompts = [];
 const fakeCtx = {
@@ -171,17 +172,16 @@ const host = mountMemoryHost({
 nowMs = Date.parse('2026-11-12T10:00:00+08:00');
 const abmCount = () => memOf().counts.abm;
 await host.noteTurn(turn('嗯', '嗯。'));
-eq(abmCount(), 0, '8. 一轮「嗯」：先攒着');
-engine.commit({ summary: '他问然后呢。' }, { persona, said: true });
+eq(abmCount(), 0, '8. 宿主不再记原文：一轮「嗯」什么也不落');
+ok(engine.commit({ summary: '他问然后呢。', away: '她上午收拾了屋子。' }, { persona, said: true }).ok, '8. 隔了一夜，补一句她做了什么再交账');
+eq(abmCount(), 1, '8. 这一条是她不在时的事，不是原文');
 await host.noteTurn(turn('然后呢', '然后她笑了。'));
 await host.noteTurn(turn('真的吗', '真的。'));
 await host.noteTurn(turn('那就好', '这一段很长：' + '她讲了很久很久。'.repeat(200) + '最后她问你明天还来吗？'));
-eq(abmCount(), 1, '8. 攒够四轮落一条（交过账的那轮照样记）');
-const written = memOf().entries[0].content;
-has(written, '你：然后呢\n她：然后她笑了。', '8. 一轮一组铺开');
-ok(written.includes('最后她问你明天还来吗？') && written.length < 1500, '8. 太长的回复掐中间：结尾那句问话留着，整条 ' + written.length + ' 字');
+eq(abmCount(), 1, '8. 聊了四轮，她都没写 remember：还是那一条');
+engine.commit({ summary: '记一笔。', remember: '他问了我好几次「真的吗」，我笑了。' }, { persona, said: true });
+eq(abmCount(), 2, '8. 她写了 remember：落一条');
 ok(!prompts.some((p) => p.label === '筛记忆'), '8. ABM 不过子代理');
-eq(batchText([{ said: 'a', reply: 'b' }]), '你：a\n她：b', '8. batchText');
 eq(splitFold('正文\nKEEP: m3, m4, m5', 300), { text: '正文', keep: ['m3', 'm4'] }, '8. KEEP 最多两条');
 eq(foldLimit([{ when: 'a' }, { when: 'b' }, { when: 'b' }]), 340, '8. 多一个时间点多 40 字');
 tick(70);

@@ -415,7 +415,7 @@ responses.set('GET /rp-soul/engine/memories', () => jsonResponse({
   deletions: [{ turn: 2, memory_id: 'm0', layer: 'scm', content: '不想记得的事', reason: '设置页手动删除', created_at: 'x' }],
   entries: [
     { id: 'm3', layer: 'abm', layer_label: 'ABM', type: 'conversation', content: '他今晚又来了', importance: 0.3, activity: 1,
-      when: '10.29 周四 19:12', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, you: '我来了', quotes: ['坐吧'] },
+      when: '10.29 周四 19:12', keywords: ['今晚'], origin_ids: [], pinned: false, edited: false, note: '', turn: 3, quotes: ['坐吧'] },
     { id: 'm4', layer: 'abm', layer_label: 'ABM', type: 'action', content: '她推过来一杯热水', importance: 0.3, activity: 1,
       when: '10.29 周四 19:12', keywords: [], origin_ids: [], pinned: false, edited: false, note: '', turn: 3 },
     { id: 'm2', layer: 'scm', layer_label: 'SCM', type: 'summary', content: '下雨那天', importance: 0.5, activity: 0.4,
@@ -575,7 +575,7 @@ eq(memTree.props['data-tab'], 'memory', '11. 切到「记忆」页');
 ok(calls.some((c) => c.method === 'GET' && c.url.indexOf('/rp-soul/engine/memories') === 0), '11. 记忆页读 /engine/memories');
 const memText = textOf(memTree);
 has(memText, '他今晚又来了', '11. 列出 ABM');
-has(memText, '你说：我来了', '11. ABM 的条目带你说的话');
+hasNot(memText, '你说：', '11. ABM 条目不再带「你说」');
 has(memText, '我们是在雨夜认识的', '11. CLPA 篇章带');
 has(memText, 'SCM 1/50', '11. 层过滤按钮带数量/容量');
 has(memText, '收进 SCM（1 条）', '11. 提示下一次提交要收的那批');
