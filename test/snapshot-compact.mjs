@@ -36,12 +36,23 @@ function host(session) {
 
 const snapshotsSeen = (session) => session.deriveMessages().filter((m) => m.source?.kind === 'runtime-context').map((m) => m.content[0].text);
 
-/** 走一步：宿主判 → 我们清 → 宿主追加 → 这一步里双方各说一句。 */
+/**
+ * 走一步，按宿主 turn() 的真实顺序：turn/start（换回合时）→ step/start → 判 → 我们清 →
+ * 宿主追加 → 这一步的话 → step/end。
+ * 顺序不是讲究：清理必须落在 step/start 之后，否则整份日志读不回来（见 lib 里的长注释）。
+ */
+const openTurn = new WeakMap();
 function runStep(session, h, text, turn, step) {
+  if (openTurn.get(session) !== turn) {
+    session.append('turn/start', { turn });
+    openTurn.set(session, turn);
+  }
+  session.append('step/start', { turn, step });
   const decision = h.decide(text);
   const cleared = compactSnapshots(session, { turn, step }, bringsSnapshot(decision));
   h.step(text);
   session.append('user/message', user('第 ' + turn + '.' + step + ' 步的对话'), { surfaceOp: 'append' });
+  session.append('step/end', { turn, step });
   return cleared;
 }
 
@@ -61,7 +72,7 @@ ok(!s.deriveMessages().some((m) => m.role === 'developer'), '1. 清掉的那些�
 // ---- 2. 快照没变：最新那条不动（不白白重写尾部） ----
 const before = s.seq;
 eq(runStep(s, h, '时间：14:49', 3, 1), 0, '2. 没变：一条都不清');
-eq(s.seq, before + 1, '2. 日志里只多了这一步的那句对话');
+eq(s.seq, before + 4, '2. 日志里只多了这一步的 step/start、那句对话、step/end（换了回合还要 turn/start）');
 eq(snapshotsSeen(s), ['时间：14:49'], '2. 还是那一条');
 
 // ---- 3. 老会话：以前留下的「·」占位一并清掉，一步最多 200 条 ----
@@ -72,12 +83,49 @@ for (let i = 0; i < 250; i += 1) {
 }
 old.append('user/message', user('最新快照', 'runtime-context'), { surfaceOp: 'append' });
 eq(staleNodes(old, false).length, COMPACT_PER_STEP, '3. 一步最多清 ' + COMPACT_PER_STEP + ' 条');
-compactSnapshots(old, { turn: 9, step: 1 }, false);
-compactSnapshots(old, { turn: 9, step: 2 }, false);
-compactSnapshots(old, { turn: 9, step: 3 }, false);
+/** 老会话收尾：开一个真 step 再清（compactSnapshots 只认开着的 step）。 */
+function compactInStep(session, turn, step, all) {
+  session.append('turn/start', { turn });
+  session.append('step/start', { turn, step });
+  const n = compactSnapshots(session, { turn, step }, all);
+  session.append('step/end', { turn, step });
+  session.append('turn/end', { turn, reason: { kind: 'completed' } });
+  return n;
+}
+compactInStep(old, 9, 1, false);
+compactInStep(old, 10, 1, false);
+compactInStep(old, 11, 1, false);
 const left = old.deriveMessages();
 eq(left.length, 1, '3. 清了三步：只剩最新那条快照');
 eq(left[0].content[0].text, '最新快照', '3. 留下的是最新的');
+
+// ---- 3b. 没有开着的 step 时一条都不写（这是那次会话损坏的根） ----
+//
+// 日志校验器只认「已打开 turn + 已打开 step」里的 developer/message。以前的写法在
+// pre-step 里清，那时 step/start 还没 append，几百条 developer 消息就落在这个空档里，
+// 日志一读回来判 `does not match an open turn and step`——不可逆。
+const closed = Session.create('s4');
+closed.append('user/message', user('旧快照', 'runtime-context'), { surfaceOp: 'append' });
+closed.append('turn/start', { turn: 1 });
+closed.append('step/start', { turn: 1, step: 1 });
+closed.append('step/end', { turn: 1, step: 1 });
+closed.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+const devBefore = closed.snapshotEvents().filter((e) => e.type === 'developer/message').length;
+eq(compactSnapshots(closed, { turn: 2, step: 1 }, true), 0, '3b. 回合已关：一条都不写');
+eq(closed.snapshotEvents().filter((e) => e.type === 'developer/message').length, devBefore, '3b. 日志里没多出 developer/message');
+// 换回合但 step 还没开（正是旧写法出事的那个瞬间）
+const gap = Session.create('s5');
+gap.append('user/message', user('旧快照', 'runtime-context'), { surfaceOp: 'append' });
+gap.append('turn/start', { turn: 2 });
+eq(compactSnapshots(gap, { turn: 2, step: 1 }, true), 0, '3b. turn 开着但 step 没开：也不写');
+// 名字传错了也不写：以日志里真正开着的那一步为准，绝不硬猜
+const trust = Session.create('s6');
+trust.append('user/message', user('旧快照', 'runtime-context'), { surfaceOp: 'append' });
+trust.append('turn/start', { turn: 4 });
+trust.append('step/start', { turn: 4, step: 2 });
+eq(compactSnapshots(trust, { turn: 9, step: 9 }, true), 1, '3b. 传错位置但 step 确实开着：照日志写');
+const trustWrites = trust.snapshotEvents().filter((e) => e.type === 'developer/message');
+eq([trustWrites[0].data.turn, trustWrites[0].data.step], [4, 2], '3b. 写的是日志里开着的 turn/step，不是传进来的');
 
 // ---- 4. 宿主的 decision 怎么认 ----
 ok(bringsSnapshot({ messages: [user('x', 'runtime-context')] }), '4. 带着 runtime-context 消息：新快照要来');
@@ -100,10 +148,14 @@ ok(preStep !== undefined && sessionEvent !== undefined, '5. 两个钩子都挂�
 const fake = {
   seq: 1,
   writes: [],
+  log: [],
   get surface() { return { nodes: [0] }; },
   eventAt: () => ({ type: 'user/message', data: { source: { kind: 'runtime-context' }, content: [{ type: 'text', text: '旧快照' }] } }),
+  // compactSnapshots 写之前要问日志「现在真有开着的 step 吗」，这里照着 append 记账即可
+  snapshotEvents() { return this.log; },
   append(type, data) {
     order.push(type + '@' + this.seq);
+    this.log.push({ type, seq: this.seq, data });
     if (type === 'developer/message') this.writes.push({ turn: data.turn, step: data.step, seq: this.seq });
     this.seq += 1;
   },
