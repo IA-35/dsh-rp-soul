@@ -351,11 +351,9 @@ childHooks.clear();
 expandComponents = true;
 responses.set('GET /rp-soul/state', () => jsonResponse(statePayload));
 responses.set('GET /rp-soul/engine', () => jsonResponse({
-  health: { enabled: true, present: true, python: { ok: true, version: [3, 12, 8] }, dataDir: 'C:/x/rp-soul/engine', ready: true },
+  health: { enabled: true, present: true, dataDir: 'C:/x/rp-soul/engine', ready: true },
   persona: { title: '雨夜诊所', personaId: 'rain_clinic', bytes: 1024, files: ['SOUL.md'], front: { id: 'rain_clinic', title: '雨夜诊所', cast: [{}], places: [{}, {}] }, error: null },
-  sessionsFile: 'C:/x/rp-soul/engine-sessions.json',
-  sessions: [{ key: 'shared', session_id: 's_test01', turn: 3 }],
-  session: { key: 'shared', session_id: 's_test01', revision: 7, turn: 3, persona_title: '雨夜诊所' },
+  session: { session_id: 's_test01', revision: 7 },
 }));
 responses.set('GET /rp-soul/engine/moods', () => jsonResponse({
   ok: true,
@@ -696,9 +694,9 @@ hookState.length = 0;
 hookDeps.length = 0;
 childHooks.clear();
 responses.set('GET /rp-soul/engine', () => jsonResponse({
-  health: { enabled: true, present: true, python: { ok: true, version: [3, 12, 8] }, dataDir: 'C:/x', ready: true },
+  health: { enabled: true, present: true, dataDir: 'C:/x', ready: true },
   persona: { title: '', personaId: '', bytes: 0, files: [], front: {}, error: null },
-  sessionsFile: 'C:/x/s.json', sessions: [], session: null,
+  session: null,
 }));
 const emptyPersona = await renderUntil((t) => t.props['data-render-state'] === 'ready');
 findButton(emptyPersona, '情绪').props.onClick();

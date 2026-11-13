@@ -1,5 +1,10 @@
 # 插件注入的内容：一份真实样例
 
+> **这份样例是 2026-11-13 之前、Python 侧车时代跑的**，字节数只对得上那一版。
+> 现在的结构没变（人设进 `section`、局面进 `soul-engine`、想起来的东西进 `soul-recall`），
+> 但字段名、工具定义大小、`soul_commit` 的字段都换了——以 `docs/engine-js-design.md` 和代码为准。
+> 下文里的 `domain/*.py`、`lib/engine-bridge.js`、`plan_next`、`offscreen_beat` 都是旧形态。
+
 数字是这次真跑出来的：宿主的 `SystemPrompt` + 真 Python 侧车 + 一份临时账本（`s_39eb2f2f`，第一天 18:48，ABM 3 条、SCM 2 条、CLPA 1 条、常识 3 条）。不是照旧文档抄的。
 
 ---
@@ -70,7 +75,7 @@
 
 多出来的 410 字节里：两条记忆 353 B，常识一段 106 B（含 `## 常识` 首行和末尾换行）。
 
-### 逐行的来源（`lib/engine-bridge.js` 的 `snapshotText`）
+### 逐行的来源（`lib/engine-v2-bridge.js` 的 `snapshotText`）
 
 | 行 | 从哪来 | 备注 |
 |---|---|---|
@@ -83,7 +88,7 @@
 | 可能发生 | `context.agency[0].options[0]` | 第一个候选 + 它的 `because` |
 | 上一个悬念 | `context.open_action` | 上一次留下的未决动作 |
 | 【她想起来的】 | `context.memories[]` | 从 SCM / CLPA 挑，**ABM 不进**（对话本身就在上下文里）。每行是 `[记得多清楚] 正文（多久前）`，档位来自活跃度的四档映射 |
-| ## 常识 | `context.common` | `domain/common.py:87 render()` 渲染好的整段 |
+| ## 常识 | `context.common` | `lib/engine/modules/common/index.js` 的 `render()` 渲染好的整段 |
 
 **线索是哪来的**：装配系统提示词那一刻，`cueOf(context)` 从 `context.agent.session.deriveMessages()` 倒着找最后一条 `role === "user"` 且 `source.kind === "user"` 的文本块（别人注入的 goal、压缩摘要不算），截 500 字，拿它去挑记忆和常识。所以**不需要模型自己调工具**，说中关键词的那一轮就已经在上下文里了。
 
@@ -196,12 +201,14 @@ full 反而**比 brief 小**（1838 vs 1921）——它不带 `commit_template` 
 ## 八、自己复现
 
 ```bash
-cd "F:/DSH Workspace/_tmp_rp_soul/engine"
-echo '{"session_id":"s_cd96ac0f","depth":"brief","cue":"你回来啦"}' \
-  | python -m rp_soul_engine --data-dir "C:\Users\Administrator\.dsh\rp-soul\engine" get-context
+cd "F:/DSH Workspace/_tmp_rp_soul"
+node -e "import('./lib/engine/index.js').then(({createEngine}) => {
+  const e = createEngine({ dataDir: 'C:/Users/Administrator/.dsh/rp-soul/engine' });
+  const persona = {};                       // 从 rp-soul/persona.md 读出来的 front
+  console.log(e.context({ persona }).lines.join('\n'));
+  e.close();
+})"
 ```
-
-把 `brief` 换成 `full` 就是完整档。
 
 `cue` 平时不用传：插件装配时自己从会话里取最后一条真实用户消息。上面手动传是为了单独复现某句话的效果。
 

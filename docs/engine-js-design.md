@@ -10,9 +10,9 @@
 
 ## 0. 为什么重写
 
-| 现在 | 代价 |
+| 重写前 | 代价 |
 |---|---|
-| Python 侧车 + stdio 协议（`engine-client.js` 407 行、`__main__` 255 行） | 找 Python、进程起不来、卡死要杀、超时、Windows 换行、两边 schema 对齐测试 |
+| Python 侧车 + stdio 协议（`engine-client.js` 407 行、`__main__` 255 行；2026-11-13 已删） | 找 Python、进程起不来、卡死要杀、超时、Windows 换行、两边 schema 对齐测试 |
 | 从 adult-tension 移植，多角色写法还剩 67 处（`characters` 字典、`npc_id`、在场名单、`her>player` 边） | 每条规则都要先「找到那个角色」 |
 | 模型交账：12 个 op、5 种 action_mode、5 种回应、19 个内容标签、`acts_on_her` / `player_authorized` | 上周实测交账失败率 69% |
 | `service.py` 1816 行 / 97 个函数，40 个命令；记忆模块一改就牵动引擎、桥接、设置页三处 | 改一处穿三层 |
@@ -280,7 +280,7 @@ lib/engine/
 - 只有 `store.js` 认识 SQLite，外面只认它的接口。
 - 新库和旧库（Python 引擎的 `engine.db`）分开放：新的叫 `engine-v2.db`，旧的原样留着，导入从旧库读。
 
-桥接层 `engine-bridge.js` 直接调 `lib/engine`，不再有 `EngineClient`、进程、超时、`probePython`。
+桥接层 `engine-v2-bridge.js` 直接调 `lib/engine`，没有 `EngineClient`、没有子进程、没有超时探测。
 宿主那一半（DSH 对话结束的钩子、唤醒定时器、设置页路由）由 `registry.js` 按开关挂上 / 摘下。
 
 ## 6. 保什么、砍什么（请过目）
@@ -318,13 +318,11 @@ lib/engine/
 2. **情绪模块**：心事 → 态度 → 自主行动；现有 Python 测试里对应的规则用例逐条翻成 JS，加「关掉情绪、内核照常跑」。
 3. **存储与 API**：`store.js`（`node:sqlite`）+ `index.js`；撤销、清空；一次交账在一个事务里的测试。
 4. **接上工具，第一次真机**：`soul_state` / `soul_commit` 走新引擎，交账表按第 3 节。
-   配置里加 `engine: "js" | "python"`，默认还是 python，随时能切回去。
    先拿上周真实失败过的交账重放，再你在 DSH 里用几天，用 `scan_commits.mjs` 量一次过的比例。
    **这一步没到 90%，先改交账合同，不往下搬。**
    - 已做：`lib/engine-v2-bridge.js`，对 index.js / wake.js 露出和旧桥接同样的方法；记忆、常识、
      设置页那些命令在 js 下是空操作或明说「还不支持」，唤醒在 js 下不定时。
-   - 试用：`$DSH_HOME/rp-soul/config.json` 里加 `"engine": "js"`，重启 DSH（它优先于插件配置）。
-     数据在 `rp-soul/engine/engine-v2.db`，和旧的 `engine.db` 互不相干，删掉这一行就切回去。
+   - 数据在 `rp-soul/engine/engine-v2.db`，和旧的 `engine.db` 互不相干。
    - 重放（`test/v2-bridge.mjs` 第 5 段）：上周 31 次驳回归成 7 类，按新合同的写法全部一次过。
      为此放宽了两处：`feel.because` 认不出的 key 不驳回，退回成这条心事本身并说一声
      （同一次里先 `learned` 再引用也认）；`bond: {}` 当没写。
@@ -375,7 +373,10 @@ lib/engine/
    schema 同步测试，`feat/lite` 分支也删掉（等同于 `memory` 关掉）。
    - 已切：插件配置 `engine` 默认 `js`（你拍板：验收在另一台机器上量，这台上新引擎只交过 1 次账，第 1 条没在这里量）。
      第 2 条：三个工具 10,449 字节（soul_commit 9,056），小于 11 KB，余量不到 1 KB；第 3 条：真实库副本八项对上。
-     旧引擎的测试（engine / engine-http / prompt）改成显式 `engine: "python"`。Python 引擎还没删。
+   - **已删**（2026-11-13）：`engine/`（Python 包）、`lib/engine-bridge.js`、`lib/engine-client.js`，
+     以及 `test/engine.mjs` / `test/engine-http.mjs` / `test/schema-sync.mjs`；`test/prompt.mjs` 直接开
+     `lib/engine` 灌数据。插件配置里的 `engine` / `engineTimeoutMs` / `engineSessions` 三个键一并去掉，
+     会话映射表没了——全局只有一局。旧存档仍可导入（`lib/engine/import-v1.js` 只读 `engine.db`）。
 
 ## 9. 要你拍板的
 

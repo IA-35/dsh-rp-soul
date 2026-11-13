@@ -1,11 +1,12 @@
-/* 真实 Cordis + DSH SystemPrompt + Python 侧车：首次装配不能依赖模型先调工具。 */
+/* 真实 Cordis + DSH SystemPrompt + 进程内引擎：首次装配不能依赖模型先调工具。 */
 import { Context } from '@deepseek-ai/cordis';
 import { SystemPrompt, renderPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { assembleContextFor } from '@deepseek-ai/dsh-agent';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EngineClient } from '../lib/engine-client.js';
+import { createEngine } from '../lib/engine/index.js';
+import * as CM from '../lib/engine/modules/common/index.js';
 import * as plugin from '../lib/index.js';
 import { eq, ok, has, hasNot, done } from './_check.mjs';
 
@@ -22,20 +23,19 @@ const personaYaml = Object.entries({ id: 'lin_wan', name: '林晚', age: 31, gen
   + String.fromCharCode(10) + 'voices:' + String.fromCharCode(10) + '  surface: 说话克制' + String.fromCharCode(10) + '  inner: 总在算时间' + String.fromCharCode(10);
 writeFileSync(join(home, 'rp-soul', 'persona.md'), personaYaml);
 writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->' + String.fromCharCode(10) + persona.prose + String.fromCharCode(10));
-writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->' + String.fromCharCode(10) + persona.prose + String.fromCharCode(10));
 process.env.DSH_HOME = home;
-const client = new EngineClient({ dataDir: join(home, 'rp-soul', 'engine') });
-let request = 0;
-const rid = () => 'prompt_request_' + (++request);
-const start = async () => client.call('new-game', { request_id: rid(), persona, seed: 7 });
-const commit = async (row, suspense) => {
-  const data = await client.call('commit-turn', {
-    session_id: row.session_id, request_id: rid(), expected_revision: row.revision,
-    turns: [{ action_mode: 'result', player_input: '你好', operations: [], content_tags: [], summary: '你们聊了一会儿。', open_action: suspense }],
-  });
-  return { ...row, revision: data.revision, turn: data.turn };
+// 直接开同一个库灌数据：插件挂上后读的就是这一局（引擎无子进程、无会话映射表）。
+const dataDir = join(home, 'rp-soul', 'engine');
+const seed = createEngine({ dataDir });
+const her = { ...persona.front, id: 'lin_wan', name: '林晚', revision: 'seed', mood_base: 60, start_stage: 'familiar' };
+seed.start(her);
+/** 灌一次交账，返回新的 revision。 */
+const commitSeed = (open) => {
+  const revision = seed.context({ persona: her }).revision;
+  const out = seed.commit({ summary: '你们聊了一会儿。', open }, { persona: her, said: true, revision });
+  if (!out.ok) throw new Error('灌数据失败：' + JSON.stringify(out.problems));
+  return out.revision;
 };
-const mappingPath = join(home, 'rp-soul', 'engine-sessions.json');
 const storePath = join(home, 'rp-soul', 'config.json');
 const agentA = { id: 'conversation-A' }, agentB = { id: 'conversation-B' };
 const app = new Context();
@@ -61,17 +61,12 @@ const assemble = async (agent, signal) => app.systemPrompt.assemble(agent ? asse
 const engineText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-engine')?.text ?? '';
 // 「她想起来的」单独一段：跟着你这句话变的东西都在这里，局面那段才能保持不变。
 const recallText = (assembly) => assembly.contexts.find((s) => s.name === 'soul-recall')?.text ?? '';
-// 后台的活是异步的：等它做完，最多等两秒
-const waitFor = async (check) => {
-  for (let i = 0; i < 100 && !(await check()); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
-};
 try {
-  const a = await commit(await start(), '重启前留下的悬念A');
-  const b = await commit(await start(), '另一局留下的悬念B');
-  writeFileSync(mappingPath, JSON.stringify({ shared: a }));
+  const firstRevision = commitSeed('重启前留下的悬念A');
+  ok(firstRevision > 0, '1. 灌进去一局，账本 revision 往前走');
   promptFiber = app.plugin(SystemPrompt, SystemPrompt.Config({ includeHarnessIdentity: false }));
   await promptFiber;
-  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
 
   // 没有 tools 服务，没有调用 soul_state：直接走宿主的真实装配入口。
@@ -81,50 +76,36 @@ try {
   has(engineText(first), '心情：', '1. 动态上下文实际包含引擎状态');
   // 关键回归：账本绝不能回到系统提示词里，否则前缀哈希每回合都变、缓存全废。
   hasNot(renderPrompt(first), '心情：', '1. 系统提示词里不含引擎状态（前缀必须恒定）');
-  const next = await commit(a, '外部更新后的悬念A');
+  const next = commitSeed('外部更新后的悬念A');
   has(engineText(await assemble(agentA)), '外部更新后的悬念A', '2. 下一次装配重新读取数据，不依赖工具更新缓存');
-  eq(JSON.parse(readFileSync(mappingPath)).shared.revision, next.revision, '2. 会话映射也追上最新 revision');
+  eq(seed.context({ persona: her }).revision, next, '2. 装配读到的是最新 revision');
 
   // 最要紧的一条回归：账本变了，系统提示词必须**逐字节不变**。
   // 缓存按整段前缀的字节哈希命中，只要有一个字节变了，整个前缀就废。
   const promptA = renderPrompt(await assemble(agentA));
-  const again = await commit(next, '外部更新后的悬念A');
+  commitSeed('外部更新后的悬念A');
   const promptB = renderPrompt(await assemble(agentA));
   eq(promptB, promptA, '2. 账本更新后系统提示词逐字节不变（缓存前缀可一直命中）');
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
   has(engineText(await assemble(agentA)), '外部更新后的悬念A', '3. 插件重启后第一次装配仍有状态');
 
-  // 首装不再自动写 config.json（不再建种子文件），读不到就是空配置。
-  let store = {};
-  try { store = JSON.parse(readFileSync(storePath, 'utf8')); } catch { store = {}; }
-  writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'session' }));
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: again, [agentB.id]: b }));
+  // 全局只有一局：两个会话并行装配，读的是同一本账。
   const [pa, pb] = await Promise.all([assemble(agentA), assemble(agentB)]);
-  has(engineText(pa), '外部更新后的悬念A', '4. 并行装配 A 使用自己的账本');
-  hasNot(engineText(pa), '另一局留下的悬念B', '4. A 不串 B 的状态');
-  has(engineText(pb), '另一局留下的悬念B', '4. 并行装配 B 使用自己的账本');
-  hasNot(engineText(pb), '外部更新后的悬念A', '4. B 不串 A 的状态');
-  eq(engineText(await assemble()), '', '4. 会话模式的无会话预览不借用别人的账本');
+  has(engineText(pa), '外部更新后的悬念A', '4. 并行装配都读到这一局');
+  eq(engineText(pb), engineText(pa), '4. 两个会话共用一本账，局面一致');
 
   const abort = new AbortController();
   abort.abort();
   let cancelled = false;
   try { await assemble(agentA, abort.signal); } catch { cancelled = true; }
   ok(cancelled, '5. 已取消的装配不继续加载状态');
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: { ...next, session_id: 's_missing' }, [agentB.id]: b }));
-  const missing = await assemble(agentA);
-  // 读失败时沿用上一次的局面：装配链不能为了拿新状态卡住对话，也不能在
-  // 一次超时后把局面整段抽走（那会让她的心情和在场凭空消失）。
-  has(engineText(missing), '外部更新后的悬念A', '5. 账本读取失败就沿用上一次的局面');
-  has(renderPrompt(missing), persona.prose, '5. 引擎读取失败仍保留人设提示');
 
   // 最要紧的一条：记忆和常识按「你这一次说的话」挑，不靠模型自己去调工具。
   // cue 从 agent 的会话里翻最后一条真实的用户消息，装配期就拿到。
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: next, [agentB.id]: b }));
-  await client.call('add-common', { request_id: rid(), key: ['deepseek', 'ds'], weight: 0.8, content: 'deepseek 是深度求索旗下的大语言模型。' });
+  seed.changeCommon((rows) => [...rows, CM.make(rows, { key: ['deepseek', 'ds'], weight: 0.8, content: 'deepseek 是深度求索旗下的大语言模型。' })]);
   const sayTo = (agent, text) => {
     agent.session = { deriveMessages: () => [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }] };
   };
@@ -155,111 +136,27 @@ try {
   const snap = engineText(await assemble(agentA));
   hasNot(snap, '写之前用 soul_state', '8. 快照不要求每轮先调 soul_state');
   has(snap, '写完用 soul_commit 交账', '8. 快照仍要求交账');
-  // 模型忘了交账也不能丢：宿主在回合结束时把这一问一答写进 ABM。
-  agentA.session = {
-    deriveMessages: () => [
-      { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '灯还亮着吗' }] },
-      { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '亮着。你回来晚了。' }] },
-    ],
-  };
-  const before = next;
-  // 单轮先攒着：一条 ABM 该讲的是一件事，不是一句话。
-  // 同一轮被重发（重试、刷新）也不会压成两条。
-  const fireOnce = () => app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await fireOnce();
-  await fireOnce();
-  const kept = (await client.call('debug-memories', { session_id: before.session_id })).entries;
-  eq(kept.filter((row) => String(row.content).includes('灯还亮着吗')).length, 0, '9. 一轮先攒着，不成条');
-  // 攒够四轮就落一条，内容是这几轮铺开的样子
-  for (let i = 0; i < 4; i += 1) {
-    agentA.session = {
-      deriveMessages: () => [
-        { id: 'u' + i, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '第' + i + '句' }] },
-        { id: 'a' + i, role: 'assistant', content: [{ type: 'text', text: '嗯' + i }] },
-      ],
-    };
-    await fireOnce();
-  }
-  const noted = (await client.call('debug-memories', { session_id: before.session_id })).entries;
-  const line = noted.find((row) => String(row.content).includes('第0句'));
-  ok(line !== undefined, '9. 攒够几轮，回合结束时宿主自己记一条（模型没交账也不丢）');
-  ok(String(line.content).includes('灯还亮着吗'), '9. 攒着的前几轮也一起记进去');
-  eq(noted.filter((row) => String(row.content).includes('第0句')).length, 1, '9. 同一批只落一条');
-  // 攒够二十条之后，收成一条这件事交给子代理，也不再等模型交账。
-  // 这里只验插件有没有真的去起子代理、并把它写的话落进 SCM。
-  const foldGame = await start();
-  let foldRow = foldGame;
-  writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
-  for (let i = 0; i < 20; i += 1) {
-    const step = await client.call('note-turn', {
-      session_id: foldRow.session_id, request_id: rid(), expected_revision: foldRow.revision,
-      said: '第' + i + '句', reply: '嗯。',
-    });
-    foldRow = { ...foldRow, revision: step.revision };
-    writeFileSync(mappingPath, JSON.stringify({ [agentA.id]: foldRow }));
-  }
-  ok(subagentsSpawned.length === 0, '10. 还没攒满时没去扰动子代理');
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await waitFor(async () => subagentsSpawned.length > 0
-    && (await client.call('debug-memories', { session_id: foldGame.session_id })).entries.some((row) => row.layer === 'scm'));
-  // 收完 ABM 接着可能就该写日记了，那是另一个子代理，别把它算成「起了两次」。
-  // 只数 label 是「记忆整理」的那几次。
-  const folders = subagentsSpawned.filter((one) => one.label === '记忆整理');
-  eq(folders.length, 1, '10. 攒满了就起一个子代理去收');
-  has(folders[0]?.prompt ?? '', '第0句', '10. 子代理拿到的是这一批的原话');
-  eq(folders[0]?.provider, 'spawn', '10. 用的是 spawn：全新的子 agent，不复制整个会话的上下文');
-  eq(folders[0]?.label, '记忆整理', '10. 这一次是收 ABM');
-  eq(folders[0]?.delivery, 'caller', '10. 结果只回到插件，不去打扰对话中的模型');
-  ok(folders[0]?.signal?.aborted === false, '10. 子代理的 abort 是自己的，不跟着回合一起被掐');
-  const folded = (await client.call('debug-memories', { session_id: foldGame.session_id })).entries;
-  eq(folded.filter((row) => row.layer === 'scm').length, 1, '10. 子代理写的那条进了 SCM');
-  // 批次跟着 ABM 一起长，所以这一批收完全部收干净，不留尾巴
-  eq(folded.filter((row) => row.layer === 'abm').length, 0, '10. 收完之后 ABM 清空');
-  // 连收两次之后不留尾巴：批次冻在二十条的话这里会剩二十条
-  const leftovers = folded.filter((row) => row.layer === 'scm');
-  ok(leftovers.length === 1, '10. 只落了一条 SCM');
-
-  // 够重的一批交给子代理筛：给它的原文要一轮一组配好对，按时间顺序排
-  const exchangeOf = (said, reply) => [
-    { id: 'u-' + said.slice(0, 8), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: said }] },
-    { id: 'a-' + reply.slice(0, 8), role: 'assistant', content: [{ type: 'text', text: reply }] },
-  ];
-  const spawnedBefore = subagentsSpawned.length;
-  agentA.session = { deriveMessages: () => exchangeOf('先问第一件事', '第一件的回答' + '好'.repeat(600)) };
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  agentA.session = { deriveMessages: () => exchangeOf('再问第二件事' + '啊'.repeat(150), '第二件的回答' + '嗯'.repeat(500)) };
-  await app.events.serial(agentA, 'agent/turn-stopping', { agent: agentA, turn: 1, signal: new AbortController().signal });
-  await waitFor(async () => subagentsSpawned.slice(spawnedBefore).some((one) => one.label === '筛记忆'));
-  const sift = subagentsSpawned.slice(spawnedBefore).find((one) => one.label === '筛记忆');
-  ok(sift !== undefined, '11. 够重的一批交给子代理筛');
-  const body = sift?.prompt ?? '';
-  const order = ['主人：先问第一件事', '我：第一件的回答', '主人：再问第二件事', '我：第二件的回答'].map((needle) => body.indexOf(needle));
-  ok(order.every((at) => at >= 0), '11. 每轮都是「主人：… 我：…」配好的一组（' + JSON.stringify(order) + '）');
-  ok(order.every((at, i) => i === 0 || at > order[i - 1]), '11. 按时间顺序：第一轮的问答在第二轮之前');
-  hasNot(body, ' / ', '11. 不再把两边的话各拼成一串');
   delete agentA.session;
   await fiber.dispose();
 
   // 新建一个干净的引擎目录，验证首次自动开局及两个装配同时发生的情况。
-  writeFileSync(storePath, JSON.stringify({ ...store, engineScope: 'global', engineDataDir: join(home, 'fresh-engine') }));
-  writeFileSync(mappingPath, '{}');
-  fiber = app.plugin(plugin, plugin.Config({ engine: 'python' }));
+  writeFileSync(storePath, JSON.stringify({ engineDataDir: join(home, 'fresh-engine') }));
+  fiber = app.plugin(plugin, plugin.Config({}));
   await fiber;
   const cold = await Promise.all([assemble(agentA), assemble(agentB)]);
   ok(cold.every((p) => engineText(p).includes('心情：')), '6. 全新安装第一次并行装配也有引擎状态');
-  const freshClient = new EngineClient({ dataDir: join(home, 'fresh-engine') });
+  const fresh = createEngine({ dataDir: join(home, 'fresh-engine') });
   try {
-    const sessions = await freshClient.call('list-sessions', {});
-    eq(sessions.sessions.length, 1, '6. 全局首次并行装配只开一局');
-  } finally { await freshClient.stop(); }
+    eq(fresh.context({ persona: her }).revision, 0, '6. 全局首次并行装配只开一局');
+  } finally { fresh.close(); }
 
   await fiber.dispose();
-  fiber = app.plugin(plugin, plugin.Config({ engine: 'python', engineEnabled: false }));
+  fiber = app.plugin(plugin, plugin.Config({ engineEnabled: false }));
   await fiber;
   eq(engineText(await assemble(agentA)), '', '7. 引擎关闭时不注入账本');
   done('prompt');
 } finally {
   if (fiber) await fiber.dispose();
-  await client.stop();
+  seed.close();
   if (promptFiber) await promptFiber.dispose();
 }

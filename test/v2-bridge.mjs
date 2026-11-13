@@ -23,7 +23,7 @@ writeFileSync(join(home, 'rp-soul', 'preset.md'), '<!-- soul-part: 人设 -->\n'
 ].join('\n'), 'utf8');
 
 const plugin = await import(new URL('../lib/index.js', import.meta.url).href);
-eq(plugin.Config({}).engine, 'js', '0. 默认是新引擎');
+eq(plugin.Config({}).engineEnabled, true, '0. 默认开着引擎');
 
 const app = new Context();
 const contexts = new Map();
@@ -38,8 +38,6 @@ app.provide('webServer', { register(def) { routes.push(def); return () => {}; },
 app.provide('connection', { requestRejection() { return undefined; } });
 const tools = new Map();
 app.provide('tools', { register(def) { tools.set(def.name, def); return () => { tools.delete(def.name); }; } });
-// 试用的开法：rp-soul/config.json 里写 engine: js（插件配置保持默认 python）
-writeFileSync(join(home, 'rp-soul', 'config.json'), JSON.stringify({ engine: 'js' }), 'utf8');
 const fiber = app.plugin(plugin.apply, plugin.Config({}));
 await fiber;
 
@@ -139,7 +137,7 @@ const child = agent('c1', '帮我查一下', { origin: 'subagent' });
 eq(contexts.get('soul-engine').text(child), '', '6. 子代理不注入快照');
 ok(!(await call('soul_commit', { summary: 'x' }, child)).committed, '6. 子代理不能交账');
 const admin = await call('soul_admin', { action: 'status' }, a);
-ok(admin.ok && admin.engine.engine === 'js' && admin.modules[0].id === 'mood', '6. soul_admin status');
+ok(admin.ok && admin.engine.ready === true && admin.modules[0].id === 'mood', '6. soul_admin status');
 const log = await call('soul_admin', { action: 'log', limit: 3 }, a);
 eq(log.log.length, 3, '6. soul_admin log');
 ok((await call('soul_admin', { action: 'undo' }, a)).ok, '6. soul_admin undo');
