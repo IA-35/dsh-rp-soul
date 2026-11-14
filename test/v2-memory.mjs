@@ -154,7 +154,8 @@ const fakeCtx = {
   get: (name) => (name === 'subagents' ? {
     startActivation: async ({ request, label }) => {
       prompts.push({ label, text: request.prompt[0].text });
-      return { result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: label === '写日记' ? '今天下了雨，他记得伞。' : '那晚我们聊了下雨。\nKEEP: ' }] }), dispose: async () => {} };
+      const written = label === '写日记' ? '今天下了雨，他记得伞。' : label === '记这段' ? '他连着问了我好几声「真的吗」，我笑着应他。' : '那晚我们聊了下雨。\nKEEP: ';
+      return { result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: written }] }), dispose: async () => {} };
     },
   } : name === 'agents' ? { get: () => liveAgent, roots: () => [liveAgent] } : undefined),
 };
@@ -179,17 +180,19 @@ await host.noteTurn(turn('然后呢', '然后她笑了。'));
 await host.noteTurn(turn('真的吗', '真的。'));
 eq(abmCount(), 1, '8. 攒到三轮：还是不够');
 await host.noteTurn(turn('那就好', '这一段很长：' + '她讲了很久很久。'.repeat(200) + '最后她问你明天还来吗？'));
-eq(abmCount(), 2, '8. 满四轮：宿主替她落一条');
+// 收这道是后台起的（结果交给宿主，不挡回合收尾），等它跑完
+await new Promise((r) => setTimeout(r, 20));
+eq(abmCount(), 2, '8. 满四轮：宿主收成一条 ABM');
 const raw = memOf().entries[0].content;
-has(raw, '你：那就好', '8. 落的是原文：你的那句');
-has(raw, '她：', '8. 落的是原文：她的回话');
-ok(raw.length <= 4000, '8. 超长的一批按每轮平分截短，不超过记忆的字数上限（' + raw.length + '）');
-has(raw, '你：嗯', '8. 一批里的第一轮也在，不是只剩最后一句');
+eq(raw, '他连着问了我好几声「真的吗」，我笑着应他。', '8. 落进去的是子代理收好的那条，不是流水账');
+const notePrompt = prompts.find((p) => p.label === '记这段');
+ok(notePrompt !== undefined, '8. 攒够的先交给子代理收一道');
+has(notePrompt.text, '你：嗯', '8. 喂给子代理的是整批原文，不是只剩最后一句');
+has(notePrompt.text, '最多 400 字', '8. 收成一条的上限按轮数给');
 engine.commit({ summary: '记一笔。', remember: '他问了我好几次「真的吗」，我笑了。' }, { persona, said: true });
 eq(abmCount(), 3, '8. 她写了 remember：另落一条');
 await host.noteTurn(turn('你还记得吗', '当然记得。'));
-eq(abmCount(), 3, '8. 这一轮她写过 remember：宿主不再补原文');
-ok(!prompts.some((p) => p.label === '筛记忆'), '8. 原文落 ABM 不过子代理');
+eq(abmCount(), 3, '8. 这一轮她写过 remember：宿主不再补一条');
 eq(splitFold('正文\nKEEP: m3, m4, m5', 300), { text: '正文', keep: ['m3', 'm4'] }, '8. KEEP 最多两条');
 eq(foldLimit([{ when: 'a' }, { when: 'b' }, { when: 'b' }]), 340, '8. 多一个时间点多 40 字');
 tick(70);
