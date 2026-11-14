@@ -227,7 +227,7 @@ ok((await call('soul_admin', { action: 'resume' }, a)).paused === false, '10. �
 ok(!('input' in (await call('soul_admin', { action: 'log', limit: 1 }, a)).log[0]), '10. log 不带每次交了什么（太长）');
 
 // ---- 11. 设置页「记忆」页 ----
-// 回合结束的钩子只加召回活跃度；ABM 的正文是她在交账时自己写的
+// 回合结束的钩子：给召回加活跃度；她这一轮没写 remember 就攒着，攒够一批落一条原文
 const before11 = (await json('/engine/memories?session_id=main')).entries.length;
 for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我能上去看吗', '可以，小心台阶。'], ['好冷', '把外套给你。'], ['谢谢', '嗯。']]) {
   const ag = { agent: { id: 'a1', session: { header: {}, deriveMessages: () => [
@@ -236,7 +236,9 @@ for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我�
   ] } } };
   await app.serial('agent/turn-stopping', ag);
 }
-eq((await json('/engine/memories?session_id=main')).entries.length, before11, '11. 钩子不再记原文：一句也没多');
+const flushed = await json('/engine/memories?session_id=main');
+eq(flushed.entries.length, before11 + 1, '11. 聊满四轮她都没写 remember：宿主落一条原文');
+has(flushed.entries[0].content, '你：灯塔今晚亮吗', '11. 落的是原话');
 contexts.get('soul-engine').text(a);
 const wrote = await call('soul_commit', { summary: '他上来看了灯。', remember: '他摸黑上塔，到顶的时候风很大。' }, a);
 ok(wrote.committed, '11. 她在交账时写了 remember：' + JSON.stringify(wrote));

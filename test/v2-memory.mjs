@@ -146,7 +146,7 @@ engine.commit({ summary: '关着的时候记一笔。', remember: '下雨了。'
 engine.setToggles({});
 eq(memOf().counts.abm, 0, '7. 关着的时候写 remember：不落');
 
-// ---- 8. 宿主那一半：不再记原文、子代理整理、日记文件 ----
+// ---- 8. 宿主那一半：没写 remember 就记原文、子代理整理、日记文件 ----
 eq(clipMiddle('一二三四五六七八九十', 7), '一二三四…九十', '8. 掐中间留头尾');
 eq(budgetSources([{ text: 'a'.repeat(9000) }, { text: 'b'.repeat(9000) }], 12000).map((s) => s.text.length), [6000, 6000], '8. 喂子代理的总量超了：每条平分');
 const prompts = [];
@@ -172,16 +172,24 @@ const host = mountMemoryHost({
 nowMs = Date.parse('2026-11-12T10:00:00+08:00');
 const abmCount = () => memOf().counts.abm;
 await host.noteTurn(turn('嗯', '嗯。'));
-eq(abmCount(), 0, '8. 宿主不再记原文：一轮「嗯」什么也不落');
+eq(abmCount(), 0, '8. 一轮「嗯」：不够一批，先攒着');
 ok(engine.commit({ summary: '他问然后呢。', away: '她上午收拾了屋子。' }, { persona, said: true }).ok, '8. 隔了一夜，补一句她做了什么再交账');
-eq(abmCount(), 1, '8. 这一条是她不在时的事，不是原文');
+eq(abmCount(), 1, '8. 这一条是她不在时的事');
 await host.noteTurn(turn('然后呢', '然后她笑了。'));
 await host.noteTurn(turn('真的吗', '真的。'));
+eq(abmCount(), 1, '8. 攒到三轮：还是不够');
 await host.noteTurn(turn('那就好', '这一段很长：' + '她讲了很久很久。'.repeat(200) + '最后她问你明天还来吗？'));
-eq(abmCount(), 1, '8. 聊了四轮，她都没写 remember：还是那一条');
+eq(abmCount(), 2, '8. 满四轮：宿主替她落一条');
+const raw = memOf().entries[0].content;
+has(raw, '你：那就好', '8. 落的是原文：你的那句');
+has(raw, '她：', '8. 落的是原文：她的回话');
+ok(raw.length <= 4000, '8. 超长的一批按每轮平分截短，不超过记忆的字数上限（' + raw.length + '）');
+has(raw, '你：嗯', '8. 一批里的第一轮也在，不是只剩最后一句');
 engine.commit({ summary: '记一笔。', remember: '他问了我好几次「真的吗」，我笑了。' }, { persona, said: true });
-eq(abmCount(), 2, '8. 她写了 remember：落一条');
-ok(!prompts.some((p) => p.label === '筛记忆'), '8. ABM 不过子代理');
+eq(abmCount(), 3, '8. 她写了 remember：另落一条');
+await host.noteTurn(turn('你还记得吗', '当然记得。'));
+eq(abmCount(), 3, '8. 这一轮她写过 remember：宿主不再补原文');
+ok(!prompts.some((p) => p.label === '筛记忆'), '8. 原文落 ABM 不过子代理');
 eq(splitFold('正文\nKEEP: m3, m4, m5', 300), { text: '正文', keep: ['m3', 'm4'] }, '8. KEEP 最多两条');
 eq(foldLimit([{ when: 'a' }, { when: 'b' }, { when: 'b' }]), 340, '8. 多一个时间点多 40 字');
 tick(70);
