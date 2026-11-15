@@ -185,6 +185,9 @@ await new Promise((r) => setTimeout(r, 20));
 eq(abmCount(), 2, '8. 满四轮：宿主收成一条 ABM');
 const raw = memOf().entries[0].content;
 eq(raw, '他连着问了我好几声「真的吗」，我笑着应他。', '8. 落进去的是子代理收好的那条，不是流水账');
+const kept = memOf().entries[0].raw;
+ok(typeof kept === 'string' && kept.includes('你：嗯'), '8. 摘要之外的原文留着（收 SCM 时读它，不读二手摘要）');
+ok(kept.includes('她：真的。'), '8. 原文里她的话也在');
 const notePrompt = prompts.find((p) => p.label === '记这段');
 ok(notePrompt !== undefined, '8. 攒够的先交给子代理收一道');
 has(notePrompt.text, '你：嗯', '8. 喂给子代理的是整批原文，不是只剩最后一句');
@@ -198,6 +201,8 @@ eq(foldLimit([{ when: 'a' }, { when: 'b' }, { when: 'b' }]), 340, '8. 多一个�
 tick(70);
 await host.tidyMemory({ agent: liveAgent });
 ok(prompts.some((p) => p.label === '记忆整理'), '8. 停够一小时：起子代理收成 SCM');
+const foldPrompt = prompts.find((p) => p.label === '记忆整理');
+has(foldPrompt.text, '你：嗯', '8. 收 SCM 喂的是原文，不是子代理收过的二手摘要');
 eq(abmCount(), 0, '8. 收完 ABM 清空');
 eq(host.tidyNow('fold'), 'nothing', '8. 再点立即汇总：没有可收的');
 eq(host.tidyNow('diary'), 'started', '8. 立即写日记：后台起');
