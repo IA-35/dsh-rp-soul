@@ -52,8 +52,8 @@ eq(L.maintain(m, at(25 * 60)).entries.length, 0, '3. 小动作过了 24 小时�
 m = L.add(L.init(), { layer: 'scm', type: 'summary', content: '很久以前', importance: 0.5, at: at(0) }).slice;
 eq(L.maintain(m, at(800 * 60)).entries.length, 0, '3. SCM 淡光了就忘掉');
 let many = L.init();
-for (let i = 0; i < 52; i += 1) many = L.add(many, { layer: 'scm', type: 'summary', content: '第 ' + i + ' 段', importance: 0.5, at: at(i * 60) }).slice;
-eq(L.maintain(many, at(52 * 60)).entries.length, 50, '3. SCM 最多 50 条：挤掉最不活跃的');
+for (let i = 0; i < 72; i += 1) many = L.add(many, { layer: 'scm', type: 'summary', content: '第 ' + i + ' 段', importance: 0.5, at: at(i * 60) }).slice;
+eq(L.maintain(many, at(72 * 60)).entries.length, 70, '3. SCM 最多 70 条：挤掉最不活跃的');
 let flood = L.init();
 for (let i = 0; i < 45; i += 1) flood = abm(flood, '没人收的第 ' + i + ' 句', i);
 eq(L.maintain(flood, at(50)).entries.length, 40, '3. 收不了时 ABM 也不无限涨（两倍容量封顶）');
@@ -150,10 +150,13 @@ eq(memOf().counts.abm, 0, '7. 关着的时候写 remember：不落');
 eq(clipMiddle('一二三四五六七八九十', 7), '一二三四…九十', '8. 掐中间留头尾');
 eq(budgetSources([{ text: 'a'.repeat(9000) }, { text: 'b'.repeat(9000) }], 12000).map((s) => s.text.length), [6000, 6000], '8. 喂子代理的总量超了：每条平分');
 const prompts = [];
+const specs = [];
 const fakeCtx = {
   get: (name) => (name === 'subagents' ? {
-    startActivation: async ({ request, label }) => {
-      prompts.push({ label, text: request.prompt[0].text });
+    // 只按 rc.3 的读法取参数：spec.parent / spec.prompt（rc.3 里已经没有 spec.request.*）
+    startActivation: async ({ parent, prompt, label }) => {
+      specs.push({ parent, prompt, label });
+      prompts.push({ label, text: prompt[0].text });
       const written = label === '写日记' ? '今天下了雨，他记得伞。' : label === '记这段' ? '他连着问了我好几声「真的吗」，我笑着应他。' : '那晚我们聊了下雨。\nKEEP: ';
       return { result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: written }] }), dispose: async () => {} };
     },
@@ -192,6 +195,9 @@ const notePrompt = prompts.find((p) => p.label === '记这段');
 ok(notePrompt !== undefined, '8. 攒够的先交给子代理收一道');
 has(notePrompt.text, '你：嗯', '8. 喂给子代理的是整批原文，不是只剩最后一句');
 has(notePrompt.text, '最多 400 字', '8. 收成一条的上限按轮数给');
+// rc.3 的 startActivation 读顶层的 spec.parent / spec.prompt（rc.1 读 spec.request.*，两个都传）
+ok(specs.every((s) => s.parent?.id === 'a1'), '8. parent 传在顶层：宿主新版本才认得出来是谁的子代理');
+ok(specs.every((s) => Array.isArray(s.prompt) && s.prompt[0]?.type === 'text'), '8. prompt 也传在顶层');
 engine.commit({ summary: '记一笔。', remember: '他问了我好几次「真的吗」，我笑了。' }, { persona, said: true });
 eq(abmCount(), 3, '8. 她写了 remember：另落一条');
 await host.noteTurn(turn('你还记得吗', '当然记得。'));

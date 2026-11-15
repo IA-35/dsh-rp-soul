@@ -47,7 +47,8 @@ const subagentsSpawned = [];
 app.provide('subagents');
 app.set('subagents', {
   startActivation: async (spec) => {
-    subagentsSpawned.push({ prompt: spec?.request?.prompt?.[0]?.text ?? '', label: spec?.label, provider: spec?.provider, delivery: spec?.delivery, signal: spec?.signal });
+    // rc.3 的参数在顶层（spec.parent / spec.prompt），rc.1 在 spec.request 里 —— 两种都认
+    subagentsSpawned.push({ prompt: spec?.prompt?.[0]?.text ?? spec?.request?.prompt?.[0]?.text ?? '', label: spec?.label, provider: spec?.provider, delivery: spec?.delivery, signal: spec?.signal });
     return {
       childId: 's_fake',
       result: Promise.resolve({ output: [{ type: 'text', text: '那些天一直亮着灯，我在岸上等。\nKEEP: m1' }], stopReason: 'completed' }),
