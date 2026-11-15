@@ -9,6 +9,7 @@ import * as RC from '../lib/engine/modules/memory/recall.js';
 import { recallText } from '../lib/engine/modules/memory/index.js';
 import { createEngine } from '../lib/engine/index.js';
 import { mountMemoryHost, splitFold, foldLimit, clipMiddle, budgetSources } from '../lib/engine-v2-memory.js';
+import { fitSentence } from '../lib/engine/modules/memory/layers.js';
 
 const t0 = '2026-11-11T20:00:00+08:00'; // 周三
 const at = (minutes) => T.addMinutes(t0, minutes);
@@ -203,6 +204,8 @@ eq(abmCount(), 3, '8. 她写了 remember：另落一条');
 await host.noteTurn(turn('你还记得吗', '当然记得。'));
 eq(abmCount(), 3, '8. 这一轮她写过 remember：宿主不再补一条');
 eq(splitFold('正文\nKEEP: m3, m4, m5', 300), { text: '正文', keep: ['m3', 'm4'] }, '8. KEEP 最多两条');
+eq(splitFold('第一句。第二句。第三句很长很长。', 12), { text: '第一句。第二句。', keep: [] }, '8. 超字数退到最后一个句号，不切半句');
+eq(fitSentence('没有标点的一长串文字', 5), '没有标点的', '8. 整段没标点才硬切');
 eq(foldLimit([{ when: 'a' }, { when: 'b' }, { when: 'b' }]), 340, '8. 多一个时间点多 40 字');
 tick(70);
 await host.tidyMemory({ agent: liveAgent });
