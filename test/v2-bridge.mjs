@@ -55,7 +55,7 @@ eq([...tools.keys()].sort(), ['soul_admin', 'soul_commit', 'soul_state'], '1. �
 const bytes = [...tools.values()].reduce((n, t) => n + Buffer.byteLength(JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters })), 0);
 ok(bytes < 11 * 1024, '1. 工具定义一共 ' + bytes + ' 字节，小于 11 KB');
 ok('feel' in tools.get('soul_commit').parameters.properties, '1. 交账表里有情绪模块的字段');
-ok('remember' in tools.get('soul_commit').parameters.properties, '1. 交账表里有记忆模块的 remember');
+ok(!('remember' in tools.get('soul_commit').parameters.properties), '1. 交账表里没有记忆模块的 remember');
 ok(contexts.has('soul-engine'), '1. 快照照旧注册成动态上下文');
 
 // ---- 2. 快照：第一次装配就地开局 ----
@@ -206,7 +206,7 @@ ok(act.ok && act.rows.length > 0 && act.rows[0].summary === '他说 DS 是 deeps
 const check = await json('/engine/persona');
 eq(check.ok, true, '9. 人设校验：这份能用' + (check.error ? '（' + check.error + '）' : ''));
 const mods = await json('/engine/modules');
-eq(mods.modules.map((m) => m.id), ['mood', 'wake', 'common', 'memory'], '9. 模块清单');
+eq(mods.modules.map((m) => m.id), ['mood', 'wake', 'common'], '9. 模块清单');
 const off = await send('/engine/modules', 'PUT', { modules: { mood: true, wake: true, common: false } });
 ok(off.ok && off.modules.find((m) => m.id === 'common').on === false, '9. 关掉常识');
 ok(!('common' in tools.get('soul_commit').parameters.properties), '9. 交账表立刻重挂，没有 common 了');
@@ -226,43 +226,18 @@ ok((await call('soul_admin', { action: 'pause' }, a)).paused === true, '10. 暂�
 ok((await call('soul_admin', { action: 'resume' }, a)).paused === false, '10. 恢复');
 ok(!('input' in (await call('soul_admin', { action: 'log', limit: 1 }, a)).log[0]), '10. log 不带每次交了什么（太长）');
 
-// ---- 11. 设置页「记忆」页 ----
-// 回合结束的钩子：给召回加活跃度；她这一轮没写 remember 就攒着，攒够了交子代理收成一条。
-// 这里没有子代理服务，所以那一批只能留着 —— 绝不把「你：… 她：…」的流水账直接塞进 ABM。
-const before11 = (await json('/engine/memories?session_id=main')).entries.length;
-for (const [said, answer] of [['灯塔今晚亮吗', '亮，八点。'], ['我能上去看吗', '可以，小心台阶。'], ['好冷', '把外套给你。'], ['谢谢', '嗯。']]) {
-  const ag = { agent: { id: 'a1', session: { header: {}, deriveMessages: () => [
-    { role: 'user', content: [{ type: 'text', text: said }] },
-    { role: 'assistant', content: [{ type: 'text', text: answer }] },
-  ] } } };
-  await app.serial('agent/turn-stopping', ag);
+// ---- 11. 记忆页与日记没了：路由不该再存在 ----
+for (const [path, method] of [['/engine/memories', 'GET'], ['/engine/diaries', 'GET'], ['/engine/memory/request', 'POST']]) {
+  const res = method === 'GET' ? await json(path) : await send(path, method, { session_id: 'main', kind: 'fold' });
+  has(String(res.error || ''), 'no route', '11. ' + method + ' ' + path + ' 已经不在了');
 }
-eq((await json('/engine/memories?session_id=main')).entries.length, before11, '11. 收不动的那批：一条流水账也没塞进 ABM');
-contexts.get('soul-engine').text(a);
-const wrote = await call('soul_commit', { summary: '他上来看了灯。', remember: '他摸黑上塔，到顶的时候风很大。' }, a);
-ok(wrote.committed, '11. 她在交账时写了 remember：' + JSON.stringify(wrote));
-const memo = await json('/engine/memories?session_id=main');
-ok(memo.ok && memo.entries.some((e) => e.content === '他摸黑上塔，到顶的时候风很大。'), '11. ABM 里是她自己写的那一句' + (memo.error ? '：' + memo.error : ''));
-ok(memo.counts && memo.capacity.abm === 20 && memo.capacity.clpa === null, '11. 各层条数和容量');
-const one = memo.entries[0];
-const edited = await send('/engine/memory', 'PUT', { session_id: 'main', memory_id: one.id, note: '设置页备注' });
-ok(edited.ok && edited.receipt === '已保存', '11. 改一条' + (edited.error ? '：' + edited.error : ''));
-eq((await json('/engine/memories?session_id=main')).entries[0].note, '设置页备注', '11. 改上了');
-const req = await send('/engine/memory/request', 'POST', { session_id: 'main', kind: 'fold' });
-ok(req.ok && typeof req.receipt === 'string' && req.receipt !== '', '11. 立即汇总：给回执（这里没有子代理服务）' + (req.error ? '：' + req.error : ''));
-eq((await json('/engine/diaries?session_id=main')).diaries, [], '11. 还没写过日记');
-ok((await send('/engine/memory', 'DELETE', { session_id: 'main', memory_id: one.id })).ok, '11. 删一条');
 
-// ---- 12. soul_admin import：导入旧引擎的存档，日记按日历日搬 ----
+// ---- 12. soul_admin import：导入旧引擎的存档 ----
 makeV1Db(join(home, 'rp-soul', 'engine', 'engine.db'));
-mkdirSync(join(home, 'rp-soul', 'engine', 'journal', 's_old'), { recursive: true });
-writeFileSync(join(home, 'rp-soul', 'engine', 'journal', 's_old', 'diary-0012.md'), '# 第 12 天 · 周二\n\n今天修了一天灯。\n', 'utf8');
 ok(!(await call('soul_admin', { action: 'import' }, a)).ok, '12. 不带 confirm：挡住');
 const imported = await call('soul_admin', { action: 'import', confirm: true }, a);
 ok(imported.ok && imported.all_match, '12. 导入，逐项都对上' + (imported.ok ? '' : '：' + imported.error) + (imported.all_match === false ? JSON.stringify(imported.check.filter((r) => !r.ok)) : ''));
-eq(imported.diaries, 1, '12. 搬了一篇日记');
-const moved = (await json('/engine/diaries?session_id=main')).diaries;
-eq(moved.map((d) => [d.day, d.title, d.text]), [['2026-11-10', '11月10日 · 周二', '今天修了一天灯。']], '12. 设置页读得到，标题换成日历日');
+ok(imported.notes.some((n) => n.includes('没有搬')), '12. 旧记忆层的条数说一声没搬');
 ok((await call('soul_admin', { action: 'list' }, a)).slots.some((x) => x.name === '导入前'), '12. 导入前那一局存成了存档');
 server.close();
 

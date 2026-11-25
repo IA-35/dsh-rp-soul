@@ -19,7 +19,7 @@
 | 隔 ≥ 60 分钟就算新的一段相处（新场景） | `structure.SCENE_BREAK_MINUTES`、`settlement.new_scene` |
 | 结算分档、心情按经过的小时变化 | `settlement.tier_for`、mood 的 settle 钩子 |
 | 你上次说话的时刻 | `state.last_player_at`（只在 `player_input` 非空时更新，唤醒回合不刷新） |
-| 「这几天」的记忆按小时衰减、唤醒按真实时间排 | `memories.DECAY`、`wake.py` |
+| 「这几天」的记忆按小时衰减、唤醒按真实时间排 | `memories.DECAY`、`wake.py`（记忆层 2026-11-25 已删，这一行只作历史） |
 
 还在按回合数算的，只有下面第 2 节这几条规则，外加界面和工具描述里的「回合」二字。
 
@@ -135,8 +135,8 @@
 
 ## 7. 动手前
 
-- 会和正在修的那批 bug 撞文件：`lib/engine/core/commit.js`、`lib/engine/modules/memory/layers.js`、
-  `lib/engine-v2-bridge.js`、`lib/client.js`。等那批合进 main，再从 main 开分支。
+- 会和正在修的那批 bug 撞文件：`lib/engine/core/commit.js`、`lib/engine-v2-bridge.js`、`lib/client.js`。
+  等那批合进 main，再从 main 开分支。
 - bug A/B（总结吃掉 Pin、午夜前的「刚刚」被消费）和这里的「刚刚 = 这一段」有交集：
   以那边修好的为准，在上面改。
 

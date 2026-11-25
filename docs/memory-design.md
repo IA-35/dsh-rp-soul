@@ -1,10 +1,12 @@
 # 她的记忆：ABM / SCM / CLPA + 落盘的日记
 
-> **历史设计（Python 侧车时代）。** 三层、衰减、检索这些语义现在仍然成立，实现在
-> `lib/engine/modules/memory/`（`index.js` / `layers.js` / `recall.js`）。但有两处已经变了：
-> ①**ABM 不再记原话**——她交账时填 `remember`（≤160 字、第一人称），不填就不记，宿主不再攒批；
-> ②`abm_batch` / `apply_fold` / `foldNow` 这些名字换成了 `foldBatch` / `applyFold` / `tidyNow`。
-> 下文提到的 `domain/memories.py`、`note-turn` 都是当时形态。
+> **已经删掉的设计，只当历史读（2026-11-25）。** 记忆层（ABM / SCM / CLPA）、日记、召回、
+> 以及收 SCM / 写日记的两个子代理都已经从插件里移除，`lib/engine/modules/memory/`、
+> `lib/engine-v2-memory.js` 都不存在了。现在账本里留下的是三样：**悬念**（`open`）、
+> **要做的事**（`events` 的 `promise` / `task`）、**她记住的事实**（内核的 `learned` / `reveal`），
+> 见 `docs/architecture.md` 第 6 节。
+>
+> 下面是当时的设计，留作参考：三层、衰减、检索这套思路本身仍然成立，将来要加回来可以照着做。
 
 以 RimTalk-ExpandMemory 为底改。核心是「衰减 + 检索」，不是「分层归档 + 定时压缩」。
 三层记忆在账本里，日记在磁盘上。

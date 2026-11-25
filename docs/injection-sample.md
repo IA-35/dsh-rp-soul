@@ -4,6 +4,9 @@
 > 现在的结构没变（人设进 `section`、局面进 `soul-engine`、想起来的东西进 `soul-recall`），
 > 但字段名、工具定义大小、`soul_commit` 的字段都换了——以 `docs/engine-js-design.md` 和代码为准。
 > 下文里的 `domain/*.py`、`lib/engine-bridge.js`、`plan_next`、`offscreen_beat` 都是旧形态。
+>
+> **另外，2026-11-25 起记忆层（ABM / SCM / CLPA）与日记整块删了**：`soul-recall` 现在只剩命中的常识，
+> 下文所有「她想起来的」段落都只有常识那一种，记忆相关的字节数与行数都不再适用。
 
 数字是这次真跑出来的：宿主的 `SystemPrompt` + 真 Python 侧车 + 一份临时账本（`s_39eb2f2f`，第一天 18:48，ABM 3 条、SCM 2 条、CLPA 1 条、常识 3 条）。不是照旧文档抄的。
 

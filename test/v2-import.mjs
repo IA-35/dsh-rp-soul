@@ -18,7 +18,6 @@ eq(old.sessionId, 's_old', '1. 读最近改过的那一局');
 eq(old.facts.length, 4, '1. 删掉的事实不读');
 const C = clockOf(old.state);
 eq(C.fromClock({ day: 15, minute: 600 }), '2026-11-13T10:00:00+08:00', '1. 第 15 天 10:00 = 11 月 13 日 10:00（截到整分钟）');
-eq(C.dayKey(12), '2026-11-10', '1. 第 12 天 = 11 月 10 日');
 
 // ---- 2. 导进一个已经有局的新库 ----
 let nowMs = Date.parse('2026-11-11T14:25:00+08:00');
@@ -44,16 +43,9 @@ eq(view.fields.bond, { trust: 2, tension: 1, stage: 'intimate' }, '3. 态度');
 eq(view.fields.her_knows.map((f) => [f.key, f.who]), [['her.secret.letter', 'her']], '3. 只有她知道的');
 eq(view.fields.known_facts.map((f) => f.key).sort(), ['rain.umbrella', 'you.cat'], '3. 你们都知道的、只有你知道的；谁都不知道的不带');
 has(view.lines.join('\n'), '她的安排：去调灯', '3. 快照里有安排');
-const memory = engine.panel('memory', { persona });
-eq(memory.counts, { abm: 1, scm: 1, clpa: 1 }, '3. 记忆三层都带过来');
-const m3 = memory.entries.find((e) => e.id === 'm3');
-eq(m3.at, '2026-11-11T14:15:00+08:00', '3. 记忆的时刻换成真实时刻');
-ok(!('turn' in m3), '3. 回合号丢掉');
-ok(memory.entries.find((e) => e.id === 'm2').pinned, '3. 钉住的还钉着');
-eq(engine.memoryDue({ manual: true }).diary, null, '3. 写过日记的那天（11 月 10 日）不会再写一遍');
 eq(engine.log(10).map((e) => e.summary), ['调灯', '说好看海', '第一次'], '3. 流水按原来的顺序，撤掉的那次不带');
 eq(engine.common().rows.map((r) => r.content), ['新库里的灯塔', 'DS 指 deepseek'], '3. 常识库：新库已有的保留，关键词重复的旧条目不带');
-eq(out.diaryDays, { 12: '2026-11-10' }, '3. 日记按日历日搬');
+ok(out.notes.some((n) => n.includes('没有搬')), '3. 旧记忆层的条数说一声没搬');
 const st = engine.context({ persona });
 eq(st.fields.away_recent.map((a) => a.text), ['主人不在时她把灯罩擦了一遍'], '3. 离屏片段');
 
